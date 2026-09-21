@@ -12,6 +12,7 @@ import {
 } from "@roi/shared";
 import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
+import { setupGamepad } from "./gamepad.js";
 import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
 import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
@@ -222,6 +223,12 @@ loginForm.addEventListener("submit", async (ev) => {
 });
 
 setupInput(
+  (dirs: InputState) => conn?.send({ type: "input", dirs }),
+  () => conn?.send({ type: "attack" }),
+  () => conn?.send({ type: "pickup" })
+);
+
+setupGamepad(
   (dirs: InputState) => conn?.send({ type: "input", dirs }),
   () => conn?.send({ type: "attack" }),
   () => conn?.send({ type: "pickup" })
