@@ -32,6 +32,7 @@ export enum TileType {
   Tree = 3,
   Rock = 4,
   Building = 5,
+  Fence = 6,
 }
 
 // Todo el mapeado es exterior; estos tiles bloquean el movimiento.
@@ -40,6 +41,7 @@ export const BLOCKING_TILES = new Set<TileType>([
   TileType.Tree,
   TileType.Rock,
   TileType.Building,
+  TileType.Fence,
 ]);
 
 export type ExoticTier = "common" | "uncommon" | "rare" | "epic";

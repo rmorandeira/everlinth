@@ -13,10 +13,11 @@ import {
 } from "@roi/shared";
 import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
-import { renderScene, computeLayout, type Layout } from "./render/scene.js";
+import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
 import { toScreen } from "./render/iso.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
 import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
+import { loadTileset } from "./render/tileset.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
 const loginForm = document.getElementById("login-form") as HTMLFormElement;
@@ -36,6 +37,8 @@ const weatherCtx = weatherCanvas.getContext("2d")!;
 const weather = new WeatherSystem();
 
 let layout: Layout = { scale: 1, originX: 0, originY: 0 };
+let tileset: Tileset | null = null;
+loadTileset().then((t) => (tileset = t));
 
 function resizeCanvases(): void {
   const dpr = window.devicePixelRatio || 1;
@@ -225,7 +228,7 @@ function frame(now: number): void {
   lastTime = now;
   const time = now / 1000;
 
-  if (you && currentScreen) {
+  if (you && currentScreen && tileset) {
     youDisplay.x = lerpTowards(youDisplay.x, you.x, dt);
     youDisplay.y = lerpTowards(youDisplay.y, you.y, dt);
     for (const [username, p] of otherPlayers) {
@@ -250,7 +253,7 @@ function frame(now: number): void {
       const vec = dirVector(transition.dir);
       const K = Math.max(w, h) * 1.15;
 
-      renderScene(bufferCtx, w, h, layout, currentScreen, othersDrawn, youDrawn, time);
+      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, othersDrawn, youDrawn, time);
 
       sceneCtx.clearRect(0, 0, w, h);
       sceneCtx.save();
@@ -265,7 +268,7 @@ function frame(now: number): void {
 
       if (t >= 1) transition = null;
     } else {
-      renderScene(bufferCtx, w, h, layout, currentScreen, othersDrawn, youDrawn, time);
+      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, othersDrawn, youDrawn, time);
       if (weather.getType() === "heat") {
         applyHeatShimmer(sceneCtx, buffer, time);
       } else {

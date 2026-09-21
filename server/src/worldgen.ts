@@ -75,6 +75,25 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     }
   }
 
+  // Tramo corto de valla, como elemento de escenario (nunca cruza el pasillo central).
+  let hasFence = false;
+  if (rng() < 0.3) {
+    const horizontal = rng() < 0.5;
+    const length = 2 + Math.floor(rng() * 3);
+    const startX = 1 + Math.floor(rng() * Math.max(1, SCREEN_WIDTH - 2 - length));
+    const startY = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
+    for (let i = 0; i < length; i++) {
+      const x = horizontal ? startX + i : startX;
+      const y = horizontal ? startY : startY + i;
+      if (x >= SCREEN_WIDTH - 1 || y >= SCREEN_HEIGHT - 1) continue;
+      if (isOnCross(x, y)) continue;
+      if (tiles[y][x] === TileType.Grass) {
+        tiles[y][x] = TileType.Fence;
+        hasFence = true;
+      }
+    }
+  }
+
   const walkableSpots: Array<{ x: number; y: number }> = [];
   for (let y = 0; y < SCREEN_HEIGHT; y++) {
     for (let x = 0; x < SCREEN_WIDTH; x++) {
@@ -128,6 +147,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     5 +
     (hasWater ? 5 : 0) +
     (hasBuilding ? 15 : 0) +
+    (hasFence ? 3 : 0) +
     monsters.length * 3 +
     rareMonsterBonus +
     itemBonus +

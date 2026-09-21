@@ -1,5 +1,6 @@
 import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type ScreenData, type PlayerPublicState } from "@roi/shared";
 import { toScreen, TILE_W, TILE_H } from "./iso.js";
+import { drawSprite, type Sprite, type SpriteKey } from "./tileset.js";
 
 export interface Layout {
   scale: number;
@@ -7,12 +8,15 @@ export interface Layout {
   originY: number;
 }
 
+export type Tileset = Record<SpriteKey, Sprite>;
+
 // Calcula un layout que encaja TODA la pantalla (16x11) centrada y sin deformar,
 // sea cual sea el tamaño/relación de aspecto real de la ventana.
 export function computeLayout(width: number, height: number): Layout {
-  const marginTop = 130; // hueco para la altura de árboles/edificios
-  const marginBottom = 60;
-  const marginSide = 40;
+  const marginTop = 80; // hueco para la altura de árboles/edificios
+  const marginBottom = 24;
+  const marginSide = 12;
+  const overscan = 1.1; // usa más superficie de pantalla; solo recorta el margen decorativo, nunca la rejilla jugable
 
   const corners = [
     toScreen(0, 0),
@@ -27,46 +31,37 @@ export function computeLayout(width: number, height: number): Layout {
 
   const gridW = maxX - minX;
   const gridH = maxY - minY;
-  const scale = Math.min(width / gridW, height / gridH);
+  const scale = Math.min(width / gridW, height / gridH) * overscan;
   const originX = width / 2 - scale * ((minX + maxX) / 2);
   const originY = height / 2 - scale * ((minY + maxY) / 2);
   return { scale, originX, originY };
 }
 
-function diamondPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, w: number, h: number): void {
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - h / 2);
-  ctx.lineTo(cx + w / 2, cy);
-  ctx.lineTo(cx, cy + h / 2);
-  ctx.lineTo(cx - w / 2, cy);
-  ctx.closePath();
-}
-
-// Ruido determinista barato por celda, para texturizar sin necesidad de sprites/imágenes.
+// Ruido determinista barato por celda, para elegir variante de sprite y texturizar.
 function hash2(x: number, y: number): number {
   const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
   return h - Math.floor(h);
 }
 
-function groundColor(tile: TileType): string {
-  switch (tile) {
-    case TileType.Grass:
-      return "#3f9a4d";
-    case TileType.Path:
-      return "#b8a06a";
-    case TileType.Water:
-      return "#2e6fc4";
-    default:
-      return "#3f9a4d"; // bajo árboles/rocas/edificios sigue habiendo hierba
-  }
+const GRASS_VARIANTS: SpriteKey[] = ["grass1", "grass2", "grass3"];
+const WATER_VARIANTS: SpriteKey[] = ["water1", "water2"];
+const ROCK_VARIANTS: SpriteKey[] = ["rock1", "rock2"];
+const TREE_VARIANTS: SpriteKey[] = ["tree", "tree2"];
+
+function pick<T>(arr: T[], n: number): T {
+  return arr[Math.floor(n * arr.length) % arr.length];
 }
 
-function drawGroundTile(ctx: CanvasRenderingContext2D, x: number, y: number, tile: TileType, time: number): void {
+function drawGroundTile(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number, tile: TileType, time: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
-  // Un pelín más grande que el tile lógico para que no queden costuras/cuadrícula entre celdas.
-  diamondPath(ctx, cx, cy, TILE_W + 1, TILE_H + 1);
-  ctx.fillStyle = groundColor(tile);
-  ctx.fill();
+  const n = hash2(x, y);
+
+  let key: SpriteKey;
+  if (tile === TileType.Water) key = pick(WATER_VARIANTS, n);
+  else if (tile === TileType.Path) key = "dirt";
+  else key = pick(GRASS_VARIANTS, n);
+
+  drawSprite(ctx, tiles[key], cx, cy);
 
   if (tile === TileType.Water) {
     const shimmer = 0.5 + 0.5 * Math.sin(time * 2 + x * 0.7 + y * 0.5);
@@ -75,87 +70,48 @@ function drawGroundTile(ctx: CanvasRenderingContext2D, x: number, y: number, til
     ctx.moveTo(cx - TILE_W / 4, cy);
     ctx.lineTo(cx + TILE_W / 4, cy);
     ctx.stroke();
-  } else if (tile === TileType.Grass) {
-    // Mota de textura + pequeños matojos de hierba con micro-animación de balanceo.
-    const n = hash2(x, y);
-    if (n > 0.55) {
-      const sway = Math.sin(time * 2.2 + x * 1.3 + y * 0.9) * 2;
-      ctx.strokeStyle = "#2f7a3c";
-      ctx.lineWidth = 2;
-      for (let i = -1; i <= 1; i++) {
-        ctx.beginPath();
-        ctx.moveTo(cx + i * 4, cy + 4);
-        ctx.lineTo(cx + i * 4 + sway, cy - 6);
-        ctx.stroke();
-      }
+  } else if (tile === TileType.Grass && n > 0.8) {
+    // Matojo de hierba con micro-animación de balanceo, sobre la textura base.
+    const sway = Math.sin(time * 2.2 + x * 1.3 + y * 0.9) * 2;
+    ctx.strokeStyle = "#2f7a3c";
+    ctx.lineWidth = 2;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(cx + i * 4, cy + 4);
+      ctx.lineTo(cx + i * 4 + sway, cy - 6);
+      ctx.stroke();
     }
+  } else if (tile === TileType.Grass && n > 0.65 && n <= 0.8) {
+    drawSprite(ctx, tiles.bush, cx, cy + TILE_H / 2 - 6);
   }
 }
 
-function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, time: number): void {
+function drawTree(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number, time: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
-  const sway = Math.sin(time * 1.4 + x * 2.1 + y * 1.7) * 3;
-  ctx.fillStyle = "#5a3a22";
-  ctx.fillRect(cx - 3, cy - 14, 6, 16);
-  ctx.fillStyle = "#276b34";
-  ctx.beginPath();
-  ctx.moveTo(cx + sway, cy - 52);
-  ctx.lineTo(cx + 22, cy - 16);
-  ctx.lineTo(cx - 22, cy - 16);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#33823f";
-  ctx.beginPath();
-  ctx.moveTo(cx + sway * 0.7, cy - 40);
-  ctx.lineTo(cx + 15, cy - 20);
-  ctx.lineTo(cx - 15, cy - 20);
-  ctx.closePath();
-  ctx.fill();
+  const key = pick(TREE_VARIANTS, hash2(x + 0.25, y + 0.25));
+  // Balanceo sutil: rota todo el árbol alrededor de su base (micro-animación).
+  const angle = Math.sin(time * 1.4 + x * 2.1 + y * 1.7) * 0.035;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  drawSprite(ctx, tiles[key], 0, 0);
+  ctx.restore();
 }
 
-function drawRock(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+function drawFence(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
-  ctx.fillStyle = "#8a8a8a";
-  ctx.beginPath();
-  ctx.moveTo(cx - 14, cy);
-  ctx.lineTo(cx - 6, cy - 14);
-  ctx.lineTo(cx + 10, cy - 12);
-  ctx.lineTo(cx + 14, cy);
-  ctx.lineTo(cx, cy + 6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = "#5f5f5f";
-  ctx.stroke();
+  drawSprite(ctx, tiles.fence, cx, cy);
 }
 
-function drawBuilding(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+function drawRock(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
-  const w = TILE_W * 0.9;
-  const h = 70;
-  ctx.fillStyle = "#c9c9c9";
-  ctx.beginPath();
-  ctx.moveTo(cx - w / 2, cy);
-  ctx.lineTo(cx, cy + TILE_H / 2);
-  ctx.lineTo(cx, cy + TILE_H / 2 - h);
-  ctx.lineTo(cx - w / 2, cy - h);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#e8e8e8";
-  ctx.beginPath();
-  ctx.moveTo(cx + w / 2, cy);
-  ctx.lineTo(cx, cy + TILE_H / 2);
-  ctx.lineTo(cx, cy + TILE_H / 2 - h);
-  ctx.lineTo(cx + w / 2, cy - h);
-  ctx.closePath();
-  ctx.fill();
-  diamondPath(ctx, cx, cy - h, TILE_W, TILE_H);
-  ctx.fillStyle = "#9a9a9a";
-  ctx.fill();
-  ctx.strokeStyle = "#555";
-  ctx.stroke();
-  ctx.fillStyle = "#222";
-  ctx.fillRect(cx - w / 2 + 6, cy - h * 0.55, 6, 10);
-  ctx.fillRect(cx + w / 2 - 12, cy - h * 0.55, 6, 10);
+  const key = pick(ROCK_VARIANTS, hash2(x + 0.5, y + 0.5));
+  drawSprite(ctx, tiles[key], cx, cy + TILE_H / 2 - 4);
+}
+
+function drawBuilding(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
+  const { x: cx, y: cy } = toScreen(x, y);
+  drawSprite(ctx, tiles.building, cx, cy + TILE_H / 2);
 }
 
 const MONSTER_COLORS: Record<string, string> = {
@@ -204,15 +160,10 @@ function drawFigure(ctx: CanvasRenderingContext2D, x: number, y: number, color: 
   }
 }
 
-function drawItem(ctx: CanvasRenderingContext2D, x: number, y: number, time: number): void {
+function drawItem(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number, time: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
   const bob = Math.sin(time * 3 + x + y) * 3;
-  ctx.fillStyle = "#f5d33c";
-  ctx.beginPath();
-  ctx.arc(cx, cy + TILE_H / 2 - 10 + bob, 5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#a8860a";
-  ctx.stroke();
+  drawSprite(ctx, tiles.coin, cx, cy + TILE_H / 2 - 10 + bob);
 }
 
 export interface EntityDrawPos {
@@ -225,6 +176,7 @@ export function renderScene(
   canvasWidth: number,
   canvasHeight: number,
   layout: Layout,
+  tiles: Tileset,
   screen: ScreenData,
   players: Array<PlayerPublicState & EntityDrawPos>,
   you: PlayerPublicState & EntityDrawPos,
@@ -236,39 +188,40 @@ export function renderScene(
 
   for (let y = 0; y < screen.tiles.length; y++) {
     for (let x = 0; x < screen.tiles[y].length; x++) {
-      drawGroundTile(ctx, x, y, screen.tiles[y][x], time);
+      drawGroundTile(ctx, tiles, x, y, screen.tiles[y][x], time);
     }
   }
 
-  type Sprite = { depth: number; draw: () => void };
-  const sprites: Sprite[] = [];
+  type Drawable = { depth: number; draw: () => void };
+  const drawables: Drawable[] = [];
 
   for (let y = 0; y < screen.tiles.length; y++) {
     for (let x = 0; x < screen.tiles[y].length; x++) {
       const tile = screen.tiles[y][x];
-      if (tile === TileType.Tree) sprites.push({ depth: x + y, draw: () => drawTree(ctx, x, y, time) });
-      else if (tile === TileType.Rock) sprites.push({ depth: x + y, draw: () => drawRock(ctx, x, y) });
-      else if (tile === TileType.Building) sprites.push({ depth: x + y, draw: () => drawBuilding(ctx, x, y) });
+      if (tile === TileType.Tree) drawables.push({ depth: x + y, draw: () => drawTree(ctx, tiles, x, y, time) });
+      else if (tile === TileType.Rock) drawables.push({ depth: x + y, draw: () => drawRock(ctx, tiles, x, y) });
+      else if (tile === TileType.Building) drawables.push({ depth: x + y, draw: () => drawBuilding(ctx, tiles, x, y) });
+      else if (tile === TileType.Fence) drawables.push({ depth: x + y, draw: () => drawFence(ctx, tiles, x, y) });
     }
   }
 
   for (const item of screen.items) {
     if (item.takenBy) continue;
-    sprites.push({ depth: item.x + item.y, draw: () => drawItem(ctx, item.x, item.y, time) });
+    drawables.push({ depth: item.x + item.y, draw: () => drawItem(ctx, tiles, item.x, item.y, time) });
   }
 
   for (const m of screen.monsters) {
     if (!m.alive) continue;
-    sprites.push({ depth: m.x + m.y, draw: () => drawFigure(ctx, m.x, m.y, MONSTER_COLORS[m.kind] ?? "#a33", time, m.x * 7 + m.y, m.kind) });
+    drawables.push({ depth: m.x + m.y, draw: () => drawFigure(ctx, m.x, m.y, MONSTER_COLORS[m.kind] ?? "#a33", time, m.x * 7 + m.y, m.kind) });
   }
 
   for (const p of players) {
-    sprites.push({ depth: p.x + p.y, draw: () => drawFigure(ctx, p.x, p.y, "#3ba0e0", time, p.x * 3 + p.y, p.username) });
+    drawables.push({ depth: p.x + p.y, draw: () => drawFigure(ctx, p.x, p.y, "#3ba0e0", time, p.x * 3 + p.y, p.username) });
   }
-  sprites.push({ depth: you.x + you.y, draw: () => drawFigure(ctx, you.x, you.y, "#f0f0f0", time, you.x * 3 + you.y + 1, you.username) });
+  drawables.push({ depth: you.x + you.y, draw: () => drawFigure(ctx, you.x, you.y, "#f0f0f0", time, you.x * 3 + you.y + 1, you.username) });
 
-  sprites.sort((a, b) => a.depth - b.depth);
-  for (const s of sprites) s.draw();
+  drawables.sort((a, b) => a.depth - b.depth);
+  for (const d of drawables) d.draw();
 
   ctx.restore();
 }
