@@ -117,6 +117,8 @@ app.get("/admin", (_req, res) => {
   .swatch.active { border-color:#fff; }
   #terrainPanel label { display:block; margin:3px 0; cursor:pointer; }
   #terrainPanel input[type=range] { vertical-align:middle; }
+  #minimapWrap { position:sticky; bottom:0; left:0; z-index:2; display:inline-block; background:#111; border:1px solid #444; padding:4px; margin-top:8px; }
+  #minimap { display:block; background:#1a1a1a; cursor:crosshair; image-rendering:pixelated; }
 
   /* Barras de scroll a juego con el resto del backoffice (Chromium/Electron). */
   #mapWrap, #panel { scrollbar-width: thin; scrollbar-color: #3a3a3a #111; }
@@ -136,10 +138,11 @@ app.get("/admin", (_req, res) => {
     <span id="navHint">scroll: mover · shift+scroll: mover lateral · ctrl+scroll: zoom · espacio+arrastrar: mover</span>
   </div>
   <canvas id="map"></canvas>
+  <div id="minimapWrap"><canvas id="minimap" width="180" height="180"></canvas></div>
 </div>
 <div id="panel">
   <h2>Estancia</h2>
-  <div id="info" class="empty">Clica una casilla verde del mapa para ver su miniatura.</div>
+  <div id="info" class="empty">Clica una casilla verde fosforito del mapa (o del minimapa) para ver su miniatura.</div>
   <canvas id="thumb" width="256" height="176" style="display:none;margin-top:10px;"></canvas>
 
   <div id="terrainPanel">
@@ -170,6 +173,9 @@ app.get("/admin", (_req, res) => {
   const thumb = document.getElementById('thumb');
   const thumbCtx = thumb.getContext('2d');
   const zoomLabel = document.getElementById('zoomLabel');
+  const minimap = document.getElementById('minimap');
+  const minimapCtx = minimap.getContext('2d');
+  const EXPLORED_COLOR = '#39ff14'; // verde fosforito: siempre distingue lo ya explorado
 
   let discovered = new Map(); // "sx,sy" -> {biome, code}
   let painted = new Map(); // "sx,sy" -> biome id
@@ -243,17 +249,17 @@ app.get("/admin", (_req, res) => {
       ctx.fillRect((sx - WORLD_MIN) * cell, (sy - WORLD_MIN) * cell, cell, cell);
     }
 
-    // Estancias ya exploradas: verde plano si no hay decreto debajo, o un marco
-    // blanco encima del color decretado si lo hay (para distinguir "decretado
-    // pero aún no visitado" de "decretado y ya generado con ese terreno").
-    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-    ctx.lineWidth = Math.max(1, cell * 0.2);
+    // Estancias ya exploradas: siempre en verde fosforito, para que se distingan
+    // del resto pase lo que pase. Si además hay un bioma decretado debajo, se ve
+    // como un marco verde fosforito sobre ese color (en vez de tapar el color).
+    ctx.strokeStyle = EXPLORED_COLOR;
+    ctx.lineWidth = Math.max(1, cell * 0.25);
     for (const key of discovered.keys()) {
       const [sx, sy] = key.split(',').map(Number);
       if (painted.has(key)) {
         ctx.strokeRect((sx - WORLD_MIN) * cell + 0.5, (sy - WORLD_MIN) * cell + 0.5, cell - 1, cell - 1);
       } else {
-        ctx.fillStyle = '#4caf6d';
+        ctx.fillStyle = EXPLORED_COLOR;
         ctx.fillRect((sx - WORLD_MIN) * cell, (sy - WORLD_MIN) * cell, cell, cell);
       }
     }
@@ -290,7 +296,50 @@ app.get("/admin", (_req, res) => {
       }
       ctx.stroke();
     }
+
+    drawMinimap();
   }
+
+  // Minimapa del mundo completo: siempre muestra las 400x400 estancias enteras,
+  // con un recuadro indicando qué parte se ve ahora mismo en el mapa grande.
+  // Clicar en un punto centra el mapa grande ahí.
+  function drawMinimap() {
+    const mcell = minimap.width / WORLD_SIZE;
+    minimapCtx.fillStyle = '#1a1a1a';
+    minimapCtx.fillRect(0, 0, minimap.width, minimap.height);
+
+    for (const [key, biome] of painted) {
+      const [sx, sy] = key.split(',').map(Number);
+      minimapCtx.fillStyle = biomeColor(biome);
+      minimapCtx.fillRect((sx - WORLD_MIN) * mcell, (sy - WORLD_MIN) * mcell, Math.max(1, mcell), Math.max(1, mcell));
+    }
+    minimapCtx.fillStyle = EXPLORED_COLOR;
+    for (const key of discovered.keys()) {
+      const [sx, sy] = key.split(',').map(Number);
+      minimapCtx.fillRect((sx - WORLD_MIN) * mcell, (sy - WORLD_MIN) * mcell, Math.max(1, mcell), Math.max(1, mcell));
+    }
+
+    // Recuadro de viewport: qué parte del mundo se ve ahora en el mapa grande.
+    minimapCtx.strokeStyle = '#fff';
+    minimapCtx.lineWidth = 1;
+    const vx = (mapWrap.scrollLeft / cell) * mcell;
+    const vy = (mapWrap.scrollTop / cell) * mcell;
+    const vw = (mapWrap.clientWidth / cell) * mcell;
+    const vh = (mapWrap.clientHeight / cell) * mcell;
+    minimapCtx.strokeRect(vx, vy, vw, vh);
+  }
+
+  minimap.addEventListener('click', (ev) => {
+    const rect = minimap.getBoundingClientRect();
+    const mcell = minimap.width / WORLD_SIZE;
+    const mx = (ev.clientX - rect.left) * (minimap.width / rect.width) / mcell;
+    const my = (ev.clientY - rect.top) * (minimap.height / rect.height) / mcell;
+    mapWrap.scrollLeft = mx * cell - mapWrap.clientWidth / 2;
+    mapWrap.scrollTop = my * cell - mapWrap.clientHeight / 2;
+    drawMinimap();
+  });
+
+  mapWrap.addEventListener('scroll', () => drawMinimap());
 
   function zoomAt(clientX, clientY, factor) {
     const rect = mapWrap.getBoundingClientRect();
