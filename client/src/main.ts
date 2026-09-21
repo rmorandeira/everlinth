@@ -77,13 +77,14 @@ interface Transition {
 }
 let transition: Transition | null = null;
 
-// Las 4 direcciones son relativas a la pantalla (arriba/abajo/izq/dcha tal como se ven):
-// el "empuje" de cámara al cambiar de pantalla desliza en línea recta en esa dirección.
+// Las 4 direcciones son relativas a la pantalla (arriba/abajo/izq/dcha tal como se ven).
+// Este vector es hacia dónde sale la escena VIEJA (la nueva entra por el lado opuesto):
+// si sales por arriba, la sala vieja se va hacia abajo y la nueva entra desde arriba.
 const SCREEN_DIR_VECTOR: Record<Direction, { x: number; y: number }> = {
-  N: { x: 0, y: -1 },
-  S: { x: 0, y: 1 },
-  W: { x: -1, y: 0 },
-  E: { x: 1, y: 0 },
+  N: { x: 0, y: 1 },
+  S: { x: 0, y: -1 },
+  W: { x: 1, y: 0 },
+  E: { x: -1, y: 0 },
 };
 
 function dirVector(dir: Direction): { x: number; y: number } {
