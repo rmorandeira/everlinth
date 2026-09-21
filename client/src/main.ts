@@ -15,9 +15,11 @@ import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
 import { setupGamepad } from "./gamepad.js";
 import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
+import { toScreen } from "./render/iso.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
 import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
 import { applyEdgeBlur } from "./render/edgeblur.js";
+import { applyFlashlight, drawCursorDot } from "./render/flashlight.js";
 import { loadTileset } from "./render/tileset.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
@@ -57,6 +59,30 @@ function resizeCanvases(): void {
 }
 window.addEventListener("resize", resizeCanvases);
 resizeCanvases();
+
+// Cursor personalizado (punto rojo 4x4, ver flashlight.ts): se oculta el cursor
+// nativo por CSS y se sigue la posición aquí, en coordenadas de canvas (píxeles
+// reales, contando devicePixelRatio) para poder dibujarlo y para apuntar la linterna.
+let cursorPx = { x: 0, y: 0 };
+gameEl.addEventListener("mousemove", (ev) => {
+  const rect = sceneCanvas.getBoundingClientRect();
+  cursorPx = {
+    x: ((ev.clientX - rect.left) * sceneCanvas.width) / rect.width,
+    y: ((ev.clientY - rect.top) * sceneCanvas.height) / rect.height,
+  };
+});
+
+// Convierte una posición del mundo (coordenadas de tile) al píxel de canvas
+// donde se dibuja, con la misma transformación que usa renderScene (toScreen +
+// escala/origen del layout actual).
+function worldToCanvasPx(x: number, y: number): { x: number; y: number } {
+  const p = toScreen(x, y);
+  const TORSO_OFFSET = 18; // altura aprox. del pecho del personaje, en unidades locales pre-escala
+  return {
+    x: p.x * layout.scale + layout.originX,
+    y: (p.y - TORSO_OFFSET) * layout.scale + layout.originY,
+  };
+}
 
 let you: PlayerPrivateState | null = null;
 let currentScreen: ScreenData | null = null;
@@ -305,10 +331,16 @@ function frame(now: number): void {
 
     const dn = getDayNight();
     applyDayNightOverlay(sceneCtx, w, h, dn);
+
+    // Linterna: el cono sale del personaje y apunta hacia donde esté el cursor
+    // en ese momento, perforando la oscuridad (mezcla aditiva) en vez de encima.
+    const origin = worldToCanvasPx(youDisplay.x, youDisplay.y);
+    applyFlashlight(sceneCtx, origin.x, origin.y, cursorPx.x, cursorPx.y, dn.darkness);
   }
 
   weather.update(dt);
   weather.render(weatherCtx);
+  drawCursorDot(weatherCtx, cursorPx.x, cursorPx.y);
 
   requestAnimationFrame(frame);
 }

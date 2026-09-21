@@ -253,7 +253,9 @@ app.get("/admin", (_req, res) => {
     // del resto pase lo que pase. Si además hay un bioma decretado debajo, se ve
     // como un marco verde fosforito sobre ese color (en vez de tapar el color).
     ctx.fillStyle = EXPLORED_COLOR;
-    const markSize = Math.max(2, cell * 0.55);
+    // Marca pequeña y sutil: crece un poco con el zoom pero nunca más de 4x4,
+    // para que a niveles altos de zoom no tape la celda pintada debajo.
+    const markSize = Math.min(4, Math.max(2, cell * 0.3));
     for (const key of discovered.keys()) {
       const [sx, sy] = key.split(',').map(Number);
       const cx = (sx - WORLD_MIN) * cell;

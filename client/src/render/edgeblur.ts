@@ -4,7 +4,7 @@
 // post-proceso sobre el frame ya compuesto (igual que
 // applyHeatShimmer/applyDayNightOverlay), no toca cómo se genera el terreno.
 
-const SHARP_FRACTION = 0.5; // fracción central (por eje) que queda 100% nítida
+const SHARP_FRACTION = 0.5; // fracción del radio elíptico que queda 100% nítida
 const BLUR_PX = 14; // radio de desenfoque ya escalado a tamaño real
 const DOWNSCALE = 4; // el paso de blur se hace a 1/DOWNSCALE de resolución (barato); el reescalado hacia arriba suaviza aún más
 
@@ -17,43 +17,23 @@ let fullCtx: CanvasRenderingContext2D | null = null;
 let maskW = 0;
 let maskH = 0;
 
+// Máscara elíptica (no rectangular): nítida en un óvalo centrado inscrito en la
+// pantalla, difuminada del todo a partir de su borde — más natural que un marco
+// recto, y ya cubre las esquinas sin necesidad de tratarlas aparte.
 function drawMask(w: number, h: number): void {
   const ctx = maskCtx!;
   ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.scale(w / 2, h / 2); // 1 unidad = borde de la elipse inscrita en la pantalla
 
-  const marginX = (w * (1 - SHARP_FRACTION)) / 2;
-  const marginY = (h * (1 - SHARP_FRACTION)) / 2;
-
-  ctx.globalCompositeOperation = "source-over";
-  let g = ctx.createLinearGradient(0, 0, marginX, 0);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, marginX, h);
-
-  // El resto de lados se combinan con "lighten" (máximo por canal): si una
-  // esquina está cerca de dos bordes a la vez, gana el que la difumina más.
-  ctx.globalCompositeOperation = "lighten";
-
-  g = ctx.createLinearGradient(w, 0, w - marginX, 0);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(w - marginX, 0, marginX, h);
-
-  g = ctx.createLinearGradient(0, 0, 0, marginY);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, marginY);
-
-  g = ctx.createLinearGradient(0, h, 0, h - marginY);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, h - marginY, w, marginY);
-
-  ctx.globalCompositeOperation = "source-over";
+  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  gradient.addColorStop(0, "rgba(255,255,255,0)");
+  gradient.addColorStop(SHARP_FRACTION, "rgba(255,255,255,0)");
+  gradient.addColorStop(1, "rgba(255,255,255,1)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
 }
 
 function ensureBuffers(w: number, h: number): void {
