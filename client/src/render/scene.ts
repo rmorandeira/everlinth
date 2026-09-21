@@ -74,6 +74,10 @@ function drawGroundTile(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number
   }
 }
 
+// El esqueleto de árbol se dibuja más pequeño que el resto (mismo sprite,
+// misma proporción, solo reducido) para que no domine tanto la escena.
+const TREE_SCALE: Partial<Record<SpriteKey, number>> = { tree2: 0.7 };
+
 function drawTree(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number, time: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
   const key = pick(TREE_VARIANTS, hash2(x + 0.25, y + 0.25));
@@ -82,7 +86,7 @@ function drawTree(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: n
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
-  drawSprite(ctx, tiles[key], 0, 0);
+  drawSprite(ctx, tiles[key], 0, 0, TREE_SCALE[key] ?? 1);
   ctx.restore();
 }
 
@@ -105,7 +109,7 @@ function drawBuilding(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, 
 
 function drawCactus(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
-  drawSprite(ctx, tiles.cactus, cx, cy);
+  drawSprite(ctx, tiles.cactus, cx, cy, 0.7);
 }
 
 const MONSTER_COLORS: Record<string, string> = {
@@ -191,12 +195,13 @@ function drawStickGuy(ctx: CanvasRenderingContext2D, x: number, y: number, color
 
   ctx.fillStyle = "rgba(0,0,0,0.28)";
   ctx.beginPath();
-  ctx.ellipse(cx, cy + TILE_H / 2, 9, 3.5, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, cy + TILE_H / 2, 4.5, 1.75, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.save();
   ctx.translate(cx, baseY);
   if (anim.facingLeft) ctx.scale(-1, 1);
+  ctx.scale(0.5, 0.5);
 
   const legSwing = Math.sin(anim.phase) * 3.2;
   const armSwing = Math.sin(anim.phase + Math.PI) * 2;

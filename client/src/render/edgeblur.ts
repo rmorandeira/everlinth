@@ -4,8 +4,10 @@
 // post-proceso sobre el frame ya compuesto (igual que
 // applyHeatShimmer/applyDayNightOverlay), no toca cómo se genera el terreno.
 
-const SHARP_FRACTION = 0.5; // fracción del radio elíptico que queda 100% nítida
-const BLUR_PX = 14; // radio de desenfoque ya escalado a tamaño real
+const SHARP_FRACTION = 0.72; // fracción del radio elíptico que queda nítida: cuanto más alta, más pegada al borde queda la niebla
+const RADIUS_JITTER = 0.035; // cuánto "respira" ese radio (fracción), no es un valor fijo
+const BLUR_PX = 16; // radio de desenfoque base, ya escalado a tamaño real
+const BLUR_JITTER = 6; // amplitud de la vibración del desenfoque
 const DOWNSCALE = 4; // el paso de blur se hace a 1/DOWNSCALE de resolución (barato); el reescalado hacia arriba suaviza aún más
 
 let smallCanvas: HTMLCanvasElement | null = null;
@@ -17,10 +19,18 @@ let fullCtx: CanvasRenderingContext2D | null = null;
 let maskW = 0;
 let maskH = 0;
 
+// Dos frecuencias superpuestas (no un único seno) para que la vibración se vea
+// orgánica y no como un pulso mecánico y predecible.
+function organicJitter(time: number, speedA: number, speedB: number, phase: number): number {
+  return Math.sin(time * speedA) * 0.7 + Math.sin(time * speedB + phase) * 0.3;
+}
+
 // Máscara elíptica (no rectangular): nítida en un óvalo centrado inscrito en la
-// pantalla, difuminada del todo a partir de su borde — más natural que un marco
-// recto, y ya cubre las esquinas sin necesidad de tratarlas aparte.
-function drawMask(w: number, h: number): void {
+// pantalla, difuminada del todo a partir de su radio — más natural que un marco
+// recto, y ya cubre las esquinas sin necesidad de tratarlas aparte. Se redibuja
+// cada frame con el radio "respirando" un poco, así el límite nítido/borroso
+// tiembla en vez de ser una viñeta fija.
+function drawMask(w: number, h: number, sharpFraction: number): void {
   const ctx = maskCtx!;
   ctx.clearRect(0, 0, w, h);
   ctx.save();
@@ -29,7 +39,7 @@ function drawMask(w: number, h: number): void {
 
   const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
   gradient.addColorStop(0, "rgba(255,255,255,0)");
-  gradient.addColorStop(SHARP_FRACTION, "rgba(255,255,255,0)");
+  gradient.addColorStop(Math.max(0, Math.min(0.98, sharpFraction)), "rgba(255,255,255,0)");
   gradient.addColorStop(1, "rgba(255,255,255,1)");
   ctx.fillStyle = gradient;
   ctx.fillRect(-1, -1, 2, 2);
@@ -65,14 +75,7 @@ function ensureBuffers(w: number, h: number): void {
     maskCanvas.height = h;
     maskW = w;
     maskH = h;
-    drawMask(w, h);
   }
-}
-
-// Pequeña vibración orgánica del desenfoque (dos frecuencias superpuestas, no un
-// único seno) para que el borde no se vea como una viñeta estática de foto.
-function blurJitter(time: number): number {
-  return Math.sin(time * 2.2) * 2 + Math.sin(time * 7.3 + 1.7) * 0.8;
 }
 
 // Aplica el difuminado de bordes sobre `source` (el frame ya compuesto, con
@@ -82,12 +85,17 @@ export function applyEdgeBlur(
   source: CanvasImageSource,
   width: number,
   height: number,
-  time: number
+  time: number,
+  sharpFractionBase: number = SHARP_FRACTION,
+  vibration: number = 1
 ): void {
   if (width <= 0 || height <= 0) return;
   ensureBuffers(width, height);
 
-  const blurPx = Math.max(2, BLUR_PX + blurJitter(time));
+  const sharpFraction = sharpFractionBase + organicJitter(time, 0.9, 2.6, 0.4) * RADIUS_JITTER * vibration;
+  drawMask(width, height, sharpFraction);
+
+  const blurPx = Math.max(2, BLUR_PX + organicJitter(time, 2.2, 7.3, 1.7) * BLUR_JITTER * vibration);
   smallCtx!.clearRect(0, 0, smallCanvas!.width, smallCanvas!.height);
   smallCtx!.filter = `blur(${blurPx / DOWNSCALE}px)`;
   smallCtx!.drawImage(source, 0, 0, smallCanvas!.width, smallCanvas!.height);

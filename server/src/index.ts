@@ -3,9 +3,9 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
-import { WORLD_MIN, WORLD_MAX, TileType, BIOME_CATALOG, BIOME_IDS, type BiomeId } from "@roi/shared";
+import { WORLD_MIN, WORLD_MAX, TileType, BIOME_CATALOG, BIOME_IDS, DEFAULT_VISION_SETTINGS, type BiomeId, type VisionFogSettings } from "@roi/shared";
 import { GameServer } from "./game.js";
-import { listScreenCoords, getScreen, listPaint, paintCells, unpaintCells, deleteScreens } from "./db.js";
+import { listScreenCoords, getScreen, listPaint, paintCells, unpaintCells, deleteScreens, getSetting, setSetting } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
@@ -17,6 +17,41 @@ app.use(express.json());
 // todavía; pensado solo para uso local/interno del admin.
 app.get("/admin/screens.json", (_req, res) => {
   res.json(listScreenCoords());
+});
+
+// Ajustes visuales globales (niebla de visión, etc.): el juego los lee al
+// arrancar, el backoffice los edita. Ruta pública (no /admin) porque el propio
+// cliente del juego necesita poder leerla sin ser un admin.
+function readVisionSettings(): VisionFogSettings {
+  const raw = getSetting("visionFog");
+  if (!raw) return DEFAULT_VISION_SETTINGS;
+  try {
+    return { ...DEFAULT_VISION_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_VISION_SETTINGS;
+  }
+}
+
+app.get("/settings.json", (_req, res) => {
+  res.json(readVisionSettings());
+});
+
+app.post("/admin/settings/vision", (req, res) => {
+  const body = req.body as Partial<VisionFogSettings>;
+  const sharpFraction = Number(body.sharpFraction);
+  const vibration = Number(body.vibration);
+  const chromaticAberration = Number(body.chromaticAberration ?? 0);
+  if (!Number.isFinite(sharpFraction) || !Number.isFinite(vibration) || !Number.isFinite(chromaticAberration)) {
+    res.status(400).json({ error: "invalid body" });
+    return;
+  }
+  const clamped: VisionFogSettings = {
+    sharpFraction: Math.min(0.98, Math.max(0.2, sharpFraction)),
+    vibration: Math.min(2, Math.max(0, vibration)),
+    chromaticAberration: Math.min(1, Math.max(0, chromaticAberration)),
+  };
+  setSetting("visionFog", JSON.stringify(clamped));
+  res.json(clamped);
 });
 
 app.get("/admin/screen/:sx/:sy.json", (req, res) => {
@@ -112,7 +147,7 @@ app.get("/admin", (_req, res) => {
   #zoomBar button:hover { background:#333; }
   #zoomLabel { font-size:12px; color:#999; min-width:70px; }
   #navHint { font-size:11px; color:#666; margin-left:8px; }
-  #terrainPanel { margin-top:24px; padding-top:16px; border-top:1px solid #333; }
+  #terrainPanel, #visionPanel { margin-top:24px; padding-top:16px; border-top:1px solid #333; }
   .swatch { display:inline-block; width:28px; height:28px; margin:2px; border:2px solid transparent; cursor:pointer; box-sizing:border-box; border-radius:3px; }
   .swatch.active { border-color:#fff; }
   #terrainPanel label { display:block; margin:3px 0; cursor:pointer; }
@@ -155,6 +190,14 @@ app.get("/admin", (_req, res) => {
       <label><input type="radio" name="mode" value="unpaint"> Quitar decreto</label>
       <label><input type="radio" name="mode" value="delete"> Borrar estancia ya generada</label>
     </div>
+  </div>
+
+  <div id="visionPanel">
+    <h2>Niebla de visión (global, afecta a todos)</h2>
+    <div class="stat">Tamaño: <input id="fogSize" type="range" min="20" max="98" value="72"> <span id="fogSizeLabel"></span></div>
+    <div class="stat">Vibración: <input id="fogVibration" type="range" min="0" max="200" value="100"> <span id="fogVibrationLabel"></span></div>
+    <div class="stat">Aberración cromática: <input id="chromaAb" type="range" min="0" max="100" value="0"> <span id="chromaAbLabel"></span></div>
+    <div class="stat" style="color:#666;font-size:11px;">Solo afecta a la escena del juego, no al HUD.</div>
   </div>
 </div>
 <script>
@@ -504,6 +547,48 @@ app.get("/admin", (_req, res) => {
     }
     draw();
   });
+
+  // ---- Niebla de visión / aberración cromática: ajustes globales del juego ----
+  const fogSizeInput = document.getElementById('fogSize');
+  const fogSizeLabel = document.getElementById('fogSizeLabel');
+  const fogVibrationInput = document.getElementById('fogVibration');
+  const fogVibrationLabel = document.getElementById('fogVibrationLabel');
+  const chromaAbInput = document.getElementById('chromaAb');
+  const chromaAbLabel = document.getElementById('chromaAbLabel');
+
+  function updateVisionLabels() {
+    fogSizeLabel.textContent = fogSizeInput.value + '%';
+    fogVibrationLabel.textContent = fogVibrationInput.value + '%';
+    chromaAbLabel.textContent = chromaAbInput.value + '%';
+  }
+
+  async function loadVisionSettings() {
+    const res = await fetch('/settings.json');
+    const s = await res.json();
+    fogSizeInput.value = Math.round(s.sharpFraction * 100);
+    fogVibrationInput.value = Math.round(s.vibration * 100);
+    chromaAbInput.value = Math.round(s.chromaticAberration * 100);
+    updateVisionLabels();
+  }
+
+  async function saveVisionSettings() {
+    updateVisionLabels();
+    await fetch('/admin/settings/vision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sharpFraction: Number(fogSizeInput.value) / 100,
+        vibration: Number(fogVibrationInput.value) / 100,
+        chromaticAberration: Number(chromaAbInput.value) / 100,
+      }),
+    });
+  }
+
+  for (const input of [fogSizeInput, fogVibrationInput, chromaAbInput]) {
+    input.addEventListener('input', updateVisionLabels);
+    input.addEventListener('change', saveVisionSettings);
+  }
+  loadVisionSettings();
 
   // Miniatura con los sprites reales del juego (misma proyección isométrica que el
   // cliente), en vez de un grid de colores planos.

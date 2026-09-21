@@ -11,6 +11,22 @@ export const WORLD_SIZE = 400;
 export const WORLD_MIN = -Math.floor(WORLD_SIZE / 2);
 export const WORLD_MAX = Math.ceil(WORLD_SIZE / 2) - 1;
 
+// Ajustes visuales globales editables desde el backoffice (afectan a todos los
+// jugadores, solo a la escena del juego, nunca al HUD). El cliente los pide una
+// vez al arrancar; si el servidor no responde o no hay nada guardado aún, usa
+// DEFAULT_VISION_SETTINGS.
+export interface VisionFogSettings {
+  sharpFraction: number; // 0..1: fracción del radio elíptico central que queda nítida (más alto = niebla más "cerrada")
+  vibration: number; // 0..1: cuánto "respira"/tiembla el límite nítido/borroso (0 = quieto)
+  chromaticAberration: number; // 0..1: separación de canales de color en los bordes de la escena (0 = desactivada)
+}
+
+export const DEFAULT_VISION_SETTINGS: VisionFogSettings = {
+  sharpFraction: 0.72,
+  vibration: 1,
+  chromaticAberration: 0,
+};
+
 export type Direction = "N" | "S" | "E" | "W";
 
 export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {

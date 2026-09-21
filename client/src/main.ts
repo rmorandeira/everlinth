@@ -1,5 +1,6 @@
 import "./style.css";
 import {
+  DEFAULT_VISION_SETTINGS,
   type Direction,
   type ExoticTier,
   type InputState,
@@ -10,15 +11,17 @@ import {
   type PlayerPublicState,
   type ScreenData,
   type ServerMessage,
+  type VisionFogSettings,
 } from "@roi/shared";
 import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
 import { setupGamepad } from "./gamepad.js";
 import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
-import { toScreen } from "./render/iso.js";
+import { toScreen, TILE_H } from "./render/iso.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
 import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
 import { applyEdgeBlur } from "./render/edgeblur.js";
+import { applyChromaticAberration } from "./render/chromatic.js";
 import { applyFlashlight, drawCursorDot } from "./render/flashlight.js";
 import { loadTileset } from "./render/tileset.js";
 
@@ -43,6 +46,14 @@ const weather = new WeatherSystem();
 let layout: Layout = { scale: 1, originX: 0, originY: 0 };
 let tileset: Tileset | null = null;
 loadTileset().then((t) => (tileset = t));
+
+// Ajustes de la niebla de visión: editables desde el backoffice, se piden una
+// vez al arrancar (si falla la petición, se queda con los valores por defecto).
+let visionSettings: VisionFogSettings = DEFAULT_VISION_SETTINGS;
+fetch("/settings.json")
+  .then((r) => r.json())
+  .then((s) => (visionSettings = s))
+  .catch(() => {});
 
 function resizeCanvases(): void {
   const dpr = window.devicePixelRatio || 1;
@@ -72,15 +83,27 @@ gameEl.addEventListener("mousemove", (ev) => {
   };
 });
 
-// Convierte una posición del mundo (coordenadas de tile) al píxel de canvas
-// donde se dibuja, con la misma transformación que usa renderScene (toScreen +
-// escala/origen del layout actual).
+// La linterna es puramente un efecto visual del cliente (no se manda al
+// servidor ni afecta a la partida), así que su tecla se maneja aparte de
+// setupInput, que es solo para acciones que sí viajan como ClientMessage.
+let flashlightOn = false;
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "l" || ev.key === "L") flashlightOn = !flashlightOn;
+});
+
+// Punto de origen de la linterna: la mano derecha del personaje, no el centro
+// del cuerpo. Offsets calculados a mano a partir de drawStickGuy (scene.ts):
+// baseY (pies) = toScreen().y + TILE_H/2 - 2; el brazo derecho está a x≈6,
+// altura de mano y≈-13 relativo a baseY, en las unidades locales del dibujo —
+// todo ya multiplicado por el 0.5 al que se escaló el personaje.
 function worldToCanvasPx(x: number, y: number): { x: number; y: number } {
   const p = toScreen(x, y);
-  const TORSO_OFFSET = 18; // altura aprox. del pecho del personaje, en unidades locales pre-escala
+  const BASE_Y_OFFSET = TILE_H / 2 - 2;
+  const HAND_OFFSET_X = 6 * 0.5;
+  const HAND_OFFSET_Y = BASE_Y_OFFSET + -13 * 0.5;
   return {
-    x: p.x * layout.scale + layout.originX,
-    y: (p.y - TORSO_OFFSET) * layout.scale + layout.originY,
+    x: (p.x + HAND_OFFSET_X) * layout.scale + layout.originX,
+    y: (p.y + HAND_OFFSET_Y) * layout.scale + layout.originY,
   };
 }
 
@@ -327,15 +350,21 @@ function frame(now: number): void {
     // antes que cualquier efecto de color — así el tinte de día/noche se aplica
     // por igual a la zona nítida y a la difuminada, en vez de quedar él mismo
     // borroso en los bordes.
-    applyEdgeBlur(sceneCtx, sceneCanvas, w, h, time);
+    applyEdgeBlur(sceneCtx, sceneCanvas, w, h, time, visionSettings.sharpFraction, visionSettings.vibration);
 
     const dn = getDayNight();
     applyDayNightOverlay(sceneCtx, w, h, dn);
 
-    // Linterna: el cono sale del personaje y apunta hacia donde esté el cursor
-    // en ese momento, perforando la oscuridad (mezcla aditiva) en vez de encima.
-    const origin = worldToCanvasPx(youDisplay.x, youDisplay.y);
-    applyFlashlight(sceneCtx, origin.x, origin.y, cursorPx.x, cursorPx.y, dn.darkness);
+    // Linterna: se enciende/apaga con L. El cono sale del personaje y apunta
+    // hacia donde esté el cursor, perforando la oscuridad (mezcla aditiva).
+    if (flashlightOn) {
+      const origin = worldToCanvasPx(youDisplay.x, youDisplay.y);
+      applyFlashlight(sceneCtx, origin.x, origin.y, cursorPx.x, cursorPx.y, dn.darkness);
+    }
+
+    // Aberración cromática: último paso, solo sobre la escena (nunca el HUD, que
+    // vive en elementos DOM aparte y en el canvas de clima).
+    applyChromaticAberration(sceneCtx, sceneCanvas, w, h, visionSettings.chromaticAberration);
   }
 
   weather.update(dt);

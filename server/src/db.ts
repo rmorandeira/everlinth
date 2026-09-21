@@ -49,6 +49,14 @@ db.exec(`
     biome TEXT NOT NULL,
     PRIMARY KEY (sx, sy)
   );
+
+  -- Ajustes globales del juego editables desde el backoffice (p.ej. la niebla de
+  -- visión): clave/valor genérico para no tener que migrar el esquema cada vez
+  -- que se añade un ajuste nuevo.
+  CREATE TABLE IF NOT EXISTS world_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // Migra bases de datos ya existentes (p.ej. en el volumen de producción) que se
@@ -254,4 +262,21 @@ export function savePlayer(state: PlayerPrivateState): void {
 
 export function deletePlayer(username: string): void {
   deletePlayerStmt.run(username);
+}
+
+// ---- Ajustes globales (world_settings) ----
+
+const getSettingStmt = db.prepare("SELECT value FROM world_settings WHERE key = ?");
+const upsertSettingStmt = db.prepare(`
+  INSERT INTO world_settings (key, value) VALUES (@key, @value)
+  ON CONFLICT(key) DO UPDATE SET value = @value
+`);
+
+export function getSetting(key: string): string | undefined {
+  const row = getSettingStmt.get(key) as { value: string } | undefined;
+  return row?.value;
+}
+
+export function setSetting(key: string, value: string): void {
+  upsertSettingStmt.run({ key, value });
 }

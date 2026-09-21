@@ -32,7 +32,11 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 // Tiles fotográficos recortados de una hoja de sprites isométrica (raster, no vector),
 // con el fondo eliminado. Todas las celdas de origen son cuadradas y comparten el mismo
 // punto de anclaje relativo (el centro del rombo superior del bloque).
-const RASTER_SOURCES: Record<string, string> = {
+//
+// Un set por bioma (mismas claves siempre: grass1..cactus), para que scene.ts pueda
+// pedir "el tileset de este bioma" sin saber nada de rutas de archivo. Un bioma sin
+// set propio cae en BADLANDS (ver getRasterSources en scene.ts/main.ts).
+const RASTER_SOURCES_BADLANDS = {
   grass1: "/raster/ground_plain.png",
   grass2: "/raster/ground_pebbly.png",
   grass3: "/raster/ground_tufts.png",
@@ -49,6 +53,33 @@ const RASTER_SOURCES: Record<string, string> = {
   fence: "/raster/cliff_wall.png",
   cactus: "/raster/cactus_tall.png",
 };
+
+// Bioma "clásico" (césped): recortado de una hoja de tiles de hierba/jardín.
+const RASTER_SOURCES_CLASSIC: Record<keyof typeof RASTER_SOURCES_BADLANDS, string> = {
+  grass1: "/raster/grass/ground_plain.png",
+  grass2: "/raster/grass/ground_dark.png",
+  grass3: "/raster/grass/ground_tufts.png",
+  dirt: "/raster/grass/ground_path.png",
+  water1: "/raster/grass/pond.png",
+  water2: "/raster/grass/pond_edge.png",
+  tree: "/raster/grass/bush_round.png",
+  tree2: "/raster/grass/bush_full.png",
+  rock1: "/raster/grass/rocks_small.png",
+  rock2: "/raster/grass/rocks_scatter.png",
+  building: "/raster/grass/stone_wall.png",
+  building2: "/raster/grass/stone_wall2.png",
+  building3: "/raster/grass/stone_wall3.png",
+  fence: "/raster/grass/stone_wall_low.png",
+  cactus: "/raster/grass/tall_grass.png",
+};
+
+export type RasterBiome = "badlands" | "classic";
+
+const RASTER_SOURCES_BY_BIOME: Record<RasterBiome, Record<string, string>> = {
+  badlands: RASTER_SOURCES_BADLANDS,
+  classic: RASTER_SOURCES_CLASSIC,
+};
+const RASTER_SOURCES = RASTER_SOURCES_BADLANDS;
 
 // ---- Paleta compartida (a partir de la referencia) ----
 const GREEN_LIGHT = "#5cc23e";
@@ -186,6 +217,9 @@ export function loadTileset(): Promise<Record<SpriteKey, Sprite>> {
   return loading;
 }
 
-export function drawSprite(ctx: CanvasRenderingContext2D, sprite: Sprite, cx: number, cy: number): void {
-  ctx.drawImage(sprite.img, cx - sprite.anchorX, cy - sprite.anchorY, sprite.w, sprite.h);
+// `scale` reduce el sprite manteniendo su proporción y su punto de anclaje al
+// suelo (nunca lo agranda por encima de su tamaño original: se recorta a 1).
+export function drawSprite(ctx: CanvasRenderingContext2D, sprite: Sprite, cx: number, cy: number, scale = 1): void {
+  const s = Math.min(1, scale);
+  ctx.drawImage(sprite.img, cx - sprite.anchorX * s, cy - sprite.anchorY * s, sprite.w * s, sprite.h * s);
 }
