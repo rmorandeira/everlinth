@@ -36,14 +36,40 @@ export enum TileType {
   Fence = 6,
 }
 
-// Todo el mapeado es exterior; estos tiles bloquean el movimiento.
-export const BLOCKING_TILES = new Set<TileType>([
-  TileType.Water,
-  TileType.Tree,
-  TileType.Rock,
-  TileType.Building,
-  TileType.Fence,
-]);
+// Cómo se coloca un tile proceduralmente sobre la hierba base al generar una pantalla:
+// - "base": el propio suelo (hierba/camino), no se coloca, ya está ahí por defecto.
+// - "scatter": disperso por celda suelta, compitiendo por "weight" contra los demás.
+// - "blob": una o dos manchas orgánicas (charcos/lagos), con "chance" de aparecer.
+// - "rare": como mucho una unidad por pantalla, con "chance" de aparecer.
+// - "segment": un tramo corto en línea, con "chance" de aparecer.
+export type TilePlacement = "base" | "scatter" | "blob" | "rare" | "segment";
+
+export interface TileDef {
+  blocking: boolean;
+  placement: TilePlacement;
+  weight?: number; // "scatter": probabilidad base por celda (0..1)
+  cluster?: number; // "scatter": cuánto sube la probabilidad en celdas vecinas al colocarse (agrupa en manchas, p.ej. colinas/bosques)
+  chance?: number; // "blob"/"rare"/"segment": probabilidad de aparecer en la pantalla
+  exoticBonus?: number; // XP extra de descubrimiento si el tile aparece en la pantalla
+}
+
+// Todo el mapeado es exterior. Añadir un tile nuevo al mundo es solo darlo de alta
+// aquí: la generación procedural y el bloqueo de movimiento salen de esta tabla.
+export const TILE_DEFS: Record<TileType, TileDef> = {
+  [TileType.Grass]: { blocking: false, placement: "base" },
+  [TileType.Path]: { blocking: false, placement: "base" },
+  [TileType.Water]: { blocking: true, placement: "blob", chance: 0.5, exoticBonus: 5 },
+  [TileType.Tree]: { blocking: true, placement: "scatter", weight: 0.05, cluster: 0.15 },
+  [TileType.Rock]: { blocking: true, placement: "scatter", weight: 0.03, cluster: 0.2 },
+  [TileType.Building]: { blocking: true, placement: "rare", chance: 0.12, exoticBonus: 15 },
+  [TileType.Fence]: { blocking: true, placement: "segment", chance: 0.3, exoticBonus: 3 },
+};
+
+export const BLOCKING_TILES = new Set<TileType>(
+  Object.entries(TILE_DEFS)
+    .filter(([, def]) => def.blocking)
+    .map(([key]) => Number(key) as TileType)
+);
 
 export type ExoticTier = "common" | "uncommon" | "rare" | "epic";
 

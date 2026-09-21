@@ -2,6 +2,8 @@ import {
   SCREEN_WIDTH,
   SCREEN_HEIGHT,
   TileType,
+  TILE_DEFS,
+  BLOCKING_TILES,
   type ScreenData,
   type MonsterState,
   type ItemState,
@@ -10,9 +12,6 @@ import {
 import { makeRng, seedFromCoords } from "./rng.js";
 import { MONSTER_KINDS, ITEM_KINDS, pickWeighted } from "./content.js";
 
-// Con cámara isométrica + controles relativos a pantalla, las 4 salidas están en las
-// 4 ESQUINAS del mundo (no en la mitad de cada borde). El camino garantizado conecta
-// las esquinas mediante las dos diagonales de la sala.
 function bresenhamLine(x0: number, y0: number, x1: number, y1: number): Array<{ x: number; y: number }> {
   const pts: Array<{ x: number; y: number }> = [];
   let x = x0;
@@ -38,25 +37,80 @@ function bresenhamLine(x0: number, y0: number, x1: number, y1: number): Array<{ 
   return pts;
 }
 
-const DIAGONAL_CELLS = new Set<string>();
-for (const p of bresenhamLine(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1)) DIAGONAL_CELLS.add(`${p.x},${p.y}`);
-for (const p of bresenhamLine(0, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, 0)) DIAGONAL_CELLS.add(`${p.x},${p.y}`);
-
-// El perímetro entero también queda siempre libre: el jugador puede tener que
-// deslizarse por un borde hasta alcanzar la esquina (salida), así que ningún
-// obstáculo puede bloquear ese recorrido.
-const PROTECTED_CELLS = new Set(DIAGONAL_CELLS);
+// El perímetro entero queda siempre libre de obstáculos: el jugador sale de la
+// estancia cruzando en línea recta por cualquier punto del borde, así que ningún
+// obstáculo puede taparlo justo en el punto de cruce.
+const PERIMETER_CELLS = new Set<string>();
 for (let x = 0; x < SCREEN_WIDTH; x++) {
-  PROTECTED_CELLS.add(`${x},0`);
-  PROTECTED_CELLS.add(`${x},${SCREEN_HEIGHT - 1}`);
+  PERIMETER_CELLS.add(`${x},0`);
+  PERIMETER_CELLS.add(`${x},${SCREEN_HEIGHT - 1}`);
 }
 for (let y = 0; y < SCREEN_HEIGHT; y++) {
-  PROTECTED_CELLS.add(`0,${y}`);
-  PROTECTED_CELLS.add(`${SCREEN_WIDTH - 1},${y}`);
+  PERIMETER_CELLS.add(`0,${y}`);
+  PERIMETER_CELLS.add(`${SCREEN_WIDTH - 1},${y}`);
 }
 
 function isOnCross(x: number, y: number): boolean {
-  return PROTECTED_CELLS.has(`${x},${y}`);
+  return PERIMETER_CELLS.has(`${x},${y}`);
+}
+
+// Analiza la estancia ya generada: si algún obstáculo (o un grupo agrupado de ellos)
+// deja una zona incomunicada del resto, traza el camino más corto para reconectarla.
+// Así los caminos salen de los obstáculos reales de cada pantalla, no de una forma fija.
+function floodFillReachable(tiles: TileType[][]): boolean[][] {
+  const visited: boolean[][] = Array.from({ length: SCREEN_HEIGHT }, () => new Array(SCREEN_WIDTH).fill(false));
+  const startX = Math.floor(SCREEN_WIDTH / 2);
+  const startY = Math.floor(SCREEN_HEIGHT / 2);
+  if (BLOCKING_TILES.has(tiles[startY][startX])) tiles[startY][startX] = TileType.Grass;
+  const stack = [{ x: startX, y: startY }];
+  visited[startY][startX] = true;
+  while (stack.length > 0) {
+    const { x, y } = stack.pop()!;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ]) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= SCREEN_WIDTH || ny < 0 || ny >= SCREEN_HEIGHT) continue;
+      if (visited[ny][nx] || BLOCKING_TILES.has(tiles[ny][nx])) continue;
+      visited[ny][nx] = true;
+      stack.push({ x: nx, y: ny });
+    }
+  }
+  return visited;
+}
+
+function ensureConnectivity(tiles: TileType[][]): void {
+  const borders: Array<Array<{ x: number; y: number }>> = [
+    Array.from({ length: SCREEN_WIDTH }, (_, x) => ({ x, y: 0 })),
+    Array.from({ length: SCREEN_WIDTH }, (_, x) => ({ x, y: SCREEN_HEIGHT - 1 })),
+    Array.from({ length: SCREEN_HEIGHT }, (_, y) => ({ x: 0, y })),
+    Array.from({ length: SCREEN_HEIGHT }, (_, y) => ({ x: SCREEN_WIDTH - 1, y })),
+  ];
+
+  for (const border of borders) {
+    let reachable = floodFillReachable(tiles);
+    if (border.some((p) => reachable[p.y][p.x])) continue;
+
+    let best: { target: { x: number; y: number }; source: { x: number; y: number }; dist: number } | null = null;
+    for (const target of border) {
+      for (let y = 0; y < SCREEN_HEIGHT; y++) {
+        for (let x = 0; x < SCREEN_WIDTH; x++) {
+          if (!reachable[y][x]) continue;
+          const d = Math.hypot(target.x - x, target.y - y);
+          if (!best || d < best.dist) best = { target, source: { x, y }, dist: d };
+        }
+      }
+    }
+    if (!best) continue;
+    for (const p of bresenhamLine(best.source.x, best.source.y, best.target.x, best.target.y)) {
+      tiles[p.y][p.x] = TileType.Path;
+    }
+    reachable = floodFillReachable(tiles);
+  }
 }
 
 function isCorner(x: number, y: number): boolean {
@@ -80,57 +134,93 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     Array.from({ length: SCREEN_WIDTH }, () => TileType.Grass)
   );
 
-  // Garantiza conectividad entre las 4 esquinas (salidas): las dos diagonales transitables.
-  for (const key of DIAGONAL_CELLS) {
-    const [x, y] = key.split(",").map(Number);
-    tiles[y][x] = TileType.Path;
-  }
+  // Presencia de cada tile "raro" en la pantalla, para el bono de XP de descubrimiento.
+  const present = new Set<TileType>();
 
-  let hasWater = false;
-  let hasBuilding = false;
-
-  // Uno o dos charcos de agua (exterior: ríos/lagunas), como blobs pequeños.
-  const waterSeeds = rng() < 0.5 ? 1 : rng() < 0.2 ? 2 : 0;
-  for (let i = 0; i < waterSeeds; i++) {
-    const cx = 1 + Math.floor(rng() * (SCREEN_WIDTH - 2));
-    const cy = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
-    const radius = 1 + Math.floor(rng() * 2);
-    for (let y = Math.max(0, cy - radius); y <= Math.min(SCREEN_HEIGHT - 1, cy + radius); y++) {
-      for (let x = Math.max(0, cx - radius); x <= Math.min(SCREEN_WIDTH - 1, cx + radius); x++) {
-        if (isOnCross(x, y)) continue;
-        const d = Math.hypot(x - cx, y - cy);
-        if (d <= radius && rng() < 0.8) {
-          tiles[y][x] = TileType.Water;
-          hasWater = true;
+  // --- "blob": manchas orgánicas (agua) ---
+  for (const [key, def] of Object.entries(TILE_DEFS)) {
+    if (def.placement !== "blob") continue;
+    const t = Number(key) as TileType;
+    const seeds = rng() < (def.chance ?? 0) ? 1 : rng() < (def.chance ?? 0) * 0.4 ? 2 : 0;
+    for (let i = 0; i < seeds; i++) {
+      const cx = 1 + Math.floor(rng() * (SCREEN_WIDTH - 2));
+      const cy = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
+      const radius = 1 + Math.floor(rng() * 2);
+      for (let y = Math.max(0, cy - radius); y <= Math.min(SCREEN_HEIGHT - 1, cy + radius); y++) {
+        for (let x = Math.max(0, cx - radius); x <= Math.min(SCREEN_WIDTH - 1, cx + radius); x++) {
+          if (isOnCross(x, y)) continue;
+          const d = Math.hypot(x - cx, y - cy);
+          if (d <= radius && rng() < 0.8) {
+            tiles[y][x] = t;
+            present.add(t);
+          }
         }
       }
     }
   }
 
-  // Landmark raro: un edificio.
-  if (rng() < 0.12) {
+  // --- "rare": como mucho una unidad por pantalla (p.ej. un edificio) ---
+  for (const [key, def] of Object.entries(TILE_DEFS)) {
+    if (def.placement !== "rare") continue;
+    const t = Number(key) as TileType;
+    if (rng() >= (def.chance ?? 0)) continue;
     const bx = 1 + Math.floor(rng() * (SCREEN_WIDTH - 2));
     const by = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
     if (!isOnCross(bx, by) && tiles[by][bx] === TileType.Grass) {
-      tiles[by][bx] = TileType.Building;
-      hasBuilding = true;
+      tiles[by][bx] = t;
+      present.add(t);
     }
   }
 
-  // Árboles y rocas dispersos.
+  // --- "scatter": disperso por celda, con agrupamiento ("cluster") entre vecinos ---
+  // Colocar un tile sube la probabilidad de que sus celdas vecinas sean del mismo tipo,
+  // así los árboles/rocas aparecen en manchas/bosquecillos en vez de puntos sueltos.
+  const scatterDefs = Object.entries(TILE_DEFS).filter(([, def]) => def.placement === "scatter") as Array<
+    [string, (typeof TILE_DEFS)[TileType]]
+  >;
+  const influence = new Map<TileType, number[][]>();
+  for (const [key] of scatterDefs) {
+    influence.set(
+      Number(key) as TileType,
+      Array.from({ length: SCREEN_HEIGHT }, () => new Array(SCREEN_WIDTH).fill(0))
+    );
+  }
   for (let y = 0; y < SCREEN_HEIGHT; y++) {
     for (let x = 0; x < SCREEN_WIDTH; x++) {
       if (isOnCross(x, y)) continue;
       if (tiles[y][x] !== TileType.Grass) continue;
       const roll = rng();
-      if (roll < 0.05) tiles[y][x] = TileType.Tree;
-      else if (roll < 0.08) tiles[y][x] = TileType.Rock;
+      let cumulative = 0;
+      for (const [key, def] of scatterDefs) {
+        const t = Number(key) as TileType;
+        const boost = influence.get(t)![y][x];
+        cumulative += Math.min(0.9, (def.weight ?? 0) + boost);
+        if (roll < cumulative) {
+          tiles[y][x] = t;
+          present.add(t);
+          const cluster = def.cluster ?? 0;
+          if (cluster > 0) {
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx < 0 || nx >= SCREEN_WIDTH || ny < 0 || ny >= SCREEN_HEIGHT) continue;
+                influence.get(t)![ny][nx] += cluster;
+              }
+            }
+          }
+          break;
+        }
+      }
     }
   }
 
-  // Tramo corto de valla, como elemento de escenario (nunca cruza el pasillo central).
-  let hasFence = false;
-  if (rng() < 0.3) {
+  // --- "segment": un tramo corto en línea (p.ej. una valla), nunca sobre el camino garantizado ---
+  for (const [key, def] of Object.entries(TILE_DEFS)) {
+    if (def.placement !== "segment") continue;
+    const t = Number(key) as TileType;
+    if (rng() >= (def.chance ?? 0)) continue;
     const horizontal = rng() < 0.5;
     const length = 2 + Math.floor(rng() * 3);
     const startX = 1 + Math.floor(rng() * Math.max(1, SCREEN_WIDTH - 2 - length));
@@ -141,11 +231,15 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
       if (x >= SCREEN_WIDTH - 1 || y >= SCREEN_HEIGHT - 1) continue;
       if (isOnCross(x, y)) continue;
       if (tiles[y][x] === TileType.Grass) {
-        tiles[y][x] = TileType.Fence;
-        hasFence = true;
+        tiles[y][x] = t;
+        present.add(t);
       }
     }
   }
+
+  // Analiza la sala ya generada y reconecta cualquier borde que haya quedado
+  // encerrado por los obstáculos, trazando el camino más corto posible.
+  ensureConnectivity(tiles);
 
   const walkableSpots: Array<{ x: number; y: number }> = [];
   for (let y = 0; y < SCREEN_HEIGHT; y++) {
@@ -193,15 +287,10 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     }
   }
 
-  const score =
-    5 +
-    (hasWater ? 5 : 0) +
-    (hasBuilding ? 15 : 0) +
-    (hasFence ? 3 : 0) +
-    monsters.length * 3 +
-    rareMonsterBonus +
-    itemBonus +
-    rng() * 5;
+  let presenceBonus = 0;
+  for (const t of present) presenceBonus += TILE_DEFS[t].exoticBonus ?? 0;
+
+  const score = 5 + presenceBonus + monsters.length * 3 + rareMonsterBonus + itemBonus + rng() * 5;
 
   let exoticTier: ExoticTier;
   if (score < 10) exoticTier = "common";
