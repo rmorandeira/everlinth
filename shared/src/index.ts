@@ -12,6 +12,19 @@ export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
   W: { dx: -1, dy: 0 },
 };
 
+// Movimiento continuo (no por casillas): el servidor simula a este tick fijo.
+export const TICK_MS = 50;
+export const PLAYER_SPEED = 4.2; // tiles/segundo
+export const ATTACK_RANGE = 0.9; // tiles
+export const PICKUP_RANGE = 0.75; // tiles
+
+export interface InputState {
+  N: boolean;
+  S: boolean;
+  E: boolean;
+  W: boolean;
+}
+
 export enum TileType {
   Grass = 0,
   Path = 1,
@@ -87,7 +100,8 @@ export interface PlayerPrivateState extends PlayerPublicState {
 // ---- Mensajes cliente -> servidor ----
 export type ClientMessage =
   | { type: "join"; username: string }
-  | { type: "move"; dir: Direction }
+  | { type: "input"; dirs: InputState }
+  | { type: "attack" }
   | { type: "pickup" };
 
 // ---- Mensajes servidor -> cliente ----

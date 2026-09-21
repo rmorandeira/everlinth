@@ -2,8 +2,11 @@ import type { WebSocket } from "ws";
 import {
   SCREEN_WIDTH,
   SCREEN_HEIGHT,
-  DIRECTION_DELTA,
   BLOCKING_TILES,
+  TICK_MS,
+  PLAYER_SPEED,
+  ATTACK_RANGE,
+  PICKUP_RANGE,
   screenKey,
   type ClientMessage,
   type ServerMessage,
@@ -11,14 +14,18 @@ import {
   type PlayerPublicState,
   type Direction,
   type ScreenData,
+  type InputState,
 } from "@roi/shared";
 import { getScreen, saveScreen, getPlayer, savePlayer, deletePlayer } from "./db.js";
 import { generateScreen } from "./worldgen.js";
 import { MONSTER_KINDS } from "./content.js";
 
+const NO_INPUT: InputState = { N: false, S: false, E: false, W: false };
+
 interface Connection {
   socket: WebSocket;
   username: string | null;
+  input: InputState;
 }
 
 function send(socket: WebSocket, msg: ServerMessage): void {
@@ -34,14 +41,24 @@ function xpForNextLevel(level: number): number {
   return level * 20;
 }
 
+function dist(ax: number, ay: number, bx: number, by: number): number {
+  return Math.hypot(ax - bx, ay - by);
+}
+
 export class GameServer {
   private connections = new Set<Connection>();
   private players = new Map<string, PlayerPrivateState>();
   private screenRooms = new Map<string, Set<Connection>>();
   private connByUsername = new Map<string, Connection>();
+  private screenCache = new Map<string, ScreenData>();
+
+  constructor() {
+    setInterval(() => this.tick(), TICK_MS);
+    setInterval(() => this.autosave(), 3000);
+  }
 
   handleConnection(socket: WebSocket): void {
-    const conn: Connection = { socket, username: null };
+    const conn: Connection = { socket, username: null, input: { ...NO_INPUT } };
     this.connections.add(conn);
 
     socket.on("message", (raw: Buffer) => {
@@ -56,17 +73,25 @@ export class GameServer {
 
     socket.on("close", () => {
       this.connections.delete(conn);
-      if (conn.username) {
-        const player = this.players.get(conn.username);
-        if (player) {
-          savePlayer(player);
-          this.leaveScreenRoom(conn, screenKey({ sx: player.sx, sy: player.sy }));
-          this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username: conn.username }, conn);
-        }
-        this.players.delete(conn.username);
-        this.connByUsername.delete(conn.username);
-      }
+      if (conn.username) this.disconnectPlayer(conn);
     });
+  }
+
+  private disconnectPlayer(conn: Connection): void {
+    const username = conn.username!;
+    const player = this.players.get(username);
+    if (player) {
+      savePlayer(player);
+      this.leaveScreenRoom(conn, screenKey({ sx: player.sx, sy: player.sy }));
+      this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username }, conn);
+    }
+    this.players.delete(username);
+    this.connByUsername.delete(username);
+    conn.username = null;
+  }
+
+  private autosave(): void {
+    for (const player of this.players.values()) savePlayer(player);
   }
 
   private handleMessage(conn: Connection, msg: ClientMessage): void {
@@ -78,7 +103,8 @@ export class GameServer {
     const player = this.players.get(conn.username);
     if (!player) return;
 
-    if (msg.type === "move") this.handleMove(conn, player, msg.dir);
+    if (msg.type === "input") conn.input = msg.dirs;
+    else if (msg.type === "attack") this.handleAttack(conn, player);
     else if (msg.type === "pickup") this.handlePickup(conn, player);
   }
 
@@ -99,8 +125,8 @@ export class GameServer {
         username,
         sx: 0,
         sy: 0,
-        x: Math.floor(SCREEN_WIDTH / 2),
-        y: Math.floor(SCREEN_HEIGHT / 2),
+        x: SCREEN_WIDTH / 2,
+        y: SCREEN_HEIGHT / 2,
         hp: 20,
         maxHp: 20,
         level: 1,
@@ -112,6 +138,7 @@ export class GameServer {
     }
 
     conn.username = username;
+    conn.input = { ...NO_INPUT };
     this.players.set(username, player);
     this.connByUsername.set(username, conn);
 
@@ -119,16 +146,25 @@ export class GameServer {
     this.enterScreen(conn, player, player.sx, player.sy, false);
   }
 
-  private loadOrGenerateScreen(sx: number, sy: number): { screen: ScreenData; discoveryXp: number | null } {
+  private ensureScreenLoaded(sx: number, sy: number): { screen: ScreenData; discoveryXp: number | null } {
+    const key = screenKey({ sx, sy });
+    const cached = this.screenCache.get(key);
+    if (cached) return { screen: cached, discoveryXp: null };
+
     const existing = getScreen(sx, sy);
-    if (existing) return { screen: existing, discoveryXp: null };
+    if (existing) {
+      this.screenCache.set(key, existing);
+      return { screen: existing, discoveryXp: null };
+    }
+
     const { screen, discoveryXp } = generateScreen(sx, sy);
     saveScreen(screen);
+    this.screenCache.set(key, screen);
     return { screen, discoveryXp };
   }
 
   private enterScreen(conn: Connection, player: PlayerPrivateState, sx: number, sy: number, awardDiscovery: boolean): void {
-    const { screen, discoveryXp } = this.loadOrGenerateScreen(sx, sy);
+    const { screen, discoveryXp } = this.ensureScreenLoaded(sx, sy);
 
     const key = screenKey({ sx, sy });
     this.joinScreenRoom(conn, key);
@@ -141,83 +177,131 @@ export class GameServer {
     }
 
     send(conn.socket, { type: "screen", screen, players: others });
+    send(conn.socket, { type: "youUpdate", you: player });
     this.broadcastToScreen(sx, sy, { type: "playerUpdate", player: toPublic(player) }, conn);
 
     if (awardDiscovery && discoveryXp !== null) {
-      this.grantXp(conn, player, discoveryXp);
+      this.grantXp(player, discoveryXp);
       send(conn.socket, { type: "discovery", tier: screen.exoticTier, xp: discoveryXp });
+      send(conn.socket, { type: "youUpdate", you: player });
     }
   }
 
-  private handleMove(conn: Connection, player: PlayerPrivateState, dir: Direction): void {
-    player.facing = dir;
-    const { dx, dy } = DIRECTION_DELTA[dir];
-    let nx = player.x + dx;
-    let ny = player.y + dy;
+  private isBlocked(screen: ScreenData, x: number, y: number): boolean {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    if (tx < 0 || tx >= SCREEN_WIDTH || ty < 0 || ty >= SCREEN_HEIGHT) return false;
+    return BLOCKING_TILES.has(screen.tiles[ty][tx]);
+  }
 
-    if (nx < 0 || nx >= SCREEN_WIDTH || ny < 0 || ny >= SCREEN_HEIGHT) {
-      // Transición de pantalla: aparece por el borde opuesto de la pantalla vecina.
+  private tick(): void {
+    const dt = TICK_MS / 1000;
+
+    for (const [username, conn] of this.connByUsername) {
+      const player = this.players.get(username);
+      if (!player) continue;
+      const input = conn.input;
+
+      let dx = 0;
+      let dy = 0;
+      if (input.N) dy -= 1;
+      if (input.S) dy += 1;
+      if (input.E) dx += 1;
+      if (input.W) dx -= 1;
+      if (dx === 0 && dy === 0) continue;
+
+      const len = Math.hypot(dx, dy) || 1;
+      const stepX = (dx / len) * PLAYER_SPEED * dt;
+      const stepY = (dy / len) * PLAYER_SPEED * dt;
+
+      const { screen } = this.ensureScreenLoaded(player.sx, player.sy);
+
+      const targetX = player.x + stepX;
+      if (targetX < 0 || targetX >= SCREEN_WIDTH || !this.isBlocked(screen, targetX, player.y)) {
+        player.x = targetX;
+      }
+      const targetY = player.y + stepY;
+      if (targetY < 0 || targetY >= SCREEN_HEIGHT || !this.isBlocked(screen, player.x, targetY)) {
+        player.y = targetY;
+      }
+
+      if (dx > 0) player.facing = "E";
+      else if (dx < 0) player.facing = "W";
+      else if (dy > 0) player.facing = "S";
+      else if (dy < 0) player.facing = "N";
+
+      let crossedDir: Direction | null = null;
       let nsx = player.sx;
       let nsy = player.sy;
-      if (nx < 0) { nsx -= 1; nx = SCREEN_WIDTH - 1; }
-      else if (nx >= SCREEN_WIDTH) { nsx += 1; nx = 0; }
-      if (ny < 0) { nsy -= 1; ny = SCREEN_HEIGHT - 1; }
-      else if (ny >= SCREEN_HEIGHT) { nsy += 1; ny = 0; }
+      if (player.x < 0) {
+        nsx -= 1;
+        player.x += SCREEN_WIDTH;
+        crossedDir = "W";
+      } else if (player.x >= SCREEN_WIDTH) {
+        nsx += 1;
+        player.x -= SCREEN_WIDTH;
+        crossedDir = "E";
+      }
+      if (player.y < 0) {
+        nsy -= 1;
+        player.y += SCREEN_HEIGHT;
+        crossedDir = crossedDir ?? "N";
+      } else if (player.y >= SCREEN_HEIGHT) {
+        nsy += 1;
+        player.y -= SCREEN_HEIGHT;
+        crossedDir = crossedDir ?? "S";
+      }
 
-      const oldKey = screenKey({ sx: player.sx, sy: player.sy });
-      this.leaveScreenRoom(conn, oldKey);
-      this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username: player.username }, conn);
-
-      player.sx = nsx;
-      player.sy = nsy;
-      player.x = nx;
-      player.y = ny;
-      savePlayer(player);
-      this.enterScreen(conn, player, nsx, nsy, true);
-      send(conn.socket, { type: "youUpdate", you: player });
-      return;
-    }
-
-    const { screen } = this.loadOrGenerateScreen(player.sx, player.sy);
-
-    const monster = screen.monsters.find((m) => m.alive && m.x === nx && m.y === ny);
-    if (monster) {
-      monster.hp -= 4;
-      if (monster.hp <= 0) {
-        monster.alive = false;
-        this.grantXp(conn, player, MONSTER_KINDS.find((k) => k.kind === monster.kind)?.xp ?? 5);
+      if (crossedDir) {
+        const oldKey = screenKey({ sx: player.sx, sy: player.sy });
+        this.leaveScreenRoom(conn, oldKey);
+        this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username }, conn);
+        player.sx = nsx;
+        player.sy = nsy;
+        this.enterScreen(conn, player, nsx, nsy, true);
       } else {
-        const kind = MONSTER_KINDS.find((k) => k.kind === monster.kind);
-        player.hp -= kind?.damage ?? 1;
+        send(conn.socket, { type: "youUpdate", you: player });
+        this.broadcastToScreen(player.sx, player.sy, { type: "playerUpdate", player: toPublic(player) }, conn);
       }
-      saveScreen(screen);
-      this.broadcastToScreen(player.sx, player.sy, { type: "monsterUpdate", monster });
-      if (player.hp <= 0) {
-        this.handleDeath(conn, player);
-        return;
+    }
+  }
+
+  private handleAttack(conn: Connection, player: PlayerPrivateState): void {
+    const { screen } = this.ensureScreenLoaded(player.sx, player.sy);
+    let nearest: (typeof screen.monsters)[number] | null = null;
+    let nearestDist = Infinity;
+    for (const m of screen.monsters) {
+      if (!m.alive) continue;
+      const d = dist(player.x, player.y, m.x, m.y);
+      if (d <= ATTACK_RANGE && d < nearestDist) {
+        nearest = m;
+        nearestDist = d;
       }
-      savePlayer(player);
-      send(conn.socket, { type: "youUpdate", you: player });
-      this.broadcastToScreen(player.sx, player.sy, { type: "playerUpdate", player: toPublic(player) }, conn);
+    }
+    if (!nearest) return;
+
+    const kind = MONSTER_KINDS.find((k) => k.kind === nearest!.kind);
+    nearest.hp -= 5;
+    if (nearest.hp <= 0) {
+      nearest.alive = false;
+      this.grantXp(player, kind?.xp ?? 5);
+    } else {
+      player.hp -= kind?.damage ?? 1;
+    }
+    saveScreen(screen);
+    this.broadcastToScreen(player.sx, player.sy, { type: "monsterUpdate", monster: nearest });
+
+    if (player.hp <= 0) {
+      this.handleDeath(conn, player);
       return;
     }
-
-    const occupied = this.isOccupiedByOtherPlayer(player, nx, ny);
-    if (occupied) return;
-
-    const tile = screen.tiles[ny][nx];
-    if (BLOCKING_TILES.has(tile)) return;
-
-    player.x = nx;
-    player.y = ny;
     savePlayer(player);
-    this.broadcastToScreen(player.sx, player.sy, { type: "playerUpdate", player: toPublic(player) }, conn);
     send(conn.socket, { type: "youUpdate", you: player });
   }
 
   private handlePickup(conn: Connection, player: PlayerPrivateState): void {
-    const { screen } = this.loadOrGenerateScreen(player.sx, player.sy);
-    const item = screen.items.find((i) => !i.takenBy && i.x === player.x && i.y === player.y);
+    const { screen } = this.ensureScreenLoaded(player.sx, player.sy);
+    const item = screen.items.find((i) => !i.takenBy && dist(player.x, player.y, i.x, i.y) <= PICKUP_RANGE);
     if (!item) return;
     item.takenBy = player.username;
     player.inventory.push(item.kind);
@@ -237,7 +321,7 @@ export class GameServer {
     conn.username = null;
   }
 
-  private grantXp(conn: Connection, player: PlayerPrivateState, amount: number): void {
+  private grantXp(player: PlayerPrivateState, amount: number): void {
     player.xp += amount;
     while (player.xp >= xpForNextLevel(player.level)) {
       player.xp -= xpForNextLevel(player.level);
@@ -246,14 +330,6 @@ export class GameServer {
       player.hp = player.maxHp;
     }
     savePlayer(player);
-  }
-
-  private isOccupiedByOtherPlayer(player: PlayerPrivateState, x: number, y: number): boolean {
-    for (const other of this.players.values()) {
-      if (other.username === player.username) continue;
-      if (other.sx === player.sx && other.sy === player.sy && other.x === x && other.y === y) return true;
-    }
-    return false;
   }
 
   private joinScreenRoom(conn: Connection, key: string): void {

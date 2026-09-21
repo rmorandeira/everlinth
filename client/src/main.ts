@@ -1,16 +1,20 @@
 import "./style.css";
-import type {
-  ExoticTier,
-  ItemState,
-  MonsterState,
-  PlayerPrivateState,
-  PlayerPublicState,
-  ScreenData,
-  ServerMessage,
+import {
+  DIRECTION_DELTA,
+  type Direction,
+  type ExoticTier,
+  type InputState,
+  type ItemState,
+  type MonsterState,
+  type PlayerPrivateState,
+  type PlayerPublicState,
+  type ScreenData,
+  type ServerMessage,
 } from "@roi/shared";
 import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
-import { renderScene, SCENE_W, SCENE_H } from "./render/scene.js";
+import { renderScene, computeLayout, type Layout } from "./render/scene.js";
+import { toScreen } from "./render/iso.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
 import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
 
@@ -25,31 +29,60 @@ const hpFill = document.getElementById("hp-fill") as HTMLDivElement;
 const statsEl = document.getElementById("stats") as HTMLDivElement;
 const discoveryEl = document.getElementById("discovery") as HTMLDivElement;
 
-sceneCanvas.width = SCENE_W;
-sceneCanvas.height = SCENE_H;
 const sceneCtx = sceneCanvas.getContext("2d")!;
-
 const buffer = document.createElement("canvas");
-buffer.width = SCENE_W;
-buffer.height = SCENE_H;
 const bufferCtx = buffer.getContext("2d")!;
-
 const weatherCtx = weatherCanvas.getContext("2d")!;
 const weather = new WeatherSystem();
 
-function resizeWeatherCanvas(): void {
+let layout: Layout = { scale: 1, originX: 0, originY: 0 };
+
+function resizeCanvases(): void {
   const dpr = window.devicePixelRatio || 1;
-  weatherCanvas.width = window.innerWidth * dpr;
-  weatherCanvas.height = window.innerHeight * dpr;
-  weatherCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  weather.resize(window.innerWidth, window.innerHeight);
+  const w = Math.round(window.innerWidth * dpr);
+  const h = Math.round(window.innerHeight * dpr);
+  sceneCanvas.width = w;
+  sceneCanvas.height = h;
+  buffer.width = w;
+  buffer.height = h;
+  weatherCanvas.width = w;
+  weatherCanvas.height = h;
+  layout = computeLayout(w, h);
+  weather.resize(w, h);
 }
-window.addEventListener("resize", resizeWeatherCanvas);
-resizeWeatherCanvas();
+window.addEventListener("resize", resizeCanvases);
+resizeCanvases();
 
 let you: PlayerPrivateState | null = null;
 let currentScreen: ScreenData | null = null;
 const otherPlayers = new Map<string, PlayerPublicState>();
+
+// Posiciones "de render" con suavizado, para que el movimiento se vea fluido
+// aunque el servidor solo envíe actualizaciones a un tick fijo.
+let youDisplay = { x: 0, y: 0 };
+const otherDisplay = new Map<string, { x: number; y: number }>();
+
+function lerpTowards(current: number, target: number, dt: number, rate = 18): number {
+  const t = 1 - Math.exp(-rate * dt);
+  return current + (target - current) * t;
+}
+
+interface Transition {
+  active: boolean;
+  dir: Direction;
+  start: number;
+  duration: number;
+  snapshot: HTMLCanvasElement;
+}
+let transition: Transition | null = null;
+
+function dirVector(dir: Direction): { x: number; y: number } {
+  const { dx, dy } = DIRECTION_DELTA[dir];
+  const p = toScreen(dx, dy);
+  const mag = Math.hypot(p.x, p.y) || 1;
+  return { x: p.x / mag, y: p.y / mag };
+}
+
 let conn: GameConnection | null = null;
 
 function updateHud(): void {
@@ -71,26 +104,57 @@ function findItem(id: string): ItemState | undefined {
   return currentScreen?.items.find((i) => i.id === id);
 }
 
+function beginScreenTransition(newScreen: ScreenData): void {
+  if (!currentScreen) return;
+  const dx = newScreen.sx - currentScreen.sx;
+  const dy = newScreen.sy - currentScreen.sy;
+  let dir: Direction | null = null;
+  if (dx > 0) dir = "E";
+  else if (dx < 0) dir = "W";
+  else if (dy > 0) dir = "S";
+  else if (dy < 0) dir = "N";
+  if (!dir) return;
+
+  const snapshot = document.createElement("canvas");
+  snapshot.width = sceneCanvas.width;
+  snapshot.height = sceneCanvas.height;
+  snapshot.getContext("2d")!.drawImage(sceneCanvas, 0, 0);
+
+  transition = { active: true, dir, start: performance.now(), duration: 380, snapshot };
+}
+
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case "joined":
       you = msg.you;
+      youDisplay = { x: you.x, y: you.y };
       loginEl.classList.add("hidden");
       gameEl.classList.remove("hidden");
       updateHud();
       break;
     case "screen":
+      if (currentScreen && (currentScreen.sx !== msg.screen.sx || currentScreen.sy !== msg.screen.sy)) {
+        beginScreenTransition(msg.screen);
+      }
       currentScreen = msg.screen;
       otherPlayers.clear();
-      for (const p of msg.players) otherPlayers.set(p.username, p);
+      otherDisplay.clear();
+      for (const p of msg.players) {
+        otherPlayers.set(p.username, p);
+        otherDisplay.set(p.username, { x: p.x, y: p.y });
+      }
       weather.setWeather(pickWeather(msg.screen.sx, msg.screen.sy));
       updateHud();
       break;
     case "playerUpdate":
       otherPlayers.set(msg.player.username, msg.player);
+      if (!otherDisplay.has(msg.player.username)) {
+        otherDisplay.set(msg.player.username, { x: msg.player.x, y: msg.player.y });
+      }
       break;
     case "playerLeft":
       otherPlayers.delete(msg.username);
+      otherDisplay.delete(msg.username);
       break;
     case "youUpdate":
       you = msg.you;
@@ -127,6 +191,8 @@ function resetToLogin(): void {
   you = null;
   currentScreen = null;
   otherPlayers.clear();
+  otherDisplay.clear();
+  transition = null;
   gameEl.classList.add("hidden");
   loginEl.classList.remove("hidden");
 }
@@ -148,7 +214,8 @@ loginForm.addEventListener("submit", async (ev) => {
 });
 
 setupInput(
-  (dir) => conn?.send({ type: "move", dir }),
+  (dirs: InputState) => conn?.send({ type: "input", dirs }),
+  () => conn?.send({ type: "attack" }),
   () => conn?.send({ type: "pickup" })
 );
 
@@ -159,16 +226,56 @@ function frame(now: number): void {
   const time = now / 1000;
 
   if (you && currentScreen) {
-    renderScene(bufferCtx, currentScreen, [...otherPlayers.values()], you, time);
+    youDisplay.x = lerpTowards(youDisplay.x, you.x, dt);
+    youDisplay.y = lerpTowards(youDisplay.y, you.y, dt);
+    for (const [username, p] of otherPlayers) {
+      const d = otherDisplay.get(username) ?? { x: p.x, y: p.y };
+      d.x = lerpTowards(d.x, p.x, dt);
+      d.y = lerpTowards(d.y, p.y, dt);
+      otherDisplay.set(username, d);
+    }
+
+    const youDrawn = { ...you, x: youDisplay.x, y: youDisplay.y };
+    const othersDrawn = [...otherPlayers.values()].map((p) => {
+      const d = otherDisplay.get(p.username)!;
+      return { ...p, x: d.x, y: d.y };
+    });
+
+    const w = sceneCanvas.width;
+    const h = sceneCanvas.height;
+
+    if (transition?.active) {
+      const t = Math.min(1, (now - transition.start) / transition.duration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      const vec = dirVector(transition.dir);
+      const K = Math.max(w, h) * 1.15;
+
+      renderScene(bufferCtx, w, h, layout, currentScreen, othersDrawn, youDrawn, time);
+
+      sceneCtx.clearRect(0, 0, w, h);
+      sceneCtx.save();
+      sceneCtx.translate(vec.x * ease * K, vec.y * ease * K);
+      sceneCtx.drawImage(transition.snapshot, 0, 0);
+      sceneCtx.restore();
+
+      sceneCtx.save();
+      sceneCtx.translate(vec.x * (ease - 1) * K, vec.y * (ease - 1) * K);
+      sceneCtx.drawImage(buffer, 0, 0);
+      sceneCtx.restore();
+
+      if (t >= 1) transition = null;
+    } else {
+      renderScene(bufferCtx, w, h, layout, currentScreen, othersDrawn, youDrawn, time);
+      if (weather.getType() === "heat") {
+        applyHeatShimmer(sceneCtx, buffer, time);
+      } else {
+        sceneCtx.clearRect(0, 0, w, h);
+        sceneCtx.drawImage(buffer, 0, 0);
+      }
+    }
 
     const dn = getDayNight();
-    if (weather.getType() === "heat") {
-      applyHeatShimmer(sceneCtx, buffer, time);
-    } else {
-      sceneCtx.clearRect(0, 0, SCENE_W, SCENE_H);
-      sceneCtx.drawImage(buffer, 0, 0);
-    }
-    applyDayNightOverlay(sceneCtx, SCENE_W, SCENE_H, dn);
+    applyDayNightOverlay(sceneCtx, w, h, dn);
   }
 
   weather.update(dt);

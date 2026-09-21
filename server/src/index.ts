@@ -19,7 +19,7 @@ app.get("/admin/screens.json", (_req, res) => {
 
 app.get("/admin", (_req, res) => {
   res.send(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Mapa del mundo (admin)</title>
+<html><head><meta charset="utf-8"><title>EVERLINTH — Mapa del mundo (admin)</title>
 <style>
   body { margin:0; background:#111; display:flex; align-items:center; justify-content:center; height:100vh; }
   canvas { background:#fff; }
@@ -68,6 +68,6 @@ const game = new GameServer();
 wss.on("connection", (socket) => game.handleConnection(socket));
 
 server.listen(PORT, () => {
-  console.log(`Servidor escuchando en http://localhost:${PORT}`);
+  console.log(`EVERLINTH — servidor escuchando en http://localhost:${PORT}`);
   console.log(`Mapa admin en http://localhost:${PORT}/admin`);
 });

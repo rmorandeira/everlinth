@@ -1,6 +1,6 @@
-import type { Direction } from "@roi/shared";
+import type { InputState } from "@roi/shared";
 
-const KEY_TO_DIR: Record<string, Direction> = {
+const KEY_TO_DIR: Record<string, keyof InputState> = {
   ArrowUp: "N",
   ArrowDown: "S",
   ArrowLeft: "W",
@@ -11,24 +11,42 @@ const KEY_TO_DIR: Record<string, Direction> = {
   d: "E",
 };
 
-const MOVE_COOLDOWN_MS = 130;
+export function setupInput(onInputChange: (dirs: InputState) => void, onAttack: () => void, onPickup: () => void): () => void {
+  const dirs: InputState = { N: false, S: false, E: false, W: false };
 
-export function setupInput(onMove: (dir: Direction) => void, onPickup: () => void): () => void {
-  let lastMove = 0;
-
-  function handler(ev: KeyboardEvent): void {
-    if (ev.key === " " || ev.key === "e" || ev.key === "E") {
+  function keydown(ev: KeyboardEvent): void {
+    if (ev.key === " ") {
+      onAttack();
+      return;
+    }
+    if (ev.key === "e" || ev.key === "E") {
       onPickup();
       return;
     }
     const dir = KEY_TO_DIR[ev.key];
-    if (!dir) return;
-    const now = performance.now();
-    if (now - lastMove < MOVE_COOLDOWN_MS) return;
-    lastMove = now;
-    onMove(dir);
+    if (!dir || dirs[dir]) return;
+    dirs[dir] = true;
+    onInputChange({ ...dirs });
   }
 
-  window.addEventListener("keydown", handler);
-  return () => window.removeEventListener("keydown", handler);
+  function keyup(ev: KeyboardEvent): void {
+    const dir = KEY_TO_DIR[ev.key];
+    if (!dir || !dirs[dir]) return;
+    dirs[dir] = false;
+    onInputChange({ ...dirs });
+  }
+
+  function blur(): void {
+    dirs.N = dirs.S = dirs.E = dirs.W = false;
+    onInputChange({ ...dirs });
+  }
+
+  window.addEventListener("keydown", keydown);
+  window.addEventListener("keyup", keyup);
+  window.addEventListener("blur", blur);
+  return () => {
+    window.removeEventListener("keydown", keydown);
+    window.removeEventListener("keyup", keyup);
+    window.removeEventListener("blur", blur);
+  };
 }
