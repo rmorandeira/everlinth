@@ -1,4 +1,4 @@
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type ScreenData, type PlayerPublicState } from "@roi/shared";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type ScreenData, type PlayerPublicState, type NeighborTiles } from "@roi/shared";
 import { toScreen, TILE_W, TILE_H } from "./iso.js";
 import { drawSprite, type Sprite, type SpriteKey } from "./tileset.js";
 
@@ -51,19 +51,6 @@ const BUILDING_VARIANTS: SpriteKey[] = ["building", "building2", "building3"];
 
 function pick<T>(arr: T[], n: number): T {
   return arr[Math.floor(n * arr.length) % arr.length];
-}
-
-// Decoración puramente cosmética para el margen fuera de la sala (el que rellena
-// la pantalla hasta los bordes): mismo aspecto que los objetos reales, pero sin
-// colisión, sin persistir y sin sincronizarse con el servidor — solo para que ese
-// margen no se vea vacío frente a la sala jugable. Densidad aproximada a la de
-// "scatter" en TILE_DEFS (server/shared), determinista por celda.
-function pickEdgeDecoration(x: number, y: number): "tree" | "rock" | "cactus" | null {
-  const roll = hash2(x + 1000.25, y - 1000.5);
-  if (roll < 0.035) return "tree";
-  if (roll < 0.06) return "rock";
-  if (roll < 0.085) return "cactus";
-  return null;
 }
 
 function drawGroundTile(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number, tile: TileType, time: number): void {
@@ -244,6 +231,37 @@ export interface EntityDrawPos {
   y: number;
 }
 
+type Drawable = { depth: number; draw: () => void };
+
+// Dibuja una rejilla de tiles completa (la sala activa, o una vecina) desplazada
+// a su sitio real en el marco de coordenadas de la sala activa. offsetX/offsetY
+// son 0 para la sala activa, o ±SCREEN_WIDTH/HEIGHT (según cuántas estancias de
+// distancia) para una vecina — así todo el terreno visible es contenido real,
+// generado y persistido en el servidor, nunca relleno inventado en el cliente.
+function drawTileGrid(
+  ctx: CanvasRenderingContext2D,
+  tiles: Tileset,
+  grid: TileType[][],
+  offsetX: number,
+  offsetY: number,
+  time: number,
+  drawables: Drawable[]
+): void {
+  for (let y = 0; y < grid.length; y++) {
+    for (let x = 0; x < grid[y].length; x++) {
+      const wx = x + offsetX;
+      const wy = y + offsetY;
+      const tile = grid[y][x];
+      drawGroundTile(ctx, tiles, wx, wy, tile, time);
+      if (tile === TileType.Tree) drawables.push({ depth: wx + wy, draw: () => drawTree(ctx, tiles, wx, wy, time) });
+      else if (tile === TileType.Rock) drawables.push({ depth: wx + wy, draw: () => drawRock(ctx, tiles, wx, wy) });
+      else if (tile === TileType.Building) drawables.push({ depth: wx + wy, draw: () => drawBuilding(ctx, tiles, wx, wy) });
+      else if (tile === TileType.Fence) drawables.push({ depth: wx + wy, draw: () => drawFence(ctx, tiles, wx, wy) });
+      else if (tile === TileType.Cactus) drawables.push({ depth: wx + wy, draw: () => drawCactus(ctx, tiles, wx, wy) });
+    }
+  }
+}
+
 export function renderScene(
   ctx: CanvasRenderingContext2D,
   canvasWidth: number,
@@ -251,6 +269,7 @@ export function renderScene(
   layout: Layout,
   tiles: Tileset,
   screen: ScreenData,
+  neighbors: NeighborTiles[],
   players: Array<PlayerPublicState & EntityDrawPos>,
   you: PlayerPublicState & EntityDrawPos,
   time: number
@@ -259,37 +278,11 @@ export function renderScene(
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   ctx.setTransform(layout.scale, 0, 0, layout.scale, layout.originX, layout.originY);
 
-  // El terreno se extiende más allá de la sala jugable (solo hierba decorativa, sin
-  // colisión ni entidades) para que el paisaje llegue hasta los bordes de la pantalla,
-  // sin bandas negras, sea cual sea la relación de aspecto de la ventana.
-  type Drawable = { depth: number; draw: () => void };
   const drawables: Drawable[] = [];
 
-  const EDGE_PAD = 18;
-  for (let y = -EDGE_PAD; y < SCREEN_HEIGHT + EDGE_PAD; y++) {
-    for (let x = -EDGE_PAD; x < SCREEN_WIDTH + EDGE_PAD; x++) {
-      const inBounds = y >= 0 && y < screen.tiles.length && x >= 0 && x < screen.tiles[0].length;
-      const tile = inBounds ? screen.tiles[y][x] : TileType.Grass;
-      drawGroundTile(ctx, tiles, x, y, tile, time);
-
-      if (!inBounds) {
-        const deco = pickEdgeDecoration(x, y);
-        if (deco === "tree") drawables.push({ depth: x + y, draw: () => drawTree(ctx, tiles, x, y, time) });
-        else if (deco === "rock") drawables.push({ depth: x + y, draw: () => drawRock(ctx, tiles, x, y) });
-        else if (deco === "cactus") drawables.push({ depth: x + y, draw: () => drawCactus(ctx, tiles, x, y) });
-      }
-    }
-  }
-
-  for (let y = 0; y < screen.tiles.length; y++) {
-    for (let x = 0; x < screen.tiles[y].length; x++) {
-      const tile = screen.tiles[y][x];
-      if (tile === TileType.Tree) drawables.push({ depth: x + y, draw: () => drawTree(ctx, tiles, x, y, time) });
-      else if (tile === TileType.Rock) drawables.push({ depth: x + y, draw: () => drawRock(ctx, tiles, x, y) });
-      else if (tile === TileType.Building) drawables.push({ depth: x + y, draw: () => drawBuilding(ctx, tiles, x, y) });
-      else if (tile === TileType.Fence) drawables.push({ depth: x + y, draw: () => drawFence(ctx, tiles, x, y) });
-      else if (tile === TileType.Cactus) drawables.push({ depth: x + y, draw: () => drawCactus(ctx, tiles, x, y) });
-    }
+  drawTileGrid(ctx, tiles, screen.tiles, 0, 0, time, drawables);
+  for (const n of neighbors) {
+    drawTileGrid(ctx, tiles, n.tiles, (n.sx - screen.sx) * SCREEN_WIDTH, (n.sy - screen.sy) * SCREEN_HEIGHT, time, drawables);
   }
 
   for (const item of screen.items) {

@@ -17,6 +17,7 @@ import {
   type Direction,
   type ScreenData,
   type InputState,
+  type NeighborTiles,
 } from "@roi/shared";
 import { getScreen, saveScreen, getPlayer, savePlayer, deletePlayer } from "./db.js";
 import { generateScreen } from "./worldgen.js";
@@ -165,8 +166,33 @@ export class GameServer {
     return { screen, discoveryXp };
   }
 
+  // Radio de estancias vecinas cuyo terreno (solo tiles, sin monstruos/objetos) se
+  // manda junto a la sala activa, para que el margen que rellena la pantalla en la
+  // vista isométrica sea contenido real generado y persistido, no relleno falso.
+  // Más radio en Y que en X porque cada fila de tiles cubre menos alto de pantalla
+  // que una columna de ancho (proyección 2:1): hace falta más alcance vertical para
+  // cubrir el mismo margen visible.
+  private static readonly NEIGHBOR_RADIUS_X = 1;
+  private static readonly NEIGHBOR_RADIUS_Y = 2;
+
+  private neighborTiles(sx: number, sy: number): NeighborTiles[] {
+    const neighbors: NeighborTiles[] = [];
+    for (let dy = -GameServer.NEIGHBOR_RADIUS_Y; dy <= GameServer.NEIGHBOR_RADIUS_Y; dy++) {
+      for (let dx = -GameServer.NEIGHBOR_RADIUS_X; dx <= GameServer.NEIGHBOR_RADIUS_X; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nsx = sx + dx;
+        const nsy = sy + dy;
+        if (nsx < WORLD_MIN || nsx > WORLD_MAX || nsy < WORLD_MIN || nsy > WORLD_MAX) continue;
+        const { screen } = this.ensureScreenLoaded(nsx, nsy);
+        neighbors.push({ sx: nsx, sy: nsy, tiles: screen.tiles });
+      }
+    }
+    return neighbors;
+  }
+
   private enterScreen(conn: Connection, player: PlayerPrivateState, sx: number, sy: number, awardDiscovery: boolean): void {
     const { screen, discoveryXp } = this.ensureScreenLoaded(sx, sy);
+    const neighbors = this.neighborTiles(sx, sy);
 
     const key = screenKey({ sx, sy });
     this.joinScreenRoom(conn, key);
@@ -178,7 +204,7 @@ export class GameServer {
       if (op) others.push(toPublic(op));
     }
 
-    send(conn.socket, { type: "screen", screen, players: others });
+    send(conn.socket, { type: "screen", screen, players: others, neighbors });
     send(conn.socket, { type: "youUpdate", you: player });
     this.broadcastToScreen(sx, sy, { type: "playerUpdate", player: toPublic(player) }, conn);
 

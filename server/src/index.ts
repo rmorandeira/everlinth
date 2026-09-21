@@ -252,15 +252,19 @@ app.get("/admin", (_req, res) => {
     // Estancias ya exploradas: siempre en verde fosforito, para que se distingan
     // del resto pase lo que pase. Si además hay un bioma decretado debajo, se ve
     // como un marco verde fosforito sobre ese color (en vez de tapar el color).
-    ctx.strokeStyle = EXPLORED_COLOR;
-    ctx.lineWidth = Math.max(1, cell * 0.25);
+    ctx.fillStyle = EXPLORED_COLOR;
+    const markSize = Math.max(2, cell * 0.55);
     for (const key of discovered.keys()) {
       const [sx, sy] = key.split(',').map(Number);
+      const cx = (sx - WORLD_MIN) * cell;
+      const cy = (sy - WORLD_MIN) * cell;
       if (painted.has(key)) {
-        ctx.strokeRect((sx - WORLD_MIN) * cell + 0.5, (sy - WORLD_MIN) * cell + 0.5, cell - 1, cell - 1);
+        // Ya tiene el color del bioma decretado de fondo: solo una marca en la
+        // esquina, del tamaño de la celda actual (no un pixel fijo), para que se
+        // vea "descubierta" sin tapar el color pintado.
+        ctx.fillRect(cx + cell - markSize, cy, markSize, markSize);
       } else {
-        ctx.fillStyle = EXPLORED_COLOR;
-        ctx.fillRect((sx - WORLD_MIN) * cell, (sy - WORLD_MIN) * cell, cell, cell);
+        ctx.fillRect(cx, cy, cell, cell);
       }
     }
 

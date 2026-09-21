@@ -5,6 +5,7 @@ import {
   type InputState,
   type ItemState,
   type MonsterState,
+  type NeighborTiles,
   type PlayerPrivateState,
   type PlayerPublicState,
   type ScreenData,
@@ -16,6 +17,7 @@ import { setupGamepad } from "./gamepad.js";
 import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
 import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
+import { applyEdgeBlur } from "./render/edgeblur.js";
 import { loadTileset } from "./render/tileset.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
@@ -58,6 +60,7 @@ resizeCanvases();
 
 let you: PlayerPrivateState | null = null;
 let currentScreen: ScreenData | null = null;
+let currentNeighbors: NeighborTiles[] = [];
 const otherPlayers = new Map<string, PlayerPublicState>();
 
 // Posiciones "de render" con suavizado, para que el movimiento se vea fluido
@@ -147,6 +150,7 @@ function handleServerMessage(msg: ServerMessage): void {
         beginScreenTransition(msg.screen);
       }
       currentScreen = msg.screen;
+      currentNeighbors = msg.neighbors;
       otherPlayers.clear();
       otherDisplay.clear();
       for (const p of msg.players) {
@@ -269,7 +273,7 @@ function frame(now: number): void {
       // así la escena vieja y la nueva encajan sin huecos ni solapes en todo momento.
       const K = vec.x !== 0 ? w : h;
 
-      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, othersDrawn, youDrawn, time);
+      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, othersDrawn, youDrawn, time);
 
       sceneCtx.clearRect(0, 0, w, h);
       sceneCtx.save();
@@ -284,7 +288,7 @@ function frame(now: number): void {
 
       if (t >= 1) transition = null;
     } else {
-      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, othersDrawn, youDrawn, time);
+      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, othersDrawn, youDrawn, time);
       if (weather.getType() === "heat") {
         applyHeatShimmer(sceneCtx, buffer, time);
       } else {
@@ -292,6 +296,12 @@ function frame(now: number): void {
         sceneCtx.drawImage(buffer, 0, 0);
       }
     }
+
+    // La niebla de visión (difuminado N/S/E/O) actúa sobre la escena en crudo,
+    // antes que cualquier efecto de color — así el tinte de día/noche se aplica
+    // por igual a la zona nítida y a la difuminada, en vez de quedar él mismo
+    // borroso en los bordes.
+    applyEdgeBlur(sceneCtx, sceneCanvas, w, h, time);
 
     const dn = getDayNight();
     applyDayNightOverlay(sceneCtx, w, h, dn);

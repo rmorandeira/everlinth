@@ -187,6 +187,16 @@ export interface ScreenData {
   code: string; // huella alfanumérica del contenido de la estancia (tiles + elementos)
 }
 
+// Terreno (solo tiles, sin monstruos/objetos/entidades) de una estancia vecina a
+// la actual: se manda junto al "screen" para que el cliente pueda dibujar terreno
+// REAL, generado y persistido igual que la sala activa, en vez de relleno falso,
+// en el margen que hace falta para cubrir toda la pantalla en la vista isométrica.
+export interface NeighborTiles {
+  sx: number;
+  sy: number;
+  tiles: TileType[][];
+}
+
 export interface PlayerPublicState {
   username: string;
   sx: number;
@@ -214,7 +224,7 @@ export type ClientMessage =
 // ---- Mensajes servidor -> cliente ----
 export type ServerMessage =
   | { type: "joined"; you: PlayerPrivateState }
-  | { type: "screen"; screen: ScreenData; players: PlayerPublicState[] }
+  | { type: "screen"; screen: ScreenData; players: PlayerPublicState[]; neighbors: NeighborTiles[] }
   | { type: "playerUpdate"; player: PlayerPublicState }
   | { type: "youUpdate"; you: PlayerPrivateState }
   | { type: "playerLeft"; username: string }
