@@ -1,6 +1,7 @@
-// Dimensiones de una pantalla (estilo Zelda NES): 16 columnas x 11 filas de tiles.
+// Dimensiones de una pantalla: rejilla plana en proporción 16:9, la cámara isométrica
+// es solo una transformación de render, no cambia la forma lógica del mundo.
 export const SCREEN_WIDTH = 16;
-export const SCREEN_HEIGHT = 11;
+export const SCREEN_HEIGHT = 9;
 export const TILE_SIZE = 32; // px lógicos, la proyección isométrica se calcula a partir de esto en el cliente
 
 export type Direction = "N" | "S" | "E" | "W";
