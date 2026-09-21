@@ -34,6 +34,7 @@ export enum TileType {
   Rock = 4,
   Building = 5,
   Fence = 6,
+  Cactus = 7,
 }
 
 // Cómo se coloca un tile proceduralmente sobre la hierba base al generar una pantalla:
@@ -63,6 +64,7 @@ export const TILE_DEFS: Record<TileType, TileDef> = {
   [TileType.Rock]: { blocking: true, placement: "scatter", weight: 0.03, cluster: 0.2 },
   [TileType.Building]: { blocking: true, placement: "rare", chance: 0.12, exoticBonus: 15 },
   [TileType.Fence]: { blocking: true, placement: "segment", chance: 0.3, exoticBonus: 3 },
+  [TileType.Cactus]: { blocking: true, placement: "scatter", weight: 0.025, cluster: 0.05 },
 };
 
 export const BLOCKING_TILES = new Set<TileType>(

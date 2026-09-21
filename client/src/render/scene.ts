@@ -47,6 +47,7 @@ const GRASS_VARIANTS: SpriteKey[] = ["grass1", "grass2", "grass3"];
 const WATER_VARIANTS: SpriteKey[] = ["water1", "water2"];
 const ROCK_VARIANTS: SpriteKey[] = ["rock1", "rock2"];
 const TREE_VARIANTS: SpriteKey[] = ["tree", "tree2"];
+const BUILDING_VARIANTS: SpriteKey[] = ["building", "building2", "building3"];
 
 function pick<T>(arr: T[], n: number): T {
   return arr[Math.floor(n * arr.length) % arr.length];
@@ -98,7 +99,13 @@ function drawRock(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: n
 
 function drawBuilding(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
-  drawSprite(ctx, tiles.building, cx, cy);
+  const key = pick(BUILDING_VARIANTS, hash2(x + 0.75, y + 0.75));
+  drawSprite(ctx, tiles[key], cx, cy);
+}
+
+function drawCactus(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
+  const { x: cx, y: cy } = toScreen(x, y);
+  drawSprite(ctx, tiles.cactus, cx, cy);
 }
 
 const MONSTER_COLORS: Record<string, string> = {
@@ -144,6 +151,72 @@ function drawFigure(ctx: CanvasRenderingContext2D, x: number, y: number, color: 
     ctx.font = "10px monospace";
     ctx.textAlign = "center";
     ctx.fillText(label, cx, baseY - 32);
+  }
+}
+
+// Personaje principal: silueta de bloques ("stick guy") con animación de andar.
+// El ciclo de zancada avanza según la distancia recorrida (no el tiempo), así que
+// la animación va más rápido o más despacio según la velocidad real en pantalla.
+interface PlayerAnim {
+  phase: number;
+  facingLeft: boolean;
+  lastX: number;
+  lastY: number;
+}
+const playerAnims = new Map<string, PlayerAnim>();
+
+function updatePlayerAnim(id: string, x: number, y: number): PlayerAnim {
+  let s = playerAnims.get(id);
+  if (!s) {
+    s = { phase: 0, facingLeft: false, lastX: x, lastY: y };
+    playerAnims.set(id, s);
+  }
+  const dx = x - s.lastX;
+  const dy = y - s.lastY;
+  const dist = Math.hypot(dx, dy);
+  if (dist > 0.0008) {
+    const screenDelta = toScreen(dx, dy);
+    if (Math.abs(screenDelta.x) > 0.05) s.facingLeft = screenDelta.x < 0;
+    s.phase += dist * 16;
+  }
+  s.lastX = x;
+  s.lastY = y;
+  return s;
+}
+
+function drawStickGuy(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, id: string, label?: string): void {
+  const { x: cx, y: cy } = toScreen(x, y);
+  const anim = updatePlayerAnim(id, x, y);
+  const baseY = cy + TILE_H / 2 - 2;
+
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + TILE_H / 2, 9, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(cx, baseY);
+  if (anim.facingLeft) ctx.scale(-1, 1);
+
+  const legSwing = Math.sin(anim.phase) * 3.2;
+  const armSwing = Math.sin(anim.phase + Math.PI) * 2;
+
+  ctx.fillStyle = color;
+  ctx.fillRect(-4 + legSwing * 0.4, -12, 3, 12);
+  ctx.fillRect(1 - legSwing * 0.4, -12, 3, 12);
+  ctx.fillRect(-5, -24, 10, 13);
+  ctx.fillRect(-7 + armSwing * 0.4, -23, 2.5, 10);
+  ctx.fillRect(4.5 - armSwing * 0.4, -23, 2.5, 10);
+  ctx.fillRect(-1.5, -27, 3, 4);
+  ctx.fillRect(-3.5, -34, 7, 7);
+
+  ctx.restore();
+
+  if (label) {
+    ctx.fillStyle = "#fff";
+    ctx.font = "10px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(label, cx, baseY - 38);
   }
 }
 
@@ -195,6 +268,7 @@ export function renderScene(
       else if (tile === TileType.Rock) drawables.push({ depth: x + y, draw: () => drawRock(ctx, tiles, x, y) });
       else if (tile === TileType.Building) drawables.push({ depth: x + y, draw: () => drawBuilding(ctx, tiles, x, y) });
       else if (tile === TileType.Fence) drawables.push({ depth: x + y, draw: () => drawFence(ctx, tiles, x, y) });
+      else if (tile === TileType.Cactus) drawables.push({ depth: x + y, draw: () => drawCactus(ctx, tiles, x, y) });
     }
   }
 
@@ -209,9 +283,9 @@ export function renderScene(
   }
 
   for (const p of players) {
-    drawables.push({ depth: p.x + p.y, draw: () => drawFigure(ctx, p.x, p.y, "#3ba0e0", time, p.x * 3 + p.y, p.username) });
+    drawables.push({ depth: p.x + p.y, draw: () => drawStickGuy(ctx, p.x, p.y, "#3ba0e0", p.username, p.username) });
   }
-  drawables.push({ depth: you.x + you.y, draw: () => drawFigure(ctx, you.x, you.y, "#f0f0f0", time, you.x * 3 + you.y + 1, you.username) });
+  drawables.push({ depth: you.x + you.y, draw: () => drawStickGuy(ctx, you.x, you.y, "#f0f0f0", you.username, you.username) });
 
   drawables.sort((a, b) => a.depth - b.depth);
   for (const d of drawables) d.draw();
