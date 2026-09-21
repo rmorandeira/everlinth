@@ -233,49 +233,44 @@ export class GameServer {
       else if (dy > 0) player.facing = "S";
       else if (dy < 0) player.facing = "N";
 
-      // Con cámara isométrica y controles relativos a pantalla, salir por una esquina
-      // del mundo (x e y a la vez) es lo que corresponde a cruzar un borde de pantalla.
-      // La rejilla abstracta de pantallas (sx,sy) sigue siendo un grid simple N/S/E/O;
-      // solo la posición dentro de la sala envuelve en ambos ejes a la vez.
-      const outLeft = player.x < 0;
-      const outRight = player.x >= SCREEN_WIDTH;
-      const outTop = player.y < 0;
-      const outBottom = player.y >= SCREEN_HEIGHT;
+      // Los bordes de la estancia son rectos EN PANTALLA (arriba/abajo/izq/dcha), no
+      // las esquinas del mundo. Como la cámara es isométrica, eso corresponde a un
+      // sistema de coordenadas rotado: s = x+y (eje norte-sur) y d = x-y (eje oeste-
+      // este). El movimiento relativo a pantalla cambia s y d de forma INDEPENDIENTE
+      // (arriba/abajo solo mueven s, izq/dcha solo mueven d), así que cruzar un borde
+      // no depende de tocar también el otro eje: se sale en línea recta, sin desvíos.
+      const sMax = SCREEN_WIDTH - 1 + (SCREEN_HEIGHT - 1);
+      const dMin = -(SCREEN_HEIGHT - 1);
+      const dMax = SCREEN_WIDTH - 1;
+
+      let s = player.x + player.y;
+      let d = player.x - player.y;
 
       let crossedDir: Direction | null = null;
       let nsx = player.sx;
       let nsy = player.sy;
 
-      if (outTop && outLeft) {
+      if (s < 0) {
         crossedDir = "N";
         nsy -= 1;
-        player.x += SCREEN_WIDTH;
-        player.y += SCREEN_HEIGHT;
-      } else if (outBottom && outRight) {
+        s += sMax;
+      } else if (s > sMax) {
         crossedDir = "S";
         nsy += 1;
-        player.x -= SCREEN_WIDTH;
-        player.y -= SCREEN_HEIGHT;
-      } else if (outLeft && outBottom) {
+        s -= sMax;
+      } else if (d < dMin) {
         crossedDir = "W";
         nsx -= 1;
-        player.x += SCREEN_WIDTH;
-        player.y -= SCREEN_HEIGHT;
-      } else if (outRight && outTop) {
+        d += dMax - dMin;
+      } else if (d > dMax) {
         crossedDir = "E";
         nsx += 1;
-        player.x -= SCREEN_WIDTH;
-        player.y += SCREEN_HEIGHT;
-      } else {
-        // Solo un eje ha llegado al límite (p.ej. bloqueado por un obstáculo en el
-        // otro eje): lo dejamos pegado al borde hasta que se complete la esquina.
-        if (outLeft) player.x = 0;
-        else if (outRight) player.x = SCREEN_WIDTH - 0.001;
-        if (outTop) player.y = 0;
-        else if (outBottom) player.y = SCREEN_HEIGHT - 0.001;
+        d -= dMax - dMin;
       }
 
       if (crossedDir) {
+        player.x = (s + d) / 2;
+        player.y = (s - d) / 2;
         const oldKey = screenKey({ sx: player.sx, sy: player.sy });
         this.leaveScreenRoom(conn, oldKey);
         this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username }, conn);
