@@ -18,6 +18,8 @@ db.exec(`
     monsters TEXT NOT NULL,
     items TEXT NOT NULL,
     exotic_tier TEXT NOT NULL,
+    biome TEXT NOT NULL DEFAULT 'Badlands',
+    code TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (sx, sy)
   );
 
@@ -36,16 +38,36 @@ db.exec(`
   );
 `);
 
+// Migra bases de datos ya existentes (p.ej. en el volumen de producción) que se
+// crearon antes de añadir estas columnas.
+function ensureColumn(table: string, column: string, decl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  }
+}
+ensureColumn("screens", "biome", "TEXT NOT NULL DEFAULT 'Badlands'");
+ensureColumn("screens", "code", "TEXT NOT NULL DEFAULT ''");
+
 const getScreenStmt = db.prepare("SELECT * FROM screens WHERE sx = ? AND sy = ?");
 const insertScreenStmt = db.prepare(`
-  INSERT OR REPLACE INTO screens (sx, sy, tiles, monsters, items, exotic_tier)
-  VALUES (@sx, @sy, @tiles, @monsters, @items, @exoticTier)
+  INSERT OR REPLACE INTO screens (sx, sy, tiles, monsters, items, exotic_tier, biome, code)
+  VALUES (@sx, @sy, @tiles, @monsters, @items, @exoticTier, @biome, @code)
 `);
-const listScreenCoordsStmt = db.prepare("SELECT sx, sy FROM screens");
+const listScreenCoordsStmt = db.prepare("SELECT sx, sy, biome, code FROM screens");
 
 export function getScreen(sx: number, sy: number): ScreenData | undefined {
   const row = getScreenStmt.get(sx, sy) as
-    | { sx: number; sy: number; tiles: string; monsters: string; items: string; exotic_tier: string }
+    | {
+        sx: number;
+        sy: number;
+        tiles: string;
+        monsters: string;
+        items: string;
+        exotic_tier: string;
+        biome: string;
+        code: string;
+      }
     | undefined;
   if (!row) return undefined;
   return {
@@ -55,6 +77,8 @@ export function getScreen(sx: number, sy: number): ScreenData | undefined {
     monsters: JSON.parse(row.monsters),
     items: JSON.parse(row.items),
     exoticTier: row.exotic_tier as ScreenData["exoticTier"],
+    biome: row.biome,
+    code: row.code,
   };
 }
 
@@ -66,11 +90,13 @@ export function saveScreen(screen: ScreenData): void {
     monsters: JSON.stringify(screen.monsters),
     items: JSON.stringify(screen.items),
     exoticTier: screen.exoticTier,
+    biome: screen.biome,
+    code: screen.code,
   });
 }
 
-export function listScreenCoords(): Array<{ sx: number; sy: number }> {
-  return listScreenCoordsStmt.all() as Array<{ sx: number; sy: number }>;
+export function listScreenCoords(): Array<{ sx: number; sy: number; biome: string; code: string }> {
+  return listScreenCoordsStmt.all() as Array<{ sx: number; sy: number; biome: string; code: string }>;
 }
 
 const getPlayerStmt = db.prepare("SELECT * FROM players WHERE username = ?");

@@ -4,6 +4,15 @@ export const SCREEN_WIDTH = 16;
 export const SCREEN_HEIGHT = 9;
 export const TILE_SIZE = 32; // px lógicos, la proyección isométrica se calcula a partir de esto en el cliente
 
+// Tamaño actual del mundo (nº de estancias por lado). Es un límite provisional
+// pensado para crecer más adelante hacia un mundo persistente mucho mayor, no un
+// tope definitivo — por eso vive aquí como una única constante fácil de subir.
+export const WORLD_SIZE = 400;
+export const WORLD_MIN = -Math.floor(WORLD_SIZE / 2);
+export const WORLD_MAX = Math.ceil(WORLD_SIZE / 2) - 1;
+
+export const BIOME_NAME = "Badlands";
+
 export type Direction = "N" | "S" | "E" | "W";
 
 export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
@@ -109,6 +118,8 @@ export interface ScreenData {
   monsters: MonsterState[];
   items: ItemState[];
   exoticTier: ExoticTier;
+  biome: string;
+  code: string; // huella alfanumérica del contenido de la estancia (tiles + elementos)
 }
 
 export interface PlayerPublicState {

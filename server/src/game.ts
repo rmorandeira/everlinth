@@ -7,6 +7,8 @@ import {
   PLAYER_SPEED,
   ATTACK_RANGE,
   PICKUP_RANGE,
+  WORLD_MIN,
+  WORLD_MAX,
   screenKey,
   type ClientMessage,
   type ServerMessage,
@@ -268,7 +270,19 @@ export class GameServer {
         d -= dMax - dMin;
       }
 
-      if (crossedDir) {
+      // Límite actual del mundo (400x400, provisional): más allá de esto no hay
+      // pantallas, así que el borde exterior actúa como un muro invisible.
+      const withinWorld = nsx >= WORLD_MIN && nsx <= WORLD_MAX && nsy >= WORLD_MIN && nsy <= WORLD_MAX;
+
+      if (crossedDir && !withinWorld) {
+        // Se queda pegado justo dentro del límite de su propia pantalla.
+        s = Math.min(Math.max(s, 0.001), sMax - 0.001);
+        d = Math.min(Math.max(d, dMin + 0.001), dMax - 0.001);
+        player.x = (s + d) / 2;
+        player.y = (s - d) / 2;
+        send(conn.socket, { type: "youUpdate", you: player });
+        this.broadcastToScreen(player.sx, player.sy, { type: "playerUpdate", player: toPublic(player) }, conn);
+      } else if (crossedDir) {
         player.x = (s + d) / 2;
         player.y = (s - d) / 2;
         const oldKey = screenKey({ sx: player.sx, sy: player.sy });

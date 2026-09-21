@@ -28,6 +28,7 @@ const weatherCanvas = document.getElementById("weather") as HTMLCanvasElement;
 const hpFill = document.getElementById("hp-fill") as HTMLDivElement;
 const statsEl = document.getElementById("stats") as HTMLDivElement;
 const discoveryEl = document.getElementById("discovery") as HTMLDivElement;
+const screenCodeEl = document.getElementById("screen-code") as HTMLDivElement;
 
 const sceneCtx = sceneCanvas.getContext("2d")!;
 const buffer = document.createElement("canvas");
@@ -153,6 +154,7 @@ function handleServerMessage(msg: ServerMessage): void {
         otherDisplay.set(p.username, { x: p.x, y: p.y });
       }
       weather.setWeather(pickWeather(msg.screen.sx, msg.screen.sy));
+      screenCodeEl.textContent = `${msg.screen.biome} · ${msg.screen.code}`;
       updateHud();
       break;
     case "playerUpdate":

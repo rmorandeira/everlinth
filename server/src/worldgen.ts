@@ -4,6 +4,7 @@ import {
   TileType,
   TILE_DEFS,
   BLOCKING_TILES,
+  BIOME_NAME,
   type ScreenData,
   type MonsterState,
   type ItemState,
@@ -11,6 +12,21 @@ import {
 } from "@roi/shared";
 import { makeRng, seedFromCoords } from "./rng.js";
 import { MONSTER_KINDS, ITEM_KINDS, pickWeighted } from "./content.js";
+
+// Huella alfanumérica del contenido real de la estancia (qué tiles hay y qué
+// monstruos/objetos contiene), no solo de sus coordenadas — dos estancias con el
+// mismo contenido comparten código. FNV-1a de 32 bits en base36.
+function hashContent(tiles: TileType[][], monsters: MonsterState[], items: ItemState[]): string {
+  let h = 0x811c9dc5;
+  const mix = (byte: number) => {
+    h ^= byte & 0xff;
+    h = Math.imul(h, 0x01000193);
+  };
+  for (const row of tiles) for (const t of row) mix(t);
+  for (const m of monsters) for (let i = 0; i < m.kind.length; i++) mix(m.kind.charCodeAt(i));
+  for (const it of items) for (let i = 0; i < it.kind.length; i++) mix(it.kind.charCodeAt(i));
+  return (h >>> 0).toString(36).toUpperCase().padStart(7, "0");
+}
 
 function bresenhamLine(x0: number, y0: number, x1: number, y1: number): Array<{ x: number; y: number }> {
   const pts: Array<{ x: number; y: number }> = [];
@@ -298,6 +314,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   else if (score < 35) exoticTier = "rare";
   else exoticTier = "epic";
 
-  const screen: ScreenData = { sx, sy, tiles, monsters, items, exoticTier };
+  const code = hashContent(tiles, monsters, items);
+  const screen: ScreenData = { sx, sy, tiles, monsters, items, exoticTier, biome: BIOME_NAME, code };
   return { screen, discoveryXp: Math.round(score) };
 }
