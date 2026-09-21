@@ -248,4 +248,5 @@ export type ServerMessage =
   | { type: "itemUpdate"; item: ItemState }
   | { type: "discovery"; tier: ExoticTier; xp: number }
   | { type: "died" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "visionSettings"; settings: VisionFogSettings };

@@ -414,4 +414,10 @@ export class GameServer {
       send(c.socket, msg);
     }
   }
+
+  // Para ajustes globales del backoffice (niebla de visión, etc.) que deben
+  // aplicarse al momento a todo el mundo conectado, no solo a una pantalla.
+  broadcastAll(msg: ServerMessage): void {
+    for (const conn of this.connections) send(conn.socket, msg);
+  }
 }

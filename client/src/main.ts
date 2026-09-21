@@ -1,6 +1,7 @@
 import "./style.css";
 import {
   DEFAULT_VISION_SETTINGS,
+  type BiomeId,
   type Direction,
   type ExoticTier,
   type InputState,
@@ -23,7 +24,13 @@ import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.j
 import { applyEdgeBlur } from "./render/edgeblur.js";
 import { applyChromaticAberration } from "./render/chromatic.js";
 import { applyFlashlight, drawCursorDot } from "./render/flashlight.js";
-import { loadTileset } from "./render/tileset.js";
+import { loadTileset, type RasterBiome } from "./render/tileset.js";
+
+// Solo "classic" tiene arte propio de momento (el resto cae en "badlands", el
+// set original) — ver RASTER_SOURCES_BY_BIOME en tileset.ts.
+function rasterBiomeFor(biome: BiomeId): RasterBiome {
+  return biome === "classic" ? "classic" : "badlands";
+}
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
 const loginForm = document.getElementById("login-form") as HTMLFormElement;
@@ -45,7 +52,20 @@ const weather = new WeatherSystem();
 
 let layout: Layout = { scale: 1, originX: 0, originY: 0 };
 let tileset: Tileset | null = null;
-loadTileset().then((t) => (tileset = t));
+let activeRasterBiome: RasterBiome | null = null;
+loadTileset("badlands").then((t) => (tileset = t));
+
+// Cambia el tileset activo cuando la estancia entra en un bioma con arte propio
+// distinto — loadTileset cachea por bioma, así que repetir uno ya visto no
+// vuelve a descargar imágenes.
+function ensureTilesetFor(biome: BiomeId): void {
+  const wanted = rasterBiomeFor(biome);
+  if (wanted === activeRasterBiome) return;
+  activeRasterBiome = wanted;
+  loadTileset(wanted).then((t) => {
+    if (activeRasterBiome === wanted) tileset = t;
+  });
+}
 
 // Ajustes de la niebla de visión: editables desde el backoffice, se piden una
 // vez al arrancar (si falla la petición, se queda con los valores por defecto).
@@ -200,6 +220,7 @@ function handleServerMessage(msg: ServerMessage): void {
       }
       currentScreen = msg.screen;
       currentNeighbors = msg.neighbors;
+      ensureTilesetFor(msg.screen.biome);
       otherPlayers.clear();
       otherDisplay.clear();
       for (const p of msg.players) {
@@ -245,6 +266,10 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     case "error":
       loginError.textContent = msg.message;
+      break;
+    case "visionSettings":
+      // Cambios desde el backoffice: se aplican al momento, sin recargar.
+      visionSettings = msg.settings;
       break;
   }
 }

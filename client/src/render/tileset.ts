@@ -162,59 +162,112 @@ const SVGS = {
 
 export type SpriteKey = keyof typeof SVGS | keyof typeof RASTER_SOURCES;
 
-// Tamaño de despliegue uniforme para los tiles raster (todos vienen de celdas
-// cuadradas de la misma hoja, con el rombo centrado en la misma fracción vertical).
+// Tamaño de despliegue uniforme para los tiles raster "de suelo/objeto normal"
+// (todos vienen de celdas cuadradas de su hoja, con el rombo centrado en la
+// misma fracción vertical). Los "building" de badlands son mesas/rocas enormes,
+// así que necesitan su propio tamaño; el resto de biomas usa el tamaño normal.
 const RASTER_SIZE = { w: 68, h: 68, ax: 34, ay: 20 };
+const BADLANDS_BUILDING_SIZE = { w: 100, h: 100, ax: 50, ay: 30 };
 
-const ANCHORS: Record<SpriteKey, { w: number; h: number; ax: number; ay: number }> = {
-  grass1: RASTER_SIZE,
-  grass2: RASTER_SIZE,
-  grass3: RASTER_SIZE,
-  dirt: RASTER_SIZE,
-  water1: RASTER_SIZE,
-  water2: RASTER_SIZE,
-  tree: RASTER_SIZE,
-  tree2: RASTER_SIZE,
-  fence: RASTER_SIZE,
-  rock1: RASTER_SIZE,
-  rock2: RASTER_SIZE,
-  cactus: RASTER_SIZE,
-  building: { w: 100, h: 100, ax: 50, ay: 30 },
-  building2: { w: 100, h: 100, ax: 50, ay: 30 },
-  building3: { w: 100, h: 100, ax: 50, ay: 30 },
+const SVG_ANCHORS: Record<keyof typeof SVGS, { w: number; h: number; ax: number; ay: number }> = {
   bush: { w: 40, h: 26, ax: 20, ay: 24 },
   barrel: { w: 24, h: 28, ax: 12, ay: 26 },
   flag: { w: 30, h: 46, ax: 15, ay: 44 },
   coin: { w: 20, h: 20, ax: 10, ay: 10 },
 };
 
-let cache: Record<SpriteKey, Sprite> | null = null;
-let loading: Promise<Record<SpriteKey, Sprite>> | null = null;
+// Anchors por bioma: mismas claves de raster siempre, pero el tamaño de los
+// "building" puede variar mucho según el estilo (mesas gigantes en badlands
+// frente a un muro de piedra normal en césped).
+const RASTER_ANCHORS_BY_BIOME: Record<RasterBiome, Record<keyof typeof RASTER_SOURCES_BADLANDS, typeof RASTER_SIZE>> = {
+  badlands: {
+    grass1: RASTER_SIZE,
+    grass2: RASTER_SIZE,
+    grass3: RASTER_SIZE,
+    dirt: RASTER_SIZE,
+    water1: RASTER_SIZE,
+    water2: RASTER_SIZE,
+    tree: RASTER_SIZE,
+    tree2: RASTER_SIZE,
+    fence: RASTER_SIZE,
+    rock1: RASTER_SIZE,
+    rock2: RASTER_SIZE,
+    cactus: RASTER_SIZE,
+    building: BADLANDS_BUILDING_SIZE,
+    building2: BADLANDS_BUILDING_SIZE,
+    building3: BADLANDS_BUILDING_SIZE,
+  },
+  classic: {
+    grass1: RASTER_SIZE,
+    grass2: RASTER_SIZE,
+    grass3: RASTER_SIZE,
+    dirt: RASTER_SIZE,
+    water1: RASTER_SIZE,
+    water2: RASTER_SIZE,
+    tree: RASTER_SIZE,
+    tree2: RASTER_SIZE,
+    fence: RASTER_SIZE,
+    rock1: RASTER_SIZE,
+    rock2: RASTER_SIZE,
+    cactus: RASTER_SIZE,
+    building: RASTER_SIZE,
+    building2: RASTER_SIZE,
+    building3: RASTER_SIZE,
+  },
+};
 
-export function loadTileset(): Promise<Record<SpriteKey, Sprite>> {
-  if (cache) return Promise.resolve(cache);
-  if (loading) return loading;
+export type Tileset = Record<SpriteKey, Sprite>;
 
+const cache = new Map<RasterBiome, Tileset>();
+const loading = new Map<RasterBiome, Promise<Tileset>>();
+let svgCache: Record<keyof typeof SVGS, HTMLImageElement> | null = null;
+let svgLoading: Promise<Record<keyof typeof SVGS, HTMLImageElement>> | null = null;
+
+function loadSvgSprites(): Promise<Record<keyof typeof SVGS, HTMLImageElement>> {
+  if (svgCache) return Promise.resolve(svgCache);
+  if (svgLoading) return svgLoading;
   const svgKeys = Object.keys(SVGS) as Array<keyof typeof SVGS>;
-  const rasterKeys = Object.keys(RASTER_SOURCES) as Array<keyof typeof RASTER_SOURCES>;
-
-  loading = Promise.all([
-    Promise.all(svgKeys.map((k) => svgToImage(SVGS[k]))),
-    Promise.all(rasterKeys.map((k) => loadImage(RASTER_SOURCES[k]))),
-  ]).then(([svgImages, rasterImages]) => {
-    const result = {} as Record<SpriteKey, Sprite>;
-    svgKeys.forEach((k, i) => {
-      const a = ANCHORS[k];
-      result[k] = { img: svgImages[i], w: a.w, h: a.h, anchorX: a.ax, anchorY: a.ay };
-    });
-    rasterKeys.forEach((k, i) => {
-      const a = ANCHORS[k];
-      result[k] = { img: rasterImages[i], w: a.w, h: a.h, anchorX: a.ax, anchorY: a.ay };
-    });
-    cache = result;
+  svgLoading = Promise.all(svgKeys.map((k) => svgToImage(SVGS[k]))).then((images) => {
+    const result = {} as Record<keyof typeof SVGS, HTMLImageElement>;
+    svgKeys.forEach((k, i) => (result[k] = images[i]));
+    svgCache = result;
     return result;
   });
-  return loading;
+  return svgLoading;
+}
+
+// Carga el tileset raster de un bioma (con fallback a "badlands" si no se pide
+// uno soportado), fusionado con los sprites SVG genéricos (moneda, etc.) que no
+// dependen del bioma. Se cachea por bioma: cambiar de sala no recarga imágenes
+// ya vistas.
+export function loadTileset(biome: RasterBiome = "badlands"): Promise<Tileset> {
+  const key: RasterBiome = RASTER_SOURCES_BY_BIOME[biome] ? biome : "badlands";
+  const cached = cache.get(key);
+  if (cached) return Promise.resolve(cached);
+  const already = loading.get(key);
+  if (already) return already;
+
+  const sources = RASTER_SOURCES_BY_BIOME[key];
+  const anchors = RASTER_ANCHORS_BY_BIOME[key];
+  const rasterKeys = Object.keys(sources) as Array<keyof typeof RASTER_SOURCES_BADLANDS>;
+
+  const promise = Promise.all([loadSvgSprites(), Promise.all(rasterKeys.map((k) => loadImage(sources[k])))]).then(
+    ([svgImages, rasterImages]) => {
+      const result = {} as Tileset;
+      (Object.keys(SVG_ANCHORS) as Array<keyof typeof SVGS>).forEach((k) => {
+        const a = SVG_ANCHORS[k];
+        result[k] = { img: svgImages[k], w: a.w, h: a.h, anchorX: a.ax, anchorY: a.ay };
+      });
+      rasterKeys.forEach((k, i) => {
+        const a = anchors[k];
+        result[k] = { img: rasterImages[i], w: a.w, h: a.h, anchorX: a.ax, anchorY: a.ay };
+      });
+      cache.set(key, result);
+      return result;
+    }
+  );
+  loading.set(key, promise);
+  return promise;
 }
 
 // `scale` reduce el sprite manteniendo su proporción y su punto de anclaje al

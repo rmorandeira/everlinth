@@ -46,11 +46,13 @@ app.post("/admin/settings/vision", (req, res) => {
     return;
   }
   const clamped: VisionFogSettings = {
-    sharpFraction: Math.min(0.98, Math.max(0.2, sharpFraction)),
-    vibration: Math.min(2, Math.max(0, vibration)),
+    sharpFraction: Math.min(0.98, Math.max(0.03, sharpFraction)),
+    vibration: Math.min(6, Math.max(0, vibration)),
     chromaticAberration: Math.min(1, Math.max(0, chromaticAberration)),
   };
   setSetting("visionFog", JSON.stringify(clamped));
+  // Se aplica al momento a todo el mundo conectado, sin que nadie tenga que recargar.
+  game.broadcastAll({ type: "visionSettings", settings: clamped });
   res.json(clamped);
 });
 
@@ -194,8 +196,8 @@ app.get("/admin", (_req, res) => {
 
   <div id="visionPanel">
     <h2>Niebla de visión (global, afecta a todos)</h2>
-    <div class="stat">Tamaño: <input id="fogSize" type="range" min="20" max="98" value="72"> <span id="fogSizeLabel"></span></div>
-    <div class="stat">Vibración: <input id="fogVibration" type="range" min="0" max="200" value="100"> <span id="fogVibrationLabel"></span></div>
+    <div class="stat">Tamaño: <input id="fogSize" type="range" min="3" max="98" value="72"> <span id="fogSizeLabel"></span></div>
+    <div class="stat">Vibración: <input id="fogVibration" type="range" min="0" max="600" value="100"> <span id="fogVibrationLabel"></span></div>
     <div class="stat">Aberración cromática: <input id="chromaAb" type="range" min="0" max="100" value="0"> <span id="chromaAbLabel"></span></div>
     <div class="stat" style="color:#666;font-size:11px;">Solo afecta a la escena del juego, no al HUD.</div>
   </div>

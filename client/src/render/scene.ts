@@ -1,14 +1,14 @@
 import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type ScreenData, type PlayerPublicState, type NeighborTiles } from "@roi/shared";
 import { toScreen, TILE_W, TILE_H } from "./iso.js";
-import { drawSprite, type Sprite, type SpriteKey } from "./tileset.js";
+import { drawSprite, type SpriteKey, type Tileset } from "./tileset.js";
+
+export type { Tileset } from "./tileset.js";
 
 export interface Layout {
   scale: number;
   originX: number;
   originY: number;
 }
-
-export type Tileset = Record<SpriteKey, Sprite>;
 
 // Calcula un layout que encaja TODA la pantalla (16x11) centrada y sin deformar,
 // sea cual sea el tamaño/relación de aspecto real de la ventana.
