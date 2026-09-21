@@ -70,19 +70,6 @@ function drawGroundTile(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number
     ctx.moveTo(cx - TILE_W / 4, cy);
     ctx.lineTo(cx + TILE_W / 4, cy);
     ctx.stroke();
-  } else if (tile === TileType.Grass && n > 0.8) {
-    // Matojo de hierba con micro-animación de balanceo, sobre la textura base.
-    const sway = Math.sin(time * 2.2 + x * 1.3 + y * 0.9) * 2;
-    ctx.strokeStyle = "#2f7a3c";
-    ctx.lineWidth = 2;
-    for (let i = -1; i <= 1; i++) {
-      ctx.beginPath();
-      ctx.moveTo(cx + i * 4, cy + 4);
-      ctx.lineTo(cx + i * 4 + sway, cy - 6);
-      ctx.stroke();
-    }
-  } else if (tile === TileType.Grass && n > 0.65 && n <= 0.8) {
-    drawSprite(ctx, tiles.bush, cx, cy + TILE_H / 2 - 6);
   }
 }
 
@@ -106,12 +93,12 @@ function drawFence(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: 
 function drawRock(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
   const key = pick(ROCK_VARIANTS, hash2(x + 0.5, y + 0.5));
-  drawSprite(ctx, tiles[key], cx, cy + TILE_H / 2 - 4);
+  drawSprite(ctx, tiles[key], cx, cy);
 }
 
 function drawBuilding(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
-  drawSprite(ctx, tiles.building, cx, cy + TILE_H / 2);
+  drawSprite(ctx, tiles.building, cx, cy);
 }
 
 const MONSTER_COLORS: Record<string, string> = {

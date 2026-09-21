@@ -20,6 +20,33 @@ function svgToImage(svg: string): Promise<HTMLImageElement> {
   });
 }
 
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+// Tiles fotográficos recortados de una hoja de sprites isométrica (raster, no vector),
+// con el fondo eliminado. Todas las celdas de origen son cuadradas y comparten el mismo
+// punto de anclaje relativo (el centro del rombo superior del bloque).
+const RASTER_SOURCES: Record<string, string> = {
+  grass1: "/raster/ground_plain.png",
+  grass2: "/raster/ground_pebbly.png",
+  grass3: "/raster/ground_tufts.png",
+  dirt: "/raster/ground_path.png",
+  water1: "/raster/puddle.png",
+  water2: "/raster/puddle.png",
+  tree: "/raster/dead_tree.png",
+  tree2: "/raster/dead_tree.png",
+  rock1: "/raster/rock_spire.png",
+  rock2: "/raster/rock_spire.png",
+  building: "/raster/rock_mesa.png",
+  fence: "/raster/cliff_wall.png",
+};
+
 // ---- Paleta compartida (a partir de la referencia) ----
 const GREEN_LIGHT = "#5cc23e";
 const GREEN_MID = "#3f9a4d";
@@ -72,69 +99,11 @@ function speckleField(seed: number, count: number, color: string): Array<[number
 }
 
 const SVGS = {
-  grass1: groundTile(GREEN_MID, speckleField(1, 10, GREEN_DARK)),
-  grass2: groundTile(GREEN_LIGHT, speckleField(2, 10, GREEN_MID)),
-  grass3: groundTile(GREEN_MID, speckleField(3, 6, GREEN_DARK).concat(speckleField(30, 4, GREEN_LIGHT))),
-  dirt: groundTile(TAN, speckleField(4, 8, TAN_DARK)),
-  water1: groundTile(BLUE, speckleField(5, 8, BLUE_LIGHT)),
-  water2: groundTile(BLUE, speckleField(6, 8, BLUE_LIGHT)),
-
-  tree: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 60">
-    <ellipse cx="32" cy="56" rx="14" ry="4" fill="${INK}" />
-    <rect x="29" y="42" width="6" height="16" fill="#5a3a22" stroke="#3d2716" stroke-width="0.5" />
-    <polygon points="32,4 54,40 10,40" fill="${GREEN_DARK}" stroke="#1c4a26" stroke-width="1" />
-    <polygon points="32,16 47,42 17,42" fill="${GREEN_MID}" stroke="#1c4a26" stroke-width="1" />
-    <polygon points="32,26 40,44 24,44" fill="${GREEN_LIGHT}" />
-  </svg>`,
-
   bush: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 26">
     <ellipse cx="20" cy="24" rx="12" ry="3" fill="${INK}" />
     <circle cx="14" cy="16" r="9" fill="${GREEN_DARK}" stroke="#1c4a26" stroke-width="1" />
     <circle cx="26" cy="16" r="9" fill="${GREEN_MID}" stroke="#1c4a26" stroke-width="1" />
     <circle cx="20" cy="10" r="8" fill="${GREEN_LIGHT}" stroke="#1c4a26" stroke-width="1" />
-  </svg>`,
-
-  tree2: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 64">
-    <ellipse cx="24" cy="60" rx="10" ry="3" fill="${INK}" />
-    <rect x="21" y="46" width="6" height="14" fill="#5a3a22" stroke="#3d2716" stroke-width="0.5" />
-    <polygon points="24,4 36,26 12,26" fill="${GREEN_DARK}" stroke="#1c4a26" stroke-width="1" />
-    <polygon points="24,16 34,36 14,36" fill="${GREEN_MID}" stroke="#1c4a26" stroke-width="1" />
-    <polygon points="24,28 32,46 16,46" fill="${GREEN_LIGHT}" stroke="#1c4a26" stroke-width="1" />
-  </svg>`,
-
-  fence: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
-    <polygon points="32,16 64,32 32,48 0,32" fill="${GREEN_MID}" stroke="rgba(0,0,0,0.25)" stroke-width="0.5" />
-    <rect x="1.7" y="16.4" width="3" height="14" fill="#e8e8e8" stroke="#333" stroke-width="0.5" />
-    <rect x="8.1" y="19.2" width="3" height="14" fill="#2a2a2a" />
-    <rect x="14.5" y="22" width="3" height="14" fill="#e8e8e8" stroke="#333" stroke-width="0.5" />
-    <rect x="20.9" y="24.8" width="3" height="14" fill="#2a2a2a" />
-    <rect x="27.3" y="27.6" width="3" height="14" fill="#e8e8e8" stroke="#333" stroke-width="0.5" />
-    <rect x="33.7" y="24.8" width="3" height="14" fill="#2a2a2a" />
-    <rect x="40.1" y="22" width="3" height="14" fill="#e8e8e8" stroke="#333" stroke-width="0.5" />
-    <rect x="46.5" y="19.2" width="3" height="14" fill="#2a2a2a" />
-    <rect x="52.9" y="16.4" width="3" height="14" fill="#e8e8e8" stroke="#333" stroke-width="0.5" />
-    <rect x="59.3" y="13.6" width="3" height="14" fill="#2a2a2a" />
-  </svg>`,
-
-  rock1: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 24">
-    <ellipse cx="18" cy="22" rx="14" ry="2.5" fill="${INK}" />
-    <polygon points="4,16 12,4 26,6 32,16 20,22 10,20" fill="${GRAY}" stroke="${GRAY_DARK}" stroke-width="1" />
-    <polygon points="12,4 26,6 20,12 10,10" fill="${GRAY_LIGHT}" opacity="0.7" />
-  </svg>`,
-  rock2: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20">
-    <ellipse cx="15" cy="18" rx="11" ry="2" fill="${INK}" />
-    <polygon points="3,13 10,3 22,5 27,13 16,18 8,16" fill="${GRAY}" stroke="${GRAY_DARK}" stroke-width="1" />
-  </svg>`,
-
-  building: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 112 150">
-    <ellipse cx="56" cy="146" rx="34" ry="6" fill="${INK}" />
-    <polygon points="8,96 56,120 56,146 8,122" fill="${GRAY_LIGHT}" stroke="${GRAY_DARK}" stroke-width="1" />
-    <polygon points="104,96 56,120 56,146 104,122" fill="#f2f2f2" stroke="${GRAY_DARK}" stroke-width="1" />
-    <polygon points="8,96 56,72 104,96 56,120" fill="${GRAY}" stroke="${GRAY_DARK}" stroke-width="1" />
-    <rect x="16" y="102" width="8" height="12" fill="#222" />
-    <rect x="30" y="106" width="8" height="12" fill="#222" />
-    <rect x="76" y="106" width="8" height="12" fill="#222" />
-    <rect x="90" y="102" width="8" height="12" fill="#222" />
   </svg>`,
 
   barrel: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 28">
@@ -157,22 +126,26 @@ const SVGS = {
   </svg>`,
 };
 
-export type SpriteKey = keyof typeof SVGS;
+export type SpriteKey = keyof typeof SVGS | keyof typeof RASTER_SOURCES;
+
+// Tamaño de despliegue uniforme para los tiles raster (todos vienen de celdas
+// cuadradas de la misma hoja, con el rombo centrado en la misma fracción vertical).
+const RASTER_SIZE = { w: 68, h: 68, ax: 34, ay: 20 };
 
 const ANCHORS: Record<SpriteKey, { w: number; h: number; ax: number; ay: number }> = {
-  grass1: { w: 64, h: 32, ax: 32, ay: 16 },
-  grass2: { w: 64, h: 32, ax: 32, ay: 16 },
-  grass3: { w: 64, h: 32, ax: 32, ay: 16 },
-  dirt: { w: 64, h: 32, ax: 32, ay: 16 },
-  water1: { w: 64, h: 32, ax: 32, ay: 16 },
-  water2: { w: 64, h: 32, ax: 32, ay: 16 },
-  tree: { w: 64, h: 60, ax: 32, ay: 56 },
-  tree2: { w: 48, h: 64, ax: 24, ay: 60 },
+  grass1: RASTER_SIZE,
+  grass2: RASTER_SIZE,
+  grass3: RASTER_SIZE,
+  dirt: RASTER_SIZE,
+  water1: RASTER_SIZE,
+  water2: RASTER_SIZE,
+  tree: RASTER_SIZE,
+  tree2: RASTER_SIZE,
+  fence: RASTER_SIZE,
+  rock1: RASTER_SIZE,
+  rock2: RASTER_SIZE,
+  building: { w: 100, h: 100, ax: 50, ay: 30 },
   bush: { w: 40, h: 26, ax: 20, ay: 24 },
-  fence: { w: 64, h: 48, ax: 32, ay: 32 },
-  rock1: { w: 36, h: 24, ax: 18, ay: 21 },
-  rock2: { w: 30, h: 20, ax: 15, ay: 18 },
-  building: { w: 112, h: 150, ax: 56, ay: 138 },
   barrel: { w: 24, h: 28, ax: 12, ay: 26 },
   flag: { w: 30, h: 46, ax: 15, ay: 44 },
   coin: { w: 20, h: 20, ax: 10, ay: 10 },
@@ -185,12 +158,21 @@ export function loadTileset(): Promise<Record<SpriteKey, Sprite>> {
   if (cache) return Promise.resolve(cache);
   if (loading) return loading;
 
-  const keys = Object.keys(SVGS) as SpriteKey[];
-  loading = Promise.all(keys.map((k) => svgToImage(SVGS[k]))).then((images) => {
+  const svgKeys = Object.keys(SVGS) as Array<keyof typeof SVGS>;
+  const rasterKeys = Object.keys(RASTER_SOURCES) as Array<keyof typeof RASTER_SOURCES>;
+
+  loading = Promise.all([
+    Promise.all(svgKeys.map((k) => svgToImage(SVGS[k]))),
+    Promise.all(rasterKeys.map((k) => loadImage(RASTER_SOURCES[k]))),
+  ]).then(([svgImages, rasterImages]) => {
     const result = {} as Record<SpriteKey, Sprite>;
-    keys.forEach((k, i) => {
+    svgKeys.forEach((k, i) => {
       const a = ANCHORS[k];
-      result[k] = { img: images[i], w: a.w, h: a.h, anchorX: a.ax, anchorY: a.ay };
+      result[k] = { img: svgImages[i], w: a.w, h: a.h, anchorX: a.ax, anchorY: a.ay };
+    });
+    rasterKeys.forEach((k, i) => {
+      const a = ANCHORS[k];
+      result[k] = { img: rasterImages[i], w: a.w, h: a.h, anchorX: a.ax, anchorY: a.ay };
     });
     cache = result;
     return result;
