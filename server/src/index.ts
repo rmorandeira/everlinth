@@ -101,21 +101,30 @@ app.get("/admin", (_req, res) => {
   body { margin:0; background:#111; color:#ddd; font-family: monospace; display:flex; height:100vh; }
   #mapWrap { flex:1; overflow:auto; padding:16px; position:relative; }
   canvas#map { background:#1a1a1a; image-rendering:pixelated; cursor:pointer; display:block; }
-  #panel { width:320px; border-left:1px solid #333; padding:16px; box-sizing:border-box; }
+  #panel { width:320px; border-left:1px solid #333; padding:16px; box-sizing:border-box; overflow-y:auto; }
   #panel h2 { margin-top:0; font-size:16px; color:#4caf6d; }
   #thumb { background:#000; border:1px solid #333; }
   .empty { color:#777; }
   .stat { margin:4px 0; }
   code { color:#f0c419; }
-  #zoomBar { position:sticky; top:0; left:0; z-index:2; display:inline-flex; gap:6px; background:#111; padding:4px; border:1px solid #333; margin-bottom:8px; }
+  #zoomBar { position:sticky; top:0; left:0; z-index:2; display:inline-flex; align-items:center; gap:6px; background:#111; padding:4px; border:1px solid #333; margin-bottom:8px; }
   #zoomBar button { background:#222; color:#ddd; border:1px solid #444; width:26px; height:26px; cursor:pointer; font-family:inherit; }
   #zoomBar button:hover { background:#333; }
-  #zoomLabel { align-self:center; font-size:12px; color:#999; min-width:70px; }
+  #zoomLabel { font-size:12px; color:#999; min-width:70px; }
+  #navHint { font-size:11px; color:#666; margin-left:8px; }
   #terrainPanel { margin-top:24px; padding-top:16px; border-top:1px solid #333; }
   .swatch { display:inline-block; width:28px; height:28px; margin:2px; border:2px solid transparent; cursor:pointer; box-sizing:border-box; border-radius:3px; }
   .swatch.active { border-color:#fff; }
   #terrainPanel label { display:block; margin:3px 0; cursor:pointer; }
   #terrainPanel input[type=range] { vertical-align:middle; }
+
+  /* Barras de scroll a juego con el resto del backoffice (Chromium/Electron). */
+  #mapWrap, #panel { scrollbar-width: thin; scrollbar-color: #3a3a3a #111; }
+  #mapWrap::-webkit-scrollbar, #panel::-webkit-scrollbar { width: 12px; height: 12px; }
+  #mapWrap::-webkit-scrollbar-track, #panel::-webkit-scrollbar-track { background: #111; }
+  #mapWrap::-webkit-scrollbar-thumb, #panel::-webkit-scrollbar-thumb { background: #333; border: 2px solid #111; border-radius: 6px; }
+  #mapWrap::-webkit-scrollbar-thumb:hover, #panel::-webkit-scrollbar-thumb:hover { background: #4caf6d; }
+  #mapWrap::-webkit-scrollbar-corner, #panel::-webkit-scrollbar-corner { background: #111; }
 </style>
 </head>
 <body>
@@ -124,6 +133,7 @@ app.get("/admin", (_req, res) => {
     <button id="zoomOut">−</button>
     <button id="zoomIn">+</button>
     <span id="zoomLabel"></span>
+    <span id="navHint">scroll: mover · shift+scroll: mover lateral · ctrl+scroll: zoom · espacio+arrastrar: mover</span>
   </div>
   <canvas id="map"></canvas>
 </div>
@@ -295,9 +305,17 @@ app.get("/admin", (_req, res) => {
     mapWrap.scrollTop = worldY * cell - (clientY - rect.top);
   }
 
+  // Navegación: scroll = mover vertical, shift+scroll = mover lateral,
+  // ctrl+scroll = zoom, espacio+clic+arrastrar = mover (como una mano de agarre).
   mapWrap.addEventListener('wheel', (ev) => {
-    ev.preventDefault();
-    zoomAt(ev.clientX, ev.clientY, ev.deltaY < 0 ? 1.25 : 0.8);
+    if (ev.ctrlKey) {
+      ev.preventDefault();
+      zoomAt(ev.clientX, ev.clientY, ev.deltaY < 0 ? 1.15 : 1 / 1.15);
+    } else if (ev.shiftKey) {
+      ev.preventDefault();
+      mapWrap.scrollLeft += ev.deltaY;
+    }
+    // scroll normal (sin modificadores): se deja el comportamiento nativo del navegador.
   }, { passive: false });
 
   document.getElementById('zoomIn').addEventListener('click', () => {
@@ -307,6 +325,41 @@ app.get("/admin", (_req, res) => {
   document.getElementById('zoomOut').addEventListener('click', () => {
     const r = mapWrap.getBoundingClientRect();
     zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.4);
+  });
+
+  let spaceDown = false;
+  window.addEventListener('keydown', (ev) => {
+    if (ev.code === 'Space' && !ev.repeat) {
+      spaceDown = true;
+      mapWrap.style.cursor = 'grab';
+      ev.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', (ev) => {
+    if (ev.code === 'Space') {
+      spaceDown = false;
+      if (!panning) mapWrap.style.cursor = '';
+    }
+  });
+
+  let panning = false;
+  let panStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
+  mapWrap.addEventListener('mousedown', (ev) => {
+    if (!spaceDown) return;
+    panning = true;
+    panStart = { x: ev.clientX, y: ev.clientY, scrollLeft: mapWrap.scrollLeft, scrollTop: mapWrap.scrollTop };
+    mapWrap.style.cursor = 'grabbing';
+    ev.preventDefault();
+  });
+  window.addEventListener('mousemove', (ev) => {
+    if (!panning) return;
+    mapWrap.scrollLeft = panStart.scrollLeft - (ev.clientX - panStart.x);
+    mapWrap.scrollTop = panStart.scrollTop - (ev.clientY - panStart.y);
+  });
+  window.addEventListener('mouseup', () => {
+    if (!panning) return;
+    panning = false;
+    mapWrap.style.cursor = spaceDown ? 'grab' : '';
   });
 
   async function refresh() {
@@ -324,7 +377,7 @@ app.get("/admin", (_req, res) => {
   }
 
   canvas.addEventListener('click', async (ev) => {
-    if (mode !== 'inspect') return;
+    if (spaceDown || mode !== 'inspect') return;
     const { sx, sy } = cellFromEvent(ev);
     const key = sx + ',' + sy;
     const meta = discovered.get(key);
@@ -357,7 +410,7 @@ app.get("/admin", (_req, res) => {
   }
 
   canvas.addEventListener('mousedown', (ev) => {
-    if (mode === 'inspect') return;
+    if (spaceDown || mode === 'inspect') return;
     dragging = true;
     addBrushAt(ev);
   });
