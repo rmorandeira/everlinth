@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ScreenData, PlayerPrivateState, Direction } from "@roi/shared";
+import type { ScreenData, PlayerPrivateState, Direction, BiomeId } from "@roi/shared";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // En producción (Railway) esto apunta a un volumen persistente, para que el
@@ -18,7 +18,9 @@ db.exec(`
     monsters TEXT NOT NULL,
     items TEXT NOT NULL,
     exotic_tier TEXT NOT NULL,
-    biome TEXT NOT NULL DEFAULT 'Badlands',
+    biome TEXT NOT NULL DEFAULT 'badlands',
+    biome_source TEXT NOT NULL DEFAULT 'procedural',
+    biome_blend TEXT,
     code TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (sx, sy)
   );
@@ -36,6 +38,17 @@ db.exec(`
     facing TEXT NOT NULL,
     inventory TEXT NOT NULL
   );
+
+  -- Terreno decretado por el super admin desde el backoffice (spraybrush). Es
+  -- autoritativo: si una celda tiene fila aquí, manda sobre el cálculo procedural
+  -- del bioma, y obliga transición en su borde (ver server/src/biome.ts). Solo
+  -- guarda las celdas que se han pintado explícitamente (sparse), no el mundo entero.
+  CREATE TABLE IF NOT EXISTS world_paint (
+    sx INTEGER NOT NULL,
+    sy INTEGER NOT NULL,
+    biome TEXT NOT NULL,
+    PRIMARY KEY (sx, sy)
+  );
 `);
 
 // Migra bases de datos ya existentes (p.ej. en el volumen de producción) que se
@@ -46,13 +59,15 @@ function ensureColumn(table: string, column: string, decl: string): void {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
   }
 }
-ensureColumn("screens", "biome", "TEXT NOT NULL DEFAULT 'Badlands'");
+ensureColumn("screens", "biome", "TEXT NOT NULL DEFAULT 'badlands'");
+ensureColumn("screens", "biome_source", "TEXT NOT NULL DEFAULT 'procedural'");
+ensureColumn("screens", "biome_blend", "TEXT");
 ensureColumn("screens", "code", "TEXT NOT NULL DEFAULT ''");
 
 const getScreenStmt = db.prepare("SELECT * FROM screens WHERE sx = ? AND sy = ?");
 const insertScreenStmt = db.prepare(`
-  INSERT OR REPLACE INTO screens (sx, sy, tiles, monsters, items, exotic_tier, biome, code)
-  VALUES (@sx, @sy, @tiles, @monsters, @items, @exoticTier, @biome, @code)
+  INSERT OR REPLACE INTO screens (sx, sy, tiles, monsters, items, exotic_tier, biome, biome_source, biome_blend, code)
+  VALUES (@sx, @sy, @tiles, @monsters, @items, @exoticTier, @biome, @biomeSource, @biomeBlend, @code)
 `);
 const listScreenCoordsStmt = db.prepare("SELECT sx, sy, biome, code FROM screens");
 
@@ -65,7 +80,9 @@ export function getScreen(sx: number, sy: number): ScreenData | undefined {
         monsters: string;
         items: string;
         exotic_tier: string;
-        biome: string;
+        biome: BiomeId;
+        biome_source: ScreenData["biomeSource"];
+        biome_blend: string | null;
         code: string;
       }
     | undefined;
@@ -78,6 +95,8 @@ export function getScreen(sx: number, sy: number): ScreenData | undefined {
     items: JSON.parse(row.items),
     exoticTier: row.exotic_tier as ScreenData["exoticTier"],
     biome: row.biome,
+    biomeSource: row.biome_source,
+    biomeBlend: row.biome_blend ? JSON.parse(row.biome_blend) : null,
     code: row.code,
   };
 }
@@ -91,12 +110,89 @@ export function saveScreen(screen: ScreenData): void {
     items: JSON.stringify(screen.items),
     exoticTier: screen.exoticTier,
     biome: screen.biome,
+    biomeSource: screen.biomeSource,
+    biomeBlend: screen.biomeBlend ? JSON.stringify(screen.biomeBlend) : null,
     code: screen.code,
   });
 }
 
 export function listScreenCoords(): Array<{ sx: number; sy: number; biome: string; code: string }> {
   return listScreenCoordsStmt.all() as Array<{ sx: number; sy: number; biome: string; code: string }>;
+}
+
+export function deleteScreen(sx: number, sy: number): boolean {
+  return deleteScreenStmt.run(sx, sy).changes > 0;
+}
+
+export function deleteScreens(cells: Array<{ sx: number; sy: number }>): number {
+  let deleted = 0;
+  db.exec("BEGIN");
+  try {
+    for (const c of cells) deleted += Number(deleteScreenStmt.run(c.sx, c.sy).changes);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+  return deleted;
+}
+
+// ---- Terreno pintado (world_paint) ----
+
+const getPaintStmt = db.prepare("SELECT biome FROM world_paint WHERE sx = ? AND sy = ?");
+const getPaintRangeStmt = db.prepare(
+  "SELECT sx, sy, biome FROM world_paint WHERE sx BETWEEN ? AND ? AND sy BETWEEN ? AND ?"
+);
+const upsertPaintStmt = db.prepare(`
+  INSERT INTO world_paint (sx, sy, biome) VALUES (@sx, @sy, @biome)
+  ON CONFLICT(sx, sy) DO UPDATE SET biome = @biome
+`);
+const deletePaintStmt = db.prepare("DELETE FROM world_paint WHERE sx = ? AND sy = ?");
+const deleteScreenStmt = db.prepare("DELETE FROM screens WHERE sx = ? AND sy = ?");
+
+export function getPaint(sx: number, sy: number): BiomeId | undefined {
+  const row = getPaintStmt.get(sx, sy) as { biome: BiomeId } | undefined;
+  return row?.biome;
+}
+
+export function getPaintRange(minX: number, maxX: number, minY: number, maxY: number): Map<string, BiomeId> {
+  const rows = getPaintRangeStmt.all(minX, maxX, minY, maxY) as Array<{ sx: number; sy: number; biome: BiomeId }>;
+  const map = new Map<string, BiomeId>();
+  for (const r of rows) map.set(`${r.sx},${r.sy}`, r.biome);
+  return map;
+}
+
+export function listPaint(): Array<{ sx: number; sy: number; biome: BiomeId }> {
+  return db.prepare("SELECT sx, sy, biome FROM world_paint").all() as Array<{
+    sx: number;
+    sy: number;
+    biome: BiomeId;
+  }>;
+}
+
+// Pintado en lote (spraybrush): una sola transacción para no bloquear el event
+// loop con N escrituras síncronas sueltas, igual que nos pasaría con el autosave
+// si guardásemos jugador a jugador en vez de en bloque.
+export function paintCells(cells: Array<{ sx: number; sy: number }>, biome: BiomeId): void {
+  db.exec("BEGIN");
+  try {
+    for (const c of cells) upsertPaintStmt.run({ sx: c.sx, sy: c.sy, biome });
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+export function unpaintCells(cells: Array<{ sx: number; sy: number }>): void {
+  db.exec("BEGIN");
+  try {
+    for (const c of cells) deletePaintStmt.run(c.sx, c.sy);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 const getPlayerStmt = db.prepare("SELECT * FROM players WHERE username = ?");

@@ -11,8 +11,6 @@ export const WORLD_SIZE = 400;
 export const WORLD_MIN = -Math.floor(WORLD_SIZE / 2);
 export const WORLD_MAX = Math.ceil(WORLD_SIZE / 2) - 1;
 
-export const BIOME_NAME = "Badlands";
-
 export type Direction = "N" | "S" | "E" | "W";
 
 export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
@@ -93,6 +91,71 @@ export function screenKey(c: ScreenCoord): string {
   return `${c.sx},${c.sy}`;
 }
 
+// ---- Biomas ----
+// Cada bioma vive en un espacio de 2 ejes (temperatura, artificialidad) en vez de
+// una tabla de distancias por pareja: así añadir un bioma nuevo es dar de alta un
+// punto más, no O(n^2) relaciones que mantener a mano. La distancia entre dos
+// biomas en ese espacio decide cuántas estancias mínimas de transición hacen
+// falta para pasar de uno a otro sin salto brusco (ver minTransitionScreens).
+export type BiomeId = "classic" | "grimdark" | "badlands" | "cyberpunk" | "ega" | "cga" | "sea";
+
+export interface BiomeDef {
+  id: BiomeId;
+  label: string;
+  temp: number; // -1 frío .. +1 cálido
+  tech: number; // -1 natural .. +1 artificial/tecnológico
+  blocking?: boolean; // p.ej. mar: la estancia es mayoritariamente intransitable
+  debugColor: string; // solo para el mapa admin, no es arte de juego
+}
+
+export const BIOME_CATALOG: Record<BiomeId, BiomeDef> = {
+  classic: { id: "classic", label: "Clásico", temp: 0, tech: -0.2, debugColor: "#4caf6d" },
+  grimdark: { id: "grimdark", label: "Grimdark", temp: -0.1, tech: -0.1, debugColor: "#4a3f4f" },
+  badlands: { id: "badlands", label: "Badlands", temp: 0.8, tech: -0.1, debugColor: "#b8894a" },
+  cyberpunk: { id: "cyberpunk", label: "Cyberpunk", temp: 0, tech: 1, debugColor: "#c026d3" },
+  ega: { id: "ega", label: "EGA", temp: -0.3, tech: 0.6, debugColor: "#5555ff" },
+  cga: { id: "cga", label: "CGA", temp: -0.2, tech: 0.55, debugColor: "#55ffff" },
+  sea: { id: "sea", label: "Mar", temp: 0, tech: -0.2, blocking: true, debugColor: "#1f5fa8" },
+};
+
+export const BIOME_IDS = Object.keys(BIOME_CATALOG) as BiomeId[];
+
+export function biomeDistance(a: BiomeId, b: BiomeId): number {
+  if (a === b) return 0;
+  const da = BIOME_CATALOG[a];
+  const db = BIOME_CATALOG[b];
+  return Math.hypot(da.temp - db.temp, da.tech - db.tech);
+}
+
+// Cuántas estancias mínimas de transición hacen falta entre dos biomas: biomas
+// cercanos en el espacio (temp, tech) se resuelven en 1-2 estancias; biomas muy
+// distintos (p.ej. cyberpunk junto a badlands) exigen un pasillo más largo.
+const TRANSITION_SCALE = 4;
+export function minTransitionScreens(a: BiomeId, b: BiomeId): number {
+  if (a === b) return 0;
+  return Math.max(1, Math.round(biomeDistance(a, b) * TRANSITION_SCALE));
+}
+
+// De dónde viene el bioma resuelto para una estancia: "paint" = decretado por el
+// super admin (autoritativo, obliga transición en su borde); "procedural" = solo
+// cálculo natural (el motor puede decidir no forzar transición).
+export type BiomeSource = "paint" | "procedural";
+
+export interface ResolvedBiome {
+  biome: BiomeId;
+  source: BiomeSource;
+}
+
+// Mezcla en una estancia de transición: bioma dominante (screen.biome) + de dónde
+// viene, más el bioma vecino hacia el que se está mezclando y en qué proporción.
+// factor = 0 -> puro dominante, factor = 1 -> puro "from" (solo llega a 1 justo en
+// el borde con el bioma vecino). El cliente usa el mismo factor tanto para mezclar
+// tiles como para la intensidad del efecto gráfico del bioma vecino.
+export interface BiomeBlend {
+  from: BiomeId;
+  factor: number;
+}
+
 export interface MonsterState {
   id: string;
   kind: string;
@@ -118,7 +181,9 @@ export interface ScreenData {
   monsters: MonsterState[];
   items: ItemState[];
   exoticTier: ExoticTier;
-  biome: string;
+  biome: BiomeId;
+  biomeSource: BiomeSource;
+  biomeBlend: BiomeBlend | null;
   code: string; // huella alfanumérica del contenido de la estancia (tiles + elementos)
 }
 

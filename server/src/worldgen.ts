@@ -4,7 +4,6 @@ import {
   TileType,
   TILE_DEFS,
   BLOCKING_TILES,
-  BIOME_NAME,
   type ScreenData,
   type MonsterState,
   type ItemState,
@@ -12,6 +11,7 @@ import {
 } from "@roi/shared";
 import { makeRng, seedFromCoords } from "./rng.js";
 import { MONSTER_KINDS, ITEM_KINDS, pickWeighted } from "./content.js";
+import { classifyBiome } from "./biome.js";
 
 // Huella alfanumérica del contenido real de la estancia (qué tiles hay y qué
 // monstruos/objetos contiene), no solo de sus coordenadas — dos estancias con el
@@ -315,6 +315,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   else exoticTier = "epic";
 
   const code = hashContent(tiles, monsters, items);
-  const screen: ScreenData = { sx, sy, tiles, monsters, items, exoticTier, biome: BIOME_NAME, code };
+  const { biome, biomeSource, biomeBlend } = classifyBiome(sx, sy);
+  const screen: ScreenData = { sx, sy, tiles, monsters, items, exoticTier, biome, biomeSource, biomeBlend, code };
   return { screen, discoveryXp: Math.round(score) };
 }
