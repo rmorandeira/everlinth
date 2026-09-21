@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roi — Roguelike</title>
+  </head>
+  <body>
+    <div id="login">
+      <form id="login-form">
+        <h1>Roi</h1>
+        <input id="username" type="text" placeholder="Tu nombre" maxlength="20" autocomplete="off" required />
+        <button type="submit">Entrar</button>
+        <p id="login-error"></p>
+      </form>
+    </div>
+
+    <div id="game" class="hidden">
+      <canvas id="scene"></canvas>
+      <canvas id="weather"></canvas>
+      <div id="hud">
+        <div id="hp-bar"><div id="hp-fill"></div></div>
+        <div id="stats"></div>
+      </div>
+      <div id="discovery" class="hidden"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
