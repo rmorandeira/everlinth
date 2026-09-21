@@ -1,6 +1,5 @@
 import "./style.css";
 import {
-  DIRECTION_DELTA,
   type Direction,
   type ExoticTier,
   type InputState,
@@ -14,7 +13,6 @@ import {
 import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
 import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
-import { toScreen } from "./render/iso.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
 import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
 import { loadTileset } from "./render/tileset.js";
@@ -79,11 +77,17 @@ interface Transition {
 }
 let transition: Transition | null = null;
 
+// Las 4 direcciones son relativas a la pantalla (arriba/abajo/izq/dcha tal como se ven):
+// el "empuje" de cámara al cambiar de pantalla desliza en línea recta en esa dirección.
+const SCREEN_DIR_VECTOR: Record<Direction, { x: number; y: number }> = {
+  N: { x: 0, y: -1 },
+  S: { x: 0, y: 1 },
+  W: { x: -1, y: 0 },
+  E: { x: 1, y: 0 },
+};
+
 function dirVector(dir: Direction): { x: number; y: number } {
-  const { dx, dy } = DIRECTION_DELTA[dir];
-  const p = toScreen(dx, dy);
-  const mag = Math.hypot(p.x, p.y) || 1;
-  return { x: p.x / mag, y: p.y / mag };
+  return SCREEN_DIR_VECTOR[dir];
 }
 
 let conn: GameConnection | null = null;
@@ -251,7 +255,9 @@ function frame(now: number): void {
       const t = Math.min(1, (now - transition.start) / transition.duration);
       const ease = 1 - Math.pow(1 - t, 3);
       const vec = dirVector(transition.dir);
-      const K = Math.max(w, h) * 1.15;
+      // Distancia de deslizamiento = tamaño del canvas en el eje del movimiento,
+      // así la escena vieja y la nueva encajan sin huecos ni solapes en todo momento.
+      const K = vec.x !== 0 ? w : h;
 
       renderScene(bufferCtx, w, h, layout, tileset, currentScreen, othersDrawn, youDrawn, time);
 

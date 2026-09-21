@@ -202,12 +202,15 @@ export class GameServer {
       if (!player) continue;
       const input = conn.input;
 
+      // Las 4 teclas son direcciones relativas a la PANTALLA (arriba/abajo/izq/dcha
+      // tal como se ven), no ejes del mundo: como la cámara es isométrica, cada una
+      // se traduce a un movimiento diagonal en la rejilla del mundo.
       let dx = 0;
       let dy = 0;
-      if (input.N) dy -= 1;
-      if (input.S) dy += 1;
-      if (input.E) dx += 1;
-      if (input.W) dx -= 1;
+      if (input.N) { dx -= 1; dy -= 1; } // arriba en pantalla
+      if (input.S) { dx += 1; dy += 1; } // abajo en pantalla
+      if (input.W) { dx -= 1; dy += 1; } // izquierda en pantalla
+      if (input.E) { dx += 1; dy -= 1; } // derecha en pantalla
       if (dx === 0 && dy === 0) continue;
 
       const len = Math.hypot(dx, dy) || 1;
@@ -230,26 +233,46 @@ export class GameServer {
       else if (dy > 0) player.facing = "S";
       else if (dy < 0) player.facing = "N";
 
+      // Con cámara isométrica y controles relativos a pantalla, salir por una esquina
+      // del mundo (x e y a la vez) es lo que corresponde a cruzar un borde de pantalla.
+      // La rejilla abstracta de pantallas (sx,sy) sigue siendo un grid simple N/S/E/O;
+      // solo la posición dentro de la sala envuelve en ambos ejes a la vez.
+      const outLeft = player.x < 0;
+      const outRight = player.x >= SCREEN_WIDTH;
+      const outTop = player.y < 0;
+      const outBottom = player.y >= SCREEN_HEIGHT;
+
       let crossedDir: Direction | null = null;
       let nsx = player.sx;
       let nsy = player.sy;
-      if (player.x < 0) {
+
+      if (outTop && outLeft) {
+        crossedDir = "N";
+        nsy -= 1;
+        player.x += SCREEN_WIDTH;
+        player.y += SCREEN_HEIGHT;
+      } else if (outBottom && outRight) {
+        crossedDir = "S";
+        nsy += 1;
+        player.x -= SCREEN_WIDTH;
+        player.y -= SCREEN_HEIGHT;
+      } else if (outLeft && outBottom) {
+        crossedDir = "W";
         nsx -= 1;
         player.x += SCREEN_WIDTH;
-        crossedDir = "W";
-      } else if (player.x >= SCREEN_WIDTH) {
+        player.y -= SCREEN_HEIGHT;
+      } else if (outRight && outTop) {
+        crossedDir = "E";
         nsx += 1;
         player.x -= SCREEN_WIDTH;
-        crossedDir = "E";
-      }
-      if (player.y < 0) {
-        nsy -= 1;
         player.y += SCREEN_HEIGHT;
-        crossedDir = crossedDir ?? "N";
-      } else if (player.y >= SCREEN_HEIGHT) {
-        nsy += 1;
-        player.y -= SCREEN_HEIGHT;
-        crossedDir = crossedDir ?? "S";
+      } else {
+        // Solo un eje ha llegado al límite (p.ej. bloqueado por un obstáculo en el
+        // otro eje): lo dejamos pegado al borde hasta que se complete la esquina.
+        if (outLeft) player.x = 0;
+        else if (outRight) player.x = SCREEN_WIDTH - 0.001;
+        if (outTop) player.y = 0;
+        else if (outBottom) player.y = SCREEN_HEIGHT - 0.001;
       }
 
       if (crossedDir) {

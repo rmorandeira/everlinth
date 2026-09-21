@@ -10,11 +10,62 @@ import {
 import { makeRng, seedFromCoords } from "./rng.js";
 import { MONSTER_KINDS, ITEM_KINDS, pickWeighted } from "./content.js";
 
-const MID_X = Math.floor(SCREEN_WIDTH / 2);
-const MID_Y = Math.floor(SCREEN_HEIGHT / 2);
+// Con cámara isométrica + controles relativos a pantalla, las 4 salidas están en las
+// 4 ESQUINAS del mundo (no en la mitad de cada borde). El camino garantizado conecta
+// las esquinas mediante las dos diagonales de la sala.
+function bresenhamLine(x0: number, y0: number, x1: number, y1: number): Array<{ x: number; y: number }> {
+  const pts: Array<{ x: number; y: number }> = [];
+  let x = x0;
+  let y = y0;
+  const dx = Math.abs(x1 - x0);
+  const dy = -Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy;
+  for (;;) {
+    pts.push({ x, y });
+    if (x === x1 && y === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+  return pts;
+}
+
+const DIAGONAL_CELLS = new Set<string>();
+for (const p of bresenhamLine(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1)) DIAGONAL_CELLS.add(`${p.x},${p.y}`);
+for (const p of bresenhamLine(0, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 1, 0)) DIAGONAL_CELLS.add(`${p.x},${p.y}`);
+
+// El perímetro entero también queda siempre libre: el jugador puede tener que
+// deslizarse por un borde hasta alcanzar la esquina (salida), así que ningún
+// obstáculo puede bloquear ese recorrido.
+const PROTECTED_CELLS = new Set(DIAGONAL_CELLS);
+for (let x = 0; x < SCREEN_WIDTH; x++) {
+  PROTECTED_CELLS.add(`${x},0`);
+  PROTECTED_CELLS.add(`${x},${SCREEN_HEIGHT - 1}`);
+}
+for (let y = 0; y < SCREEN_HEIGHT; y++) {
+  PROTECTED_CELLS.add(`0,${y}`);
+  PROTECTED_CELLS.add(`${SCREEN_WIDTH - 1},${y}`);
+}
 
 function isOnCross(x: number, y: number): boolean {
-  return x === MID_X || y === MID_Y;
+  return PROTECTED_CELLS.has(`${x},${y}`);
+}
+
+function isCorner(x: number, y: number): boolean {
+  return (
+    (x === 0 && y === 0) ||
+    (x === SCREEN_WIDTH - 1 && y === 0) ||
+    (x === 0 && y === SCREEN_HEIGHT - 1) ||
+    (x === SCREEN_WIDTH - 1 && y === SCREEN_HEIGHT - 1)
+  );
 }
 
 export interface GeneratedScreen {
@@ -29,9 +80,11 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     Array.from({ length: SCREEN_WIDTH }, () => TileType.Grass)
   );
 
-  // Garantiza conectividad entre las 4 salidas: fila y columna centrales siempre transitables.
-  for (let x = 0; x < SCREEN_WIDTH; x++) tiles[MID_Y][x] = TileType.Path;
-  for (let y = 0; y < SCREEN_HEIGHT; y++) tiles[y][MID_X] = TileType.Path;
+  // Garantiza conectividad entre las 4 esquinas (salidas): las dos diagonales transitables.
+  for (const key of DIAGONAL_CELLS) {
+    const [x, y] = key.split(",").map(Number);
+    tiles[y][x] = TileType.Path;
+  }
 
   let hasWater = false;
   let hasBuilding = false;
@@ -97,10 +150,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   const walkableSpots: Array<{ x: number; y: number }> = [];
   for (let y = 0; y < SCREEN_HEIGHT; y++) {
     for (let x = 0; x < SCREEN_WIDTH; x++) {
-      const isExit =
-        (x === MID_X && (y === 0 || y === SCREEN_HEIGHT - 1)) ||
-        (y === MID_Y && (x === 0 || x === SCREEN_WIDTH - 1));
-      if (isExit) continue;
+      if (isCorner(x, y)) continue;
       const t = tiles[y][x];
       if (t === TileType.Grass || t === TileType.Path) walkableSpots.push({ x, y });
     }
