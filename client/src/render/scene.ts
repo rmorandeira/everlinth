@@ -53,6 +53,19 @@ function pick<T>(arr: T[], n: number): T {
   return arr[Math.floor(n * arr.length) % arr.length];
 }
 
+// Decoración puramente cosmética para el margen fuera de la sala (el que rellena
+// la pantalla hasta los bordes): mismo aspecto que los objetos reales, pero sin
+// colisión, sin persistir y sin sincronizarse con el servidor — solo para que ese
+// margen no se vea vacío frente a la sala jugable. Densidad aproximada a la de
+// "scatter" en TILE_DEFS (server/shared), determinista por celda.
+function pickEdgeDecoration(x: number, y: number): "tree" | "rock" | "cactus" | null {
+  const roll = hash2(x + 1000.25, y - 1000.5);
+  if (roll < 0.035) return "tree";
+  if (roll < 0.06) return "rock";
+  if (roll < 0.085) return "cactus";
+  return null;
+}
+
 function drawGroundTile(ctx: CanvasRenderingContext2D, tiles: Tileset, x: number, y: number, tile: TileType, time: number): void {
   const { x: cx, y: cy } = toScreen(x, y);
   const n = hash2(x, y);
@@ -249,17 +262,24 @@ export function renderScene(
   // El terreno se extiende más allá de la sala jugable (solo hierba decorativa, sin
   // colisión ni entidades) para que el paisaje llegue hasta los bordes de la pantalla,
   // sin bandas negras, sea cual sea la relación de aspecto de la ventana.
+  type Drawable = { depth: number; draw: () => void };
+  const drawables: Drawable[] = [];
+
   const EDGE_PAD = 18;
   for (let y = -EDGE_PAD; y < SCREEN_HEIGHT + EDGE_PAD; y++) {
     for (let x = -EDGE_PAD; x < SCREEN_WIDTH + EDGE_PAD; x++) {
       const inBounds = y >= 0 && y < screen.tiles.length && x >= 0 && x < screen.tiles[0].length;
       const tile = inBounds ? screen.tiles[y][x] : TileType.Grass;
       drawGroundTile(ctx, tiles, x, y, tile, time);
+
+      if (!inBounds) {
+        const deco = pickEdgeDecoration(x, y);
+        if (deco === "tree") drawables.push({ depth: x + y, draw: () => drawTree(ctx, tiles, x, y, time) });
+        else if (deco === "rock") drawables.push({ depth: x + y, draw: () => drawRock(ctx, tiles, x, y) });
+        else if (deco === "cactus") drawables.push({ depth: x + y, draw: () => drawCactus(ctx, tiles, x, y) });
+      }
     }
   }
-
-  type Drawable = { depth: number; draw: () => void };
-  const drawables: Drawable[] = [];
 
   for (let y = 0; y < screen.tiles.length; y++) {
     for (let x = 0; x < screen.tiles[y].length; x++) {

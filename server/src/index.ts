@@ -329,7 +329,7 @@ app.get("/admin", (_req, res) => {
     minimapCtx.strokeRect(vx, vy, vw, vh);
   }
 
-  minimap.addEventListener('click', (ev) => {
+  function jumpFromMinimap(ev) {
     const rect = minimap.getBoundingClientRect();
     const mcell = minimap.width / WORLD_SIZE;
     const mx = (ev.clientX - rect.left) * (minimap.width / rect.width) / mcell;
@@ -337,7 +337,19 @@ app.get("/admin", (_req, res) => {
     mapWrap.scrollLeft = mx * cell - mapWrap.clientWidth / 2;
     mapWrap.scrollTop = my * cell - mapWrap.clientHeight / 2;
     drawMinimap();
+  }
+
+  // Clicar salta ahí; clicar y arrastrar va moviendo la vista en vivo mientras se arrastra.
+  let minimapDragging = false;
+  minimap.addEventListener('mousedown', (ev) => {
+    minimapDragging = true;
+    jumpFromMinimap(ev);
   });
+  window.addEventListener('mousemove', (ev) => {
+    if (!minimapDragging) return;
+    jumpFromMinimap(ev);
+  });
+  window.addEventListener('mouseup', () => { minimapDragging = false; });
 
   mapWrap.addEventListener('scroll', () => drawMinimap());
 
