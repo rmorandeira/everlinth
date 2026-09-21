@@ -186,9 +186,15 @@ export function renderScene(
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   ctx.setTransform(layout.scale, 0, 0, layout.scale, layout.originX, layout.originY);
 
-  for (let y = 0; y < screen.tiles.length; y++) {
-    for (let x = 0; x < screen.tiles[y].length; x++) {
-      drawGroundTile(ctx, tiles, x, y, screen.tiles[y][x], time);
+  // El terreno se extiende más allá de la sala jugable (solo hierba decorativa, sin
+  // colisión ni entidades) para que el paisaje llegue hasta los bordes de la pantalla,
+  // sin bandas negras, sea cual sea la relación de aspecto de la ventana.
+  const EDGE_PAD = 18;
+  for (let y = -EDGE_PAD; y < SCREEN_HEIGHT + EDGE_PAD; y++) {
+    for (let x = -EDGE_PAD; x < SCREEN_WIDTH + EDGE_PAD; x++) {
+      const inBounds = y >= 0 && y < screen.tiles.length && x >= 0 && x < screen.tiles[0].length;
+      const tile = inBounds ? screen.tiles[y][x] : TileType.Grass;
+      drawGroundTile(ctx, tiles, x, y, tile, time);
     }
   }
 
