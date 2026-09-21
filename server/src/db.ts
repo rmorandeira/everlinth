@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import type { ScreenData, PlayerPrivateState, Direction } from "@roi/shared";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, "..", "world.db");
+// En producción (Railway) esto apunta a un volumen persistente, para que el
+// mundo no se borre en cada despliegue.
+const dbPath = process.env.DB_PATH ?? path.join(__dirname, "..", "world.db");
 export const db = new DatabaseSync(dbPath);
 db.exec("PRAGMA journal_mode = WAL");
 
