@@ -3,6 +3,16 @@
 // previa del backoffice (server/src/adminTrees.ts) — si se cambia uno, hay que
 // cambiar el otro a mano, porque el backoffice es JS embebido en una plantilla
 // HTML y no puede importar este módulo TypeScript del cliente.
+//
+// Rendimiento: la FORMA de un árbol (contornos, hojas) depende solo de
+// treeDefId + índice de instancia — es 100% determinista, nunca del tiempo ni
+// de dónde se plante. Por eso cada variante se "hornea" una única vez en un
+// canvas descartable (ver getTreeBitmap) y luego cada frame solo hace falta un
+// drawImage + una rotación barata para el balanceo del viento, en vez de
+// recalcular cientos de trazos y gradientes por árbol y por frame. Esto es lo
+// que hace viable un bosque con muchas copias del mismo árbol: por denso que
+// sea, el nº de bitmaps cacheados solo depende de cuántos TreeDef distintos
+// (× countPerTile) haya dado de alta el admin, no de cuántas veces se planten.
 import type { TreeDef, LeafShape } from "@roi/shared";
 import { TILE_W, TILE_H } from "./iso.js";
 
@@ -157,22 +167,15 @@ function branchGeometry(def: TreeDef, t: number, rng: () => number): { angle: nu
   return { angle, length };
 }
 
-// El viento apenas mueve el tronco, algo más las ramas, y bastante las hojas
-// (que además llevan un temblor de más frecuencia encima) — un árbol real se
-// mueve así, no entero de una pieza.
-function drawSingleTree(ctx: CanvasRenderingContext2D, def: TreeDef, cx: number, baseY: number, time: number): void {
+// Forma ESTÁTICA del árbol (sin balanceo de viento, que es animación — solo
+// `lean`, que es forma fija) alrededor del origen local (0,0) = base del
+// tronco. Se llama una única vez por variante, sobre el contexto de un canvas
+// descartable: ver getTreeBitmap.
+function drawTreeStatic(ctx: CanvasRenderingContext2D, def: TreeDef): void {
   const rng = mulberry32(def.seed);
-  const w = def.windSway / 100;
-  const windPhase = Math.sin(time * 1.3 + def.seed * 0.7);
-  const windFlutter = Math.sin(time * 3.4 + def.seed * 1.9);
-  const trunkSway = windPhase * w * 0.015;
-  const branchSway = (windPhase * 0.32 + windFlutter * 0.07) * w * def.branchFlexibility;
-  const leafShimmerBase = w * 0.09;
-  const leanAngle = def.lean * 0.4;
 
   ctx.save();
-  ctx.translate(cx, baseY);
-  ctx.rotate(trunkSway + leanAngle);
+  ctx.rotate(def.lean * 0.4);
 
   const trunkTopY = -def.height * 0.45;
   const trunkOutline = bentOutline(0, trunkTopY, def.trunkWidth, def.trunkWidth * 0.55, def.trunkTwist, 1.1, def.seed * 0.3, 8);
@@ -187,8 +190,8 @@ function drawSingleTree(ctx: CanvasRenderingContext2D, def: TreeDef, cx: number,
     const ex = Math.cos(angle) * length;
     const ey = Math.sin(angle) * length;
 
-    // Nudo en la unión: un bulto de corteza fijo al tronco (no gira con la
-    // rama) donde nace, para que el empalme no sea una línea recta pegada.
+    // Nudo en la unión: un bulto de corteza fijo al tronco donde nace la rama,
+    // para que el empalme no sea una línea recta pegada.
     const knotR = def.trunkWidth * (0.24 + rng() * 0.1);
     ctx.beginPath();
     ctx.ellipse(0, attachY, knotR, knotR * 0.8, 0, 0, Math.PI * 2);
@@ -197,7 +200,6 @@ function drawSingleTree(ctx: CanvasRenderingContext2D, def: TreeDef, cx: number,
 
     ctx.save();
     ctx.translate(0, attachY);
-    ctx.rotate(branchSway * (0.6 + rng() * 0.8));
 
     const branchOutline = bentOutline(ex, ey, def.trunkWidth * 0.4, def.trunkWidth * 0.12, def.branchTwist, 1.6, def.seed * 1.7 + i * 2.1, 6);
     fillOutline(ctx, branchOutline, shade(def.trunkColor, -0.3), shade(def.trunkColor, 0.35));
@@ -217,15 +219,11 @@ function drawSingleTree(ctx: CanvasRenderingContext2D, def: TreeDef, cx: number,
       const sy = Math.sin(sAngle) * subLen;
 
       ctx.save();
-      ctx.rotate(branchSway * (1.4 * kt + 0.3) * (0.7 + rng() * 0.4));
-
       const subOutline = bentOutline(sx, sy, def.trunkWidth * 0.14, def.trunkWidth * 0.05, def.branchTwist * 0.7, 1.8, def.seed * 3.1 + i * 5 + k, 5);
       fillOutline(ctx, subOutline, shade(def.trunkColor, -0.25), shade(def.trunkColor, 0.3));
 
       ctx.save();
       ctx.translate(sx, sy);
-      const leafShimmer = Math.sin(time * 7.5 + def.seed * 2.3 + i * 1.7 + k) * leafShimmerBase;
-      ctx.rotate(leafShimmer);
       drawLeafCluster(ctx, def, rng, dotsPerSub);
       ctx.restore();
 
@@ -236,6 +234,53 @@ function drawSingleTree(ctx: CanvasRenderingContext2D, def: TreeDef, cx: number,
   }
 
   ctx.restore();
+}
+
+interface TreeBitmap {
+  canvas: HTMLCanvasElement;
+  anchorX: number;
+  anchorY: number;
+}
+
+// Cacheado por "treeDefId:índice de instancia" — no por instancia plantada en
+// el mundo. Todas las copias de un mismo árbol en el mismo índice (p.ej. la
+// 2ª copia de countPerTile) son geométricamente idénticas estén donde estén,
+// así que un bosque con miles de copias solo genera tantos bitmaps como
+// (nº de TreeDef distintos) × countPerTile.
+const bitmapCache = new Map<string, TreeBitmap>();
+
+function getTreeBitmap(defId: string, instanceIndex: number, instanceDef: TreeDef): TreeBitmap {
+  const key = `${defId}:${instanceIndex}`;
+  const cached = bitmapCache.get(key);
+  if (cached) return cached;
+
+  // Caja generosa: el alcance máximo (rama + sub-rama + hoja) no pasa de
+  // ~0.85×height desde la base en ninguna dirección; el margen de sobra
+  // absorbe además el `lean` (que solo rota esa extensión, no la agranda).
+  const halfW = Math.max(8, instanceDef.height * 1.05);
+  const topPad = Math.max(8, instanceDef.height * 1.35);
+  const bottomPad = Math.max(4, instanceDef.height * 0.25);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(halfW * 2);
+  canvas.height = Math.ceil(topPad + bottomPad);
+  const octx = canvas.getContext("2d")!;
+  octx.translate(halfW, topPad);
+  drawTreeStatic(octx, instanceDef);
+
+  const entry: TreeBitmap = { canvas, anchorX: halfW, anchorY: topPad };
+  bitmapCache.set(key, entry);
+  return entry;
+}
+
+// Balanceo aproximado de TODO el árbol como una sola pieza (no rama a rama):
+// mucho más barato que animar cada tramo por separado, y a la distancia/zoom
+// habituales del juego se lee igual de bien como "el árbol se mece".
+function computeSwayAngle(def: TreeDef, time: number): number {
+  const w = (def.windSway / 100) * def.branchFlexibility;
+  const windPhase = Math.sin(time * 1.3 + def.seed * 0.7);
+  const windFlutter = Math.sin(time * 3.4 + def.seed * 1.9);
+  return (windPhase * 0.06 + windFlutter * 0.015) * w;
 }
 
 // Posición de cada copia dentro del área tileSpan×tileSpan: usa la guardada en
@@ -282,6 +327,12 @@ export function drawPlacedTree(ctx: CanvasRenderingContext2D, def: TreeDef, cx: 
             trunkWidth: def.trunkWidth * (0.8 + rng() * 0.35),
             branchCount: Math.max(1, def.branchCount + Math.round((rng() - 0.5) * 3)),
           };
-    drawSingleTree(ctx, instanceDef, cx + o.x * TILE_W, cy + o.y * TILE_H, time);
+    const bitmap = getTreeBitmap(def.id, i, instanceDef);
+    const sway = computeSwayAngle(instanceDef, time);
+    ctx.save();
+    ctx.translate(cx + o.x * TILE_W, cy + o.y * TILE_H);
+    ctx.rotate(sway);
+    ctx.drawImage(bitmap.canvas, -bitmap.anchorX, -bitmap.anchorY);
+    ctx.restore();
   });
 }
