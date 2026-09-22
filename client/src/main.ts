@@ -16,7 +16,7 @@ import {
 } from "@roi/shared";
 import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
-import { setupGamepad } from "./gamepad.js";
+import { setupGamepad, GAMEPAD_BUTTON_LABELS, START_BUTTON } from "./gamepad.js";
 import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
 import { toScreen, TILE_H } from "./render/iso.js";
 import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
@@ -36,6 +36,9 @@ const loginEl = document.getElementById("login") as HTMLDivElement;
 const loginForm = document.getElementById("login-form") as HTMLFormElement;
 const usernameInput = document.getElementById("username") as HTMLInputElement;
 const loginError = document.getElementById("login-error") as HTMLParagraphElement;
+const submitBtn = loginForm.querySelector("button[type=submit]") as HTMLButtonElement;
+const gamepadKeyboardEl = document.getElementById("gamepad-keyboard") as HTMLDivElement;
+const gamepadHintEl = document.getElementById("gamepad-hint") as HTMLParagraphElement;
 const gameEl = document.getElementById("game") as HTMLDivElement;
 const sceneCanvas = document.getElementById("scene") as HTMLCanvasElement;
 const weatherCanvas = document.getElementById("weather") as HTMLCanvasElement;
@@ -226,6 +229,7 @@ function handleServerMessage(msg: ServerMessage): void {
       loginEl.classList.add("hidden");
       gameEl.classList.remove("hidden");
       updateHud();
+      refreshGamepadUi();
       break;
     case "screen":
       if (currentScreen && (currentScreen.sx !== msg.screen.sx || currentScreen.sy !== msg.screen.sy)) {
@@ -287,6 +291,127 @@ function handleServerMessage(msg: ServerMessage): void {
   }
 }
 
+// ---- Mando: teclado en pantalla e hints de botón en la UI ----
+// Solo hace falta en la pantalla de login (el único formulario de texto del
+// juego); el resto de la UI son HUD de solo lectura, sin más botones.
+const KEY_ROWS: string[][] = [
+  ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+  ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+  ["A", "S", "D", "F", "G", "H", "J", "K", "L", "Ñ"],
+  ["Z", "X", "C", "V", "B", "N", "M", "⌫", "␣", "OK"],
+];
+
+let gamepadConnected = false;
+let keySelRow = 0;
+let keySelCol = 0;
+let prevGamepadDirs: InputState = { N: false, S: false, E: false, W: false };
+const submitBtnBaseText = submitBtn.textContent ?? "Entrar";
+
+function updateKeyboardSelection(): void {
+  gamepadKeyboardEl.querySelectorAll(".kb-row").forEach((rowEl, r) => {
+    rowEl.querySelectorAll(".kb-key").forEach((keyEl, c) => {
+      keyEl.classList.toggle("active", r === keySelRow && c === keySelCol);
+    });
+  });
+}
+
+function moveKeySelection(dir: Direction): void {
+  if (dir === "N") keySelRow = (keySelRow - 1 + KEY_ROWS.length) % KEY_ROWS.length;
+  else if (dir === "S") keySelRow = (keySelRow + 1) % KEY_ROWS.length;
+  keySelCol = Math.min(keySelCol, KEY_ROWS[keySelRow].length - 1);
+  if (dir === "W") keySelCol = (keySelCol - 1 + KEY_ROWS[keySelRow].length) % KEY_ROWS[keySelRow].length;
+  else if (dir === "E") keySelCol = (keySelCol + 1) % KEY_ROWS[keySelRow].length;
+  updateKeyboardSelection();
+}
+
+function activateKey(key: string): void {
+  if (key === "⌫") usernameInput.value = usernameInput.value.slice(0, -1);
+  else if (key === "␣") usernameInput.value = (usernameInput.value + " ").slice(0, 20);
+  else if (key === "OK") loginForm.requestSubmit();
+  else usernameInput.value = (usernameInput.value + key).slice(0, 20);
+}
+
+function buildGamepadKeyboard(): void {
+  gamepadKeyboardEl.innerHTML = "";
+  KEY_ROWS.forEach((row, r) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "kb-row";
+    row.forEach((key, c) => {
+      const keyEl = document.createElement("button");
+      keyEl.type = "button";
+      keyEl.className = "kb-key";
+      keyEl.textContent = key;
+      keyEl.addEventListener("click", () => {
+        keySelRow = r;
+        keySelCol = c;
+        updateKeyboardSelection();
+        activateKey(key);
+      });
+      rowEl.appendChild(keyEl);
+    });
+    gamepadKeyboardEl.appendChild(rowEl);
+  });
+  updateKeyboardSelection();
+}
+buildGamepadKeyboard();
+
+// Se llama al conectar/desconectar el mando y al mostrar/ocultar el login:
+// el teclado de apoyo solo tiene sentido con mando Y en la pantalla de login,
+// y el hint de qué botón pulsar solo tiene sentido con mando detectado.
+function refreshGamepadUi(): void {
+  const onLogin = !loginEl.classList.contains("hidden");
+  gamepadKeyboardEl.classList.toggle("hidden", !(gamepadConnected && onLogin));
+  gamepadHintEl.classList.toggle("hidden", !(gamepadConnected && onLogin));
+  if (gamepadConnected && onLogin) {
+    gamepadHintEl.textContent = `Mando detectado — mueve el stick/D-pad para elegir letra, (${GAMEPAD_BUTTON_LABELS[0]}) selecciona, (${GAMEPAD_BUTTON_LABELS[2]}) borra, (${GAMEPAD_BUTTON_LABELS[START_BUTTON]}) envía.`;
+  }
+  submitBtn.textContent = gamepadConnected ? `${submitBtnBaseText} (${GAMEPAD_BUTTON_LABELS[START_BUTTON]})` : submitBtnBaseText;
+}
+
+function handleGamepadConnectedChange(connected: boolean): void {
+  gamepadConnected = connected;
+  refreshGamepadUi();
+}
+
+function handleGamepadDirs(dirs: InputState): void {
+  if (gamepadConnected && !loginEl.classList.contains("hidden")) {
+    (Object.keys(dirs) as Array<keyof InputState>).forEach((d) => {
+      if (dirs[d] && !prevGamepadDirs[d]) moveKeySelection(d);
+    });
+    prevGamepadDirs = dirs;
+    return;
+  }
+  prevGamepadDirs = dirs;
+  conn?.send({ type: "input", dirs });
+}
+
+function handleGamepadAttack(): void {
+  if (gamepadConnected && !loginEl.classList.contains("hidden")) {
+    activateKey(KEY_ROWS[keySelRow][keySelCol]);
+    return;
+  }
+  conn?.send({ type: "attack" });
+}
+
+function handleGamepadPickup(): void {
+  if (gamepadConnected && !loginEl.classList.contains("hidden")) {
+    activateKey("⌫");
+    return;
+  }
+  conn?.send({ type: "pickup" });
+}
+
+function handleGamepadStart(): void {
+  if (!loginEl.classList.contains("hidden")) loginForm.requestSubmit();
+}
+
+function handleRightStick(dx: number, dy: number): void {
+  cursorPx = {
+    x: Math.max(0, Math.min(sceneCanvas.width, cursorPx.x + dx)),
+    y: Math.max(0, Math.min(sceneCanvas.height, cursorPx.y + dy)),
+  };
+}
+
 function resetToLogin(): void {
   conn?.close();
   conn = null;
@@ -297,6 +422,7 @@ function resetToLogin(): void {
   transition = null;
   gameEl.classList.add("hidden");
   loginEl.classList.remove("hidden");
+  refreshGamepadUi();
 }
 
 loginForm.addEventListener("submit", async (ev) => {
@@ -321,11 +447,7 @@ setupInput(
   () => conn?.send({ type: "pickup" })
 );
 
-setupGamepad(
-  (dirs: InputState) => conn?.send({ type: "input", dirs }),
-  () => conn?.send({ type: "attack" }),
-  () => conn?.send({ type: "pickup" })
-);
+setupGamepad(handleGamepadDirs, handleGamepadAttack, handleGamepadPickup, handleGamepadStart, handleRightStick, handleGamepadConnectedChange);
 
 let lastTime = performance.now();
 function frame(now: number): void {
