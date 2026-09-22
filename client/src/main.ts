@@ -398,6 +398,7 @@ function frame(now: number): void {
       visionSettings.sharpFraction,
       visionSettings.vibration,
       visionSettings.ellipseScale,
+      visionSettings.blurStrength,
       fogCenter.x,
       fogCenter.y
     );

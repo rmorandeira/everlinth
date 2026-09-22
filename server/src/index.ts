@@ -40,11 +40,13 @@ app.post("/admin/settings/vision", (req, res) => {
   const body = req.body as Partial<VisionFogSettings>;
   const ellipseScale = Number(body.ellipseScale ?? 1);
   const sharpFraction = Number(body.sharpFraction);
+  const blurStrength = Number(body.blurStrength ?? 1);
   const vibration = Number(body.vibration);
   const chromaticAberration = Number(body.chromaticAberration ?? 0);
   if (
     !Number.isFinite(ellipseScale) ||
     !Number.isFinite(sharpFraction) ||
+    !Number.isFinite(blurStrength) ||
     !Number.isFinite(vibration) ||
     !Number.isFinite(chromaticAberration)
   ) {
@@ -54,6 +56,7 @@ app.post("/admin/settings/vision", (req, res) => {
   const clamped: VisionFogSettings = {
     ellipseScale: Math.min(2, Math.max(0.2, ellipseScale)),
     sharpFraction: Math.min(0.98, Math.max(0.03, sharpFraction)),
+    blurStrength: Math.min(2, Math.max(0, blurStrength)),
     vibration: Math.min(6, Math.max(0, vibration)),
     chromaticAberration: Math.min(1, Math.max(0, chromaticAberration)),
   };
@@ -205,6 +208,7 @@ app.get("/admin", (_req, res) => {
     <h2>Niebla de visión (global, afecta a todos)</h2>
     <div class="stat">Tamaño de elipse: <input id="fogEllipse" type="range" min="20" max="200" value="100"> <span id="fogEllipseLabel"></span></div>
     <div class="stat">Tamaño: <input id="fogSize" type="range" min="3" max="98" value="72"> <span id="fogSizeLabel"></span></div>
+    <div class="stat">Fuerza del difuminado: <input id="fogBlur" type="range" min="0" max="200" value="100"> <span id="fogBlurLabel"></span></div>
     <div class="stat">Vibración: <input id="fogVibration" type="range" min="0" max="600" value="100"> <span id="fogVibrationLabel"></span></div>
     <div class="stat">Aberración cromática: <input id="chromaAb" type="range" min="0" max="100" value="0"> <span id="chromaAbLabel"></span></div>
     <div class="stat" style="color:#666;font-size:11px;">Solo afecta a la escena del juego, no al HUD.</div>
@@ -563,6 +567,8 @@ app.get("/admin", (_req, res) => {
   const fogEllipseLabel = document.getElementById('fogEllipseLabel');
   const fogSizeInput = document.getElementById('fogSize');
   const fogSizeLabel = document.getElementById('fogSizeLabel');
+  const fogBlurInput = document.getElementById('fogBlur');
+  const fogBlurLabel = document.getElementById('fogBlurLabel');
   const fogVibrationInput = document.getElementById('fogVibration');
   const fogVibrationLabel = document.getElementById('fogVibrationLabel');
   const chromaAbInput = document.getElementById('chromaAb');
@@ -571,6 +577,7 @@ app.get("/admin", (_req, res) => {
   function updateVisionLabels() {
     fogEllipseLabel.textContent = fogEllipseInput.value + '%';
     fogSizeLabel.textContent = fogSizeInput.value + '%';
+    fogBlurLabel.textContent = fogBlurInput.value + '%';
     fogVibrationLabel.textContent = fogVibrationInput.value + '%';
     chromaAbLabel.textContent = chromaAbInput.value + '%';
   }
@@ -580,6 +587,7 @@ app.get("/admin", (_req, res) => {
     const s = await res.json();
     fogEllipseInput.value = Math.round((s.ellipseScale ?? 1) * 100);
     fogSizeInput.value = Math.round(s.sharpFraction * 100);
+    fogBlurInput.value = Math.round((s.blurStrength ?? 1) * 100);
     fogVibrationInput.value = Math.round(s.vibration * 100);
     chromaAbInput.value = Math.round(s.chromaticAberration * 100);
     updateVisionLabels();
@@ -593,13 +601,14 @@ app.get("/admin", (_req, res) => {
       body: JSON.stringify({
         ellipseScale: Number(fogEllipseInput.value) / 100,
         sharpFraction: Number(fogSizeInput.value) / 100,
+        blurStrength: Number(fogBlurInput.value) / 100,
         vibration: Number(fogVibrationInput.value) / 100,
         chromaticAberration: Number(chromaAbInput.value) / 100,
       }),
     });
   }
 
-  for (const input of [fogEllipseInput, fogSizeInput, fogVibrationInput, chromaAbInput]) {
+  for (const input of [fogEllipseInput, fogSizeInput, fogBlurInput, fogVibrationInput, chromaAbInput]) {
     input.addEventListener('input', updateVisionLabels);
     input.addEventListener('change', saveVisionSettings);
   }

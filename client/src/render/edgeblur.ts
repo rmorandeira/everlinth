@@ -36,10 +36,16 @@ function drawMask(w: number, h: number, sharpFraction: number, ellipseScale: num
   ctx.clearRect(0, 0, w, h);
   ctx.save();
   ctx.translate(centerX, centerY);
-  // 1 unidad = borde de la elipse inscrita en la pantalla, multiplicado por
-  // ellipseScale: <1 la encoge (niebla más agresiva, entra antes), >1 la agranda
-  // (puede sacar la niebla fuera de la pantalla, dejando todo nítido).
-  ctx.scale((w / 2) * ellipseScale, (h / 2) * ellipseScale);
+  // 1 unidad = distancia del centro (el jugador) al borde MÁS LEJANO de la
+  // pantalla en cada eje, multiplicada por ellipseScale. Al fijar el centro
+  // en el jugador (no en el centro del canvas) hay que recalcular esto cada
+  // vez: si se usara siempre la mitad del canvas, en cuanto el jugador se
+  // aleja del centro el lado opuesto queda a más de 1 unidad y se difumina
+  // del todo aunque siga dentro de la pantalla — la niebla "se comería" la
+  // pantalla entera según el jugador se moviera hacia un borde.
+  const halfW = Math.max(centerX, w - centerX);
+  const halfH = Math.max(centerY, h - centerY);
+  ctx.scale(halfW * ellipseScale, halfH * ellipseScale);
 
   const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
   gradient.addColorStop(0, "rgba(255,255,255,0)");
@@ -93,6 +99,7 @@ export function applyEdgeBlur(
   sharpFractionBase: number = SHARP_FRACTION,
   vibration: number = 1,
   ellipseScale: number = 1,
+  blurStrength: number = 1,
   centerX: number = width / 2,
   centerY: number = height / 2
 ): void {
@@ -102,7 +109,7 @@ export function applyEdgeBlur(
   const sharpFraction = sharpFractionBase + organicJitter(time, 0.9, 2.6, 0.4) * RADIUS_JITTER * vibration;
   drawMask(width, height, sharpFraction, ellipseScale, centerX, centerY);
 
-  const blurPx = Math.max(2, BLUR_PX + organicJitter(time, 2.2, 7.3, 1.7) * BLUR_JITTER * vibration);
+  const blurPx = Math.max(0.5, (BLUR_PX + organicJitter(time, 2.2, 7.3, 1.7) * BLUR_JITTER * vibration) * blurStrength);
   smallCtx!.clearRect(0, 0, smallCanvas!.width, smallCanvas!.height);
   smallCtx!.filter = `blur(${blurPx / DOWNSCALE}px)`;
   smallCtx!.drawImage(source, 0, 0, smallCanvas!.width, smallCanvas!.height);

@@ -18,6 +18,7 @@ export const WORLD_MAX = Math.ceil(WORLD_SIZE / 2) - 1;
 export interface VisionFogSettings {
   ellipseScale: number; // tamaño de la propia elipse de niebla, relativo a la pantalla (1 = inscrita justo en el borde)
   sharpFraction: number; // 0..1: fracción del radio elíptico (ya escalado por ellipseScale) que queda nítida
+  blurStrength: number; // 0..2: intensidad (radio en px) del desenfoque fuera de la zona nítida; 0 = casi sin difuminar, 1 = normal
   vibration: number; // 0..1: cuánto varía el difuminado (0 = estático, un valor de niebla fijo; más alto = más "respira"/tiembla)
   chromaticAberration: number; // 0..1: separación de canales de color en los bordes de la escena (0 = desactivada)
 }
@@ -25,6 +26,7 @@ export interface VisionFogSettings {
 export const DEFAULT_VISION_SETTINGS: VisionFogSettings = {
   ellipseScale: 1,
   sharpFraction: 0.72,
+  blurStrength: 1,
   vibration: 1,
   chromaticAberration: 0,
 };
