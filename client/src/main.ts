@@ -127,6 +127,19 @@ function worldToCanvasPx(x: number, y: number): { x: number; y: number } {
   };
 }
 
+// Centro del cuerpo del personaje (no los pies ni la mano): mismo anclaje de
+// pies que drawStickGuy (scene.ts, baseY = toScreen().y + TILE_H/2 - 2) menos
+// media altura del sprite ya escalado, para apuntar aprox. al torso.
+function worldToCanvasCenterPx(x: number, y: number): { x: number; y: number } {
+  const p = toScreen(x, y);
+  const BASE_Y_OFFSET = TILE_H / 2 - 2;
+  const BODY_CENTER_Y_OFFSET = BASE_Y_OFFSET - 10;
+  return {
+    x: p.x * layout.scale + layout.originX,
+    y: (p.y + BODY_CENTER_Y_OFFSET) * layout.scale + layout.originY,
+  };
+}
+
 let you: PlayerPrivateState | null = null;
 let currentScreen: ScreenData | null = null;
 let currentNeighbors: NeighborTiles[] = [];
@@ -375,7 +388,19 @@ function frame(now: number): void {
     // antes que cualquier efecto de color — así el tinte de día/noche se aplica
     // por igual a la zona nítida y a la difuminada, en vez de quedar él mismo
     // borroso en los bordes.
-    applyEdgeBlur(sceneCtx, sceneCanvas, w, h, time, visionSettings.sharpFraction, visionSettings.vibration, visionSettings.ellipseScale);
+    const fogCenter = worldToCanvasCenterPx(youDisplay.x, youDisplay.y);
+    applyEdgeBlur(
+      sceneCtx,
+      sceneCanvas,
+      w,
+      h,
+      time,
+      visionSettings.sharpFraction,
+      visionSettings.vibration,
+      visionSettings.ellipseScale,
+      fogCenter.x,
+      fogCenter.y
+    );
 
     const dn = getDayNight();
     applyDayNightOverlay(sceneCtx, w, h, dn);

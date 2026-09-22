@@ -1,7 +1,8 @@
-// "Niebla de visión": la zona central de juego (donde está la sala activa) queda
-// nítida, y el terreno de las estancias vecinas que rellena la pantalla hacia el
-// norte/sur/este/oeste se difumina progresivamente hasta el borde. Es un
-// post-proceso sobre el frame ya compuesto (igual que
+// "Niebla de visión": una zona elíptica alrededor del jugador (no del centro
+// de la pantalla) queda nítida, y el resto se difumina progresivamente hacia
+// el borde. El centro de la elipse se recalcula cada frame a partir de la
+// posición en pantalla del jugador, así que la niebla lo sigue al moverse. Es
+// un post-proceso sobre el frame ya compuesto (igual que
 // applyHeatShimmer/applyDayNightOverlay), no toca cómo se genera el terreno.
 
 const SHARP_FRACTION = 0.72; // fracción del radio elíptico que queda nítida: cuanto más alta, más pegada al borde queda la niebla
@@ -30,11 +31,11 @@ function organicJitter(time: number, speedA: number, speedB: number, phase: numb
 // recto, y ya cubre las esquinas sin necesidad de tratarlas aparte. Se redibuja
 // cada frame con el radio "respirando" un poco, así el límite nítido/borroso
 // tiembla en vez de ser una viñeta fija.
-function drawMask(w: number, h: number, sharpFraction: number, ellipseScale: number): void {
+function drawMask(w: number, h: number, sharpFraction: number, ellipseScale: number, centerX: number, centerY: number): void {
   const ctx = maskCtx!;
   ctx.clearRect(0, 0, w, h);
   ctx.save();
-  ctx.translate(w / 2, h / 2);
+  ctx.translate(centerX, centerY);
   // 1 unidad = borde de la elipse inscrita en la pantalla, multiplicado por
   // ellipseScale: <1 la encoge (niebla más agresiva, entra antes), >1 la agranda
   // (puede sacar la niebla fuera de la pantalla, dejando todo nítido).
@@ -91,13 +92,15 @@ export function applyEdgeBlur(
   time: number,
   sharpFractionBase: number = SHARP_FRACTION,
   vibration: number = 1,
-  ellipseScale: number = 1
+  ellipseScale: number = 1,
+  centerX: number = width / 2,
+  centerY: number = height / 2
 ): void {
   if (width <= 0 || height <= 0) return;
   ensureBuffers(width, height);
 
   const sharpFraction = sharpFractionBase + organicJitter(time, 0.9, 2.6, 0.4) * RADIUS_JITTER * vibration;
-  drawMask(width, height, sharpFraction, ellipseScale);
+  drawMask(width, height, sharpFraction, ellipseScale, centerX, centerY);
 
   const blurPx = Math.max(2, BLUR_PX + organicJitter(time, 2.2, 7.3, 1.7) * BLUR_JITTER * vibration);
   smallCtx!.clearRect(0, 0, smallCanvas!.width, smallCanvas!.height);
