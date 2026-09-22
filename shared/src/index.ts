@@ -194,12 +194,24 @@ export interface ItemState {
   takenBy: string | null;
 }
 
+// Un árbol generado (ver TreeDef) plantado en el mundo: solo guarda QUÉ árbol y
+// DÓNDE, igual que un TreeDef en el backoffice — la forma real (con sus
+// countPerTile copias e instanceOffsets) se recalcula al dibujar, tanto en el
+// cliente del juego como en la vista previa del backoffice, a partir del mismo
+// TreeDef. Puramente decorativo por ahora: no bloquea movimiento.
+export interface PlacedTree {
+  treeDefId: string;
+  x: number;
+  y: number;
+}
+
 export interface ScreenData {
   sx: number;
   sy: number;
   tiles: TileType[][]; // [y][x]
   monsters: MonsterState[];
   items: ItemState[];
+  placedTrees: PlacedTree[];
   exoticTier: ExoticTier;
   biome: BiomeId;
   biomeSource: BiomeSource;
@@ -215,7 +227,76 @@ export interface NeighborTiles {
   sx: number;
   sy: number;
   tiles: TileType[][];
+  placedTrees: PlacedTree[];
 }
+
+// Definición de un "árbol" generado proceduralmente desde el backoffice (ver
+// /admin/trees): un tronco con varias ramas principales terminadas en racimos
+// de hojas. El mismo objeto se usa para generar la vista previa en el backoffice
+// y, más adelante, para dibujar el árbol en el juego — por eso vive en shared.
+// Silueta plana de la hoja individual (no un punto redondo): cada instancia se
+// dibuja con su propio ángulo aleatorio, para que no queden todas "de cara" al
+// espectador como una calcomanía repetida.
+export type LeafShape = "round" | "oval" | "pointed" | "needle";
+export const LEAF_SHAPES: LeafShape[] = ["round", "oval", "pointed", "needle"];
+
+// Silueta general que forman las ramas principales: cónica (conífera), redonda
+// (la más "genérica"), o ancha/extendida (copa abierta, poco alta).
+export type CanopyShape = "round" | "triangular" | "wide";
+export const CANOPY_SHAPES: CanopyShape[] = ["round", "triangular", "wide"];
+
+export interface TreeDef {
+  id: string;
+  name: string;
+  height: number; // alto total, px lógicos
+  trunkWidth: number; // ancho del tronco en la base, px lógicos
+  branchCount: number; // nº de ramas principales que salen del tronco
+  leafCount: number; // nº total de racimos de hoja, repartidos entre ramas
+  leafShape: LeafShape;
+  canopyShape: CanopyShape;
+  branchStartHeight: number; // 0..1: a qué altura del tronco arranca la primera rama (1 = todas nacen de la copa, como antes)
+  tileSpan: 1 | 2 | 4; // cuántos tiles de lado ocupa (1x1, 2x2 o 4x4) — para árboles grandes que no caben en un solo tile
+  countPerTile: number; // cuántas copias de este árbol se colocan en una misma estancia al plantarlo (1 = una sola)
+  // Posición de cada copia dentro del área tileSpan×tileSpan, relativa al centro
+  // (arrastrable una a una en el backoffice). Si hay menos entradas que
+  // countPerTile, las que faltan se reparten solas de forma determinista.
+  instanceOffsets: Array<{ x: number; y: number }>;
+  lean: number; // -1..1: inclinación fija de todo el árbol hacia un lado (forma, no viento) — negativo = izquierda
+  branchFlexibility: number; // 0..1: cuánto responden las ramas al viento, independiente de windSway
+  allowedBiomes: BiomeId[]; // en qué biomas puede plantarse este árbol al generar el mundo; [] = cualquiera
+  leafColorSun: string; // hex: hojas más expuestas (más claras)
+  leafColorShade: string; // hex: hojas menos expuestas (más oscuras)
+  trunkColor: string; // hex
+  windSway: number; // 0..1: amplitud del balanceo con el viento — sobre todo hojas, algo ramas, casi nada tronco
+  trunkTwist: number; // 0..1: cuánto se curva/retuerce el tronco (forma, no animación)
+  branchTwist: number; // 0..1: cuánto se curva/retuerce cada rama, independiente del tronco
+  canopyWidth: number; // 0..1: abanico de las ramas principales y ángulo de sus bifurcaciones (más ancho = copa más abierta)
+  seed: number; // fija la forma (ramas/hojas) para que sea reproducible
+}
+
+export const DEFAULT_TREE_DEF: Omit<TreeDef, "id" | "name"> = {
+  height: 90,
+  trunkWidth: 10,
+  branchCount: 4,
+  leafCount: 24,
+  leafShape: "oval",
+  canopyShape: "round",
+  branchStartHeight: 0.55,
+  tileSpan: 1,
+  countPerTile: 1,
+  instanceOffsets: [],
+  lean: 0,
+  branchFlexibility: 0.7,
+  allowedBiomes: [],
+  leafColorSun: "#7bc95e",
+  leafColorShade: "#2f6b34",
+  trunkColor: "#6b4a2f",
+  windSway: 0.4,
+  trunkTwist: 0.2,
+  branchTwist: 0.35,
+  canopyWidth: 0.5,
+  seed: 1,
+};
 
 export interface PlayerPublicState {
   username: string;

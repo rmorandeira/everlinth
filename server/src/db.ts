@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ScreenData, PlayerPrivateState, Direction, BiomeId } from "@roi/shared";
+import type { ScreenData, PlayerPrivateState, Direction, BiomeId, TreeDef } from "@roi/shared";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // En producción (Railway) esto apunta a un volumen persistente, para que el
@@ -17,6 +17,7 @@ db.exec(`
     tiles TEXT NOT NULL,
     monsters TEXT NOT NULL,
     items TEXT NOT NULL,
+    placed_trees TEXT NOT NULL DEFAULT '[]',
     exotic_tier TEXT NOT NULL,
     biome TEXT NOT NULL DEFAULT 'badlands',
     biome_source TEXT NOT NULL DEFAULT 'procedural',
@@ -57,6 +58,36 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- Árboles generados proceduralmente desde /admin/trees. Guarda solo los
+  -- parámetros (ver TreeDef en shared): la forma se recalcula a partir de ellos
+  -- tanto en la vista previa del backoffice como donde se acabe dibujando en el
+  -- mundo, así que no hay imágenes que versionar aquí.
+  CREATE TABLE IF NOT EXISTS tree_defs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    height REAL NOT NULL,
+    trunk_width REAL NOT NULL,
+    branch_count INTEGER NOT NULL,
+    leaf_count INTEGER NOT NULL,
+    leaf_shape TEXT NOT NULL DEFAULT 'oval',
+    canopy_shape TEXT NOT NULL DEFAULT 'round',
+    branch_start_height REAL NOT NULL DEFAULT 0.55,
+    tile_span INTEGER NOT NULL DEFAULT 1,
+    count_per_tile INTEGER NOT NULL DEFAULT 1,
+    instance_offsets TEXT NOT NULL DEFAULT '[]',
+    allowed_biomes TEXT NOT NULL DEFAULT '[]',
+    lean REAL NOT NULL DEFAULT 0,
+    branch_flexibility REAL NOT NULL DEFAULT 0.7,
+    leaf_color_sun TEXT NOT NULL,
+    leaf_color_shade TEXT NOT NULL,
+    trunk_color TEXT NOT NULL,
+    wind_sway REAL NOT NULL,
+    trunk_twist REAL NOT NULL DEFAULT 0.2,
+    branch_twist REAL NOT NULL DEFAULT 0.35,
+    canopy_width REAL NOT NULL DEFAULT 0.5,
+    seed INTEGER NOT NULL
+  );
 `);
 
 // Migra bases de datos ya existentes (p.ej. en el volumen de producción) que se
@@ -71,11 +102,24 @@ ensureColumn("screens", "biome", "TEXT NOT NULL DEFAULT 'badlands'");
 ensureColumn("screens", "biome_source", "TEXT NOT NULL DEFAULT 'procedural'");
 ensureColumn("screens", "biome_blend", "TEXT");
 ensureColumn("screens", "code", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("screens", "placed_trees", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("tree_defs", "trunk_twist", "REAL NOT NULL DEFAULT 0.2");
+ensureColumn("tree_defs", "branch_twist", "REAL NOT NULL DEFAULT 0.35");
+ensureColumn("tree_defs", "canopy_width", "REAL NOT NULL DEFAULT 0.5");
+ensureColumn("tree_defs", "leaf_shape", "TEXT NOT NULL DEFAULT 'oval'");
+ensureColumn("tree_defs", "canopy_shape", "TEXT NOT NULL DEFAULT 'round'");
+ensureColumn("tree_defs", "branch_start_height", "REAL NOT NULL DEFAULT 0.55");
+ensureColumn("tree_defs", "tile_span", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("tree_defs", "count_per_tile", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("tree_defs", "instance_offsets", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("tree_defs", "allowed_biomes", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("tree_defs", "lean", "REAL NOT NULL DEFAULT 0");
+ensureColumn("tree_defs", "branch_flexibility", "REAL NOT NULL DEFAULT 0.7");
 
 const getScreenStmt = db.prepare("SELECT * FROM screens WHERE sx = ? AND sy = ?");
 const insertScreenStmt = db.prepare(`
-  INSERT OR REPLACE INTO screens (sx, sy, tiles, monsters, items, exotic_tier, biome, biome_source, biome_blend, code)
-  VALUES (@sx, @sy, @tiles, @monsters, @items, @exoticTier, @biome, @biomeSource, @biomeBlend, @code)
+  INSERT OR REPLACE INTO screens (sx, sy, tiles, monsters, items, placed_trees, exotic_tier, biome, biome_source, biome_blend, code)
+  VALUES (@sx, @sy, @tiles, @monsters, @items, @placedTrees, @exoticTier, @biome, @biomeSource, @biomeBlend, @code)
 `);
 const listScreenCoordsStmt = db.prepare("SELECT sx, sy, biome, code FROM screens");
 
@@ -87,6 +131,7 @@ export function getScreen(sx: number, sy: number): ScreenData | undefined {
         tiles: string;
         monsters: string;
         items: string;
+        placed_trees: string;
         exotic_tier: string;
         biome: BiomeId;
         biome_source: ScreenData["biomeSource"];
@@ -101,6 +146,7 @@ export function getScreen(sx: number, sy: number): ScreenData | undefined {
     tiles: JSON.parse(row.tiles),
     monsters: JSON.parse(row.monsters),
     items: JSON.parse(row.items),
+    placedTrees: JSON.parse(row.placed_trees || "[]"),
     exoticTier: row.exotic_tier as ScreenData["exoticTier"],
     biome: row.biome,
     biomeSource: row.biome_source,
@@ -116,6 +162,7 @@ export function saveScreen(screen: ScreenData): void {
     tiles: JSON.stringify(screen.tiles),
     monsters: JSON.stringify(screen.monsters),
     items: JSON.stringify(screen.items),
+    placedTrees: JSON.stringify(screen.placedTrees),
     exoticTier: screen.exoticTier,
     biome: screen.biome,
     biomeSource: screen.biomeSource,
@@ -279,4 +326,130 @@ export function getSetting(key: string): string | undefined {
 
 export function setSetting(key: string, value: string): void {
   upsertSettingStmt.run({ key, value });
+}
+
+// ---- Árboles generados (tree_defs) ----
+
+const listTreeDefsStmt = db.prepare("SELECT * FROM tree_defs ORDER BY name");
+const getTreeDefStmt = db.prepare("SELECT * FROM tree_defs WHERE id = ?");
+const upsertTreeDefStmt = db.prepare(`
+  INSERT INTO tree_defs (
+    id, name, height, trunk_width, branch_count, leaf_count, leaf_shape, canopy_shape, branch_start_height,
+    tile_span, count_per_tile, instance_offsets, lean, branch_flexibility, allowed_biomes,
+    leaf_color_sun, leaf_color_shade, trunk_color, wind_sway, trunk_twist, branch_twist, canopy_width, seed
+  )
+  VALUES (
+    @id, @name, @height, @trunkWidth, @branchCount, @leafCount, @leafShape, @canopyShape, @branchStartHeight,
+    @tileSpan, @countPerTile, @instanceOffsets, @lean, @branchFlexibility, @allowedBiomes,
+    @leafColorSun, @leafColorShade, @trunkColor, @windSway, @trunkTwist, @branchTwist, @canopyWidth, @seed
+  )
+  ON CONFLICT(id) DO UPDATE SET
+    name=@name, height=@height, trunk_width=@trunkWidth, branch_count=@branchCount, leaf_count=@leafCount, leaf_shape=@leafShape,
+    canopy_shape=@canopyShape, branch_start_height=@branchStartHeight,
+    tile_span=@tileSpan, count_per_tile=@countPerTile, instance_offsets=@instanceOffsets, lean=@lean, branch_flexibility=@branchFlexibility,
+    allowed_biomes=@allowedBiomes,
+    leaf_color_sun=@leafColorSun, leaf_color_shade=@leafColorShade, trunk_color=@trunkColor, wind_sway=@windSway,
+    trunk_twist=@trunkTwist, branch_twist=@branchTwist, canopy_width=@canopyWidth, seed=@seed
+`);
+const deleteTreeDefStmt = db.prepare("DELETE FROM tree_defs WHERE id = ?");
+
+interface TreeDefRow {
+  id: string;
+  name: string;
+  height: number;
+  trunk_width: number;
+  branch_count: number;
+  leaf_count: number;
+  leaf_shape: TreeDef["leafShape"];
+  canopy_shape: TreeDef["canopyShape"];
+  branch_start_height: number;
+  tile_span: TreeDef["tileSpan"];
+  count_per_tile: number;
+  instance_offsets: string;
+  lean: number;
+  branch_flexibility: number;
+  allowed_biomes: string;
+  leaf_color_sun: string;
+  leaf_color_shade: string;
+  trunk_color: string;
+  wind_sway: number;
+  trunk_twist: number;
+  branch_twist: number;
+  canopy_width: number;
+  seed: number;
+}
+
+function rowToTreeDef(row: TreeDefRow): TreeDef {
+  return {
+    id: row.id,
+    name: row.name,
+    height: row.height,
+    trunkWidth: row.trunk_width,
+    branchCount: row.branch_count,
+    leafCount: row.leaf_count,
+    leafShape: row.leaf_shape,
+    canopyShape: row.canopy_shape,
+    branchStartHeight: row.branch_start_height,
+    tileSpan: row.tile_span,
+    countPerTile: row.count_per_tile,
+    instanceOffsets: JSON.parse(row.instance_offsets || "[]"),
+    lean: row.lean,
+    branchFlexibility: row.branch_flexibility,
+    allowedBiomes: JSON.parse(row.allowed_biomes || "[]"),
+    leafColorSun: row.leaf_color_sun,
+    leafColorShade: row.leaf_color_shade,
+    trunkColor: row.trunk_color,
+    windSway: row.wind_sway,
+    trunkTwist: row.trunk_twist,
+    branchTwist: row.branch_twist,
+    canopyWidth: row.canopy_width,
+    seed: row.seed,
+  };
+}
+
+export function listTreeDefs(): TreeDef[] {
+  return (listTreeDefsStmt.all() as unknown as TreeDefRow[]).map(rowToTreeDef);
+}
+
+// Árboles que se pueden plantar en un bioma dado: los que tienen ese bioma
+// marcado, o los que no tienen ninguno marcado (sirven para cualquiera).
+export function listTreeDefsForBiome(biome: BiomeId): TreeDef[] {
+  return listTreeDefs().filter((d) => d.allowedBiomes.length === 0 || d.allowedBiomes.includes(biome));
+}
+
+export function getTreeDef(id: string): TreeDef | undefined {
+  const row = getTreeDefStmt.get(id) as unknown as TreeDefRow | undefined;
+  return row ? rowToTreeDef(row) : undefined;
+}
+
+export function saveTreeDef(def: TreeDef): void {
+  upsertTreeDefStmt.run({
+    id: def.id,
+    name: def.name,
+    height: def.height,
+    trunkWidth: def.trunkWidth,
+    branchCount: def.branchCount,
+    leafCount: def.leafCount,
+    leafShape: def.leafShape,
+    canopyShape: def.canopyShape,
+    branchStartHeight: def.branchStartHeight,
+    tileSpan: def.tileSpan,
+    countPerTile: def.countPerTile,
+    instanceOffsets: JSON.stringify(def.instanceOffsets),
+    lean: def.lean,
+    branchFlexibility: def.branchFlexibility,
+    allowedBiomes: JSON.stringify(def.allowedBiomes),
+    leafColorSun: def.leafColorSun,
+    leafColorShade: def.leafColorShade,
+    trunkColor: def.trunkColor,
+    windSway: def.windSway,
+    trunkTwist: def.trunkTwist,
+    branchTwist: def.branchTwist,
+    canopyWidth: def.canopyWidth,
+    seed: def.seed,
+  });
+}
+
+export function deleteTreeDef(id: string): boolean {
+  return deleteTreeDefStmt.run(id).changes > 0;
 }

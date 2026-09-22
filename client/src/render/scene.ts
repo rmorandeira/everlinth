@@ -1,6 +1,7 @@
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type ScreenData, type PlayerPublicState, type NeighborTiles } from "@roi/shared";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type ScreenData, type PlayerPublicState, type NeighborTiles, type PlacedTree, type TreeDef } from "@roi/shared";
 import { toScreen, TILE_W, TILE_H } from "./iso.js";
 import { drawSprite, type SpriteKey, type Tileset } from "./tileset.js";
+import { drawPlacedTree } from "./proceduralTree.js";
 
 export type { Tileset } from "./tileset.js";
 
@@ -267,6 +268,29 @@ function drawTileGrid(
   }
 }
 
+// Árboles generados (ver proceduralTree.ts): igual que drawTileGrid, offsetX/Y
+// desplaza a una vecina cuando no es la sala activa. Si no se conoce el
+// TreeDef (aún no ha llegado /tree-defs.json) simplemente no se dibuja ese
+// árbol esa vez — no es un fallo, se resuelve solo en el siguiente frame.
+function drawPlacedTrees(
+  ctx: CanvasRenderingContext2D,
+  list: PlacedTree[],
+  offsetX: number,
+  offsetY: number,
+  treeDefs: Map<string, TreeDef>,
+  time: number,
+  drawables: Drawable[]
+): void {
+  for (const pt of list) {
+    const def = treeDefs.get(pt.treeDefId);
+    if (!def) continue;
+    const wx = pt.x + offsetX;
+    const wy = pt.y + offsetY;
+    const { x: cx, y: cy } = toScreen(wx, wy);
+    drawables.push({ depth: wx + wy, draw: () => drawPlacedTree(ctx, def, cx, cy, time) });
+  }
+}
+
 export function renderScene(
   ctx: CanvasRenderingContext2D,
   canvasWidth: number,
@@ -275,6 +299,7 @@ export function renderScene(
   tiles: Tileset,
   screen: ScreenData,
   neighbors: NeighborTiles[],
+  treeDefs: Map<string, TreeDef>,
   players: Array<PlayerPublicState & EntityDrawPos>,
   you: PlayerPublicState & EntityDrawPos,
   time: number
@@ -286,8 +311,12 @@ export function renderScene(
   const drawables: Drawable[] = [];
 
   drawTileGrid(ctx, tiles, screen.tiles, 0, 0, time, drawables);
+  drawPlacedTrees(ctx, screen.placedTrees, 0, 0, treeDefs, time, drawables);
   for (const n of neighbors) {
-    drawTileGrid(ctx, tiles, n.tiles, (n.sx - screen.sx) * SCREEN_WIDTH, (n.sy - screen.sy) * SCREEN_HEIGHT, time, drawables);
+    const offsetX = (n.sx - screen.sx) * SCREEN_WIDTH;
+    const offsetY = (n.sy - screen.sy) * SCREEN_HEIGHT;
+    drawTileGrid(ctx, tiles, n.tiles, offsetX, offsetY, time, drawables);
+    drawPlacedTrees(ctx, n.placedTrees, offsetX, offsetY, treeDefs, time, drawables);
   }
 
   for (const item of screen.items) {

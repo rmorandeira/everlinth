@@ -7,11 +7,13 @@ import {
   type ScreenData,
   type MonsterState,
   type ItemState,
+  type PlacedTree,
   type ExoticTier,
 } from "@roi/shared";
 import { makeRng, seedFromCoords } from "./rng.js";
 import { MONSTER_KINDS, ITEM_KINDS, pickWeighted } from "./content.js";
 import { classifyBiome } from "./biome.js";
+import { listTreeDefsForBiome } from "./db.js";
 
 // Huella alfanumérica del contenido real de la estancia (qué tiles hay y qué
 // monstruos/objetos contiene), no solo de sus coordenadas — dos estancias con el
@@ -314,8 +316,25 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   else if (score < 35) exoticTier = "rare";
   else exoticTier = "epic";
 
-  const code = hashContent(tiles, monsters, items);
   const { biome, biomeSource, biomeBlend } = classifyBiome(sx, sy);
-  const screen: ScreenData = { sx, sy, tiles, monsters, items, exoticTier, biome, biomeSource, biomeBlend, code };
+
+  // Árboles generados (ver TreeDef/admin/trees): puramente decorativos, no
+  // bloquean movimiento. Solo se plantan si hay alguno guardado compatible con
+  // este bioma — si el admin no ha creado ninguno todavía, no aparece nada.
+  const placedTrees: PlacedTree[] = [];
+  const eligibleTrees = listTreeDefsForBiome(biome);
+  if (eligibleTrees.length > 0) {
+    const treeRoll = rng();
+    const treeCount = treeRoll < 0.5 ? 0 : treeRoll < 0.85 ? 1 : 2;
+    for (let i = 0; i < treeCount; i++) {
+      const spot = takeRandomSpot();
+      if (!spot) break;
+      const def = eligibleTrees[Math.floor(rng() * eligibleTrees.length)];
+      placedTrees.push({ treeDefId: def.id, x: spot.x, y: spot.y });
+    }
+  }
+
+  const code = hashContent(tiles, monsters, items);
+  const screen: ScreenData = { sx, sy, tiles, monsters, items, placedTrees, exoticTier, biome, biomeSource, biomeBlend, code };
   return { screen, discoveryXp: Math.round(score) };
 }

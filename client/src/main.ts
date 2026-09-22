@@ -12,6 +12,7 @@ import {
   type PlayerPublicState,
   type ScreenData,
   type ServerMessage,
+  type TreeDef,
   type VisionFogSettings,
 } from "@roi/shared";
 import { GameConnection } from "./net.js";
@@ -76,6 +77,15 @@ let visionSettings: VisionFogSettings = DEFAULT_VISION_SETTINGS;
 fetch("/settings.json")
   .then((r) => r.json())
   .then((s) => (visionSettings = s))
+  .catch(() => {});
+
+// Catálogo de árboles del backoffice, pedido una vez al arrancar. El propio
+// juego solo guarda qué árbol y dónde (PlacedTree) — la forma se recalcula
+// aquí a partir del TreeDef correspondiente.
+let treeDefs: Map<string, TreeDef> = new Map();
+fetch("/tree-defs.json")
+  .then((r) => r.json())
+  .then((defs: TreeDef[]) => (treeDefs = new Map(defs.map((d) => [d.id, d]))))
   .catch(() => {});
 
 function resizeCanvases(): void {
@@ -482,7 +492,7 @@ function frame(now: number): void {
       // así la escena vieja y la nueva encajan sin huecos ni solapes en todo momento.
       const K = vec.x !== 0 ? w : h;
 
-      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, othersDrawn, youDrawn, time);
+      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, treeDefs, othersDrawn, youDrawn, time);
 
       sceneCtx.clearRect(0, 0, w, h);
       sceneCtx.save();
@@ -497,7 +507,7 @@ function frame(now: number): void {
 
       if (t >= 1) transition = null;
     } else {
-      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, othersDrawn, youDrawn, time);
+      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, treeDefs, othersDrawn, youDrawn, time);
       if (weather.getType() === "heat") {
         applyHeatShimmer(sceneCtx, buffer, time);
       } else {

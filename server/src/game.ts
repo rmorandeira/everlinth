@@ -184,7 +184,7 @@ export class GameServer {
         const nsy = sy + dy;
         if (nsx < WORLD_MIN || nsx > WORLD_MAX || nsy < WORLD_MIN || nsy > WORLD_MAX) continue;
         const { screen } = this.ensureScreenLoaded(nsx, nsy);
-        neighbors.push({ sx: nsx, sy: nsy, tiles: screen.tiles });
+        neighbors.push({ sx: nsx, sy: nsy, tiles: screen.tiles, placedTrees: screen.placedTrees });
       }
     }
     return neighbors;

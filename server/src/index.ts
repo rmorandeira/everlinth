@@ -6,12 +6,14 @@ import { WebSocketServer } from "ws";
 import { WORLD_MIN, WORLD_MAX, TileType, BIOME_CATALOG, BIOME_IDS, DEFAULT_VISION_SETTINGS, type BiomeId, type VisionFogSettings } from "@roi/shared";
 import { GameServer } from "./game.js";
 import { listScreenCoords, getScreen, listPaint, paintCells, unpaintCells, deleteScreens, getSetting, setSetting } from "./db.js";
+import { treesRouter } from "./adminTrees.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 const app = express();
 app.use(express.json());
+app.use(treesRouter);
 
 // Backoffice: mapa de administración del mundo. Nota MVP: sin autenticación
 // todavía; pensado solo para uso local/interno del admin.
@@ -188,6 +190,7 @@ app.get("/admin", (_req, res) => {
   <div id="minimapWrap"><canvas id="minimap" width="180" height="180"></canvas></div>
 </div>
 <div id="panel">
+  <div style="margin-bottom:10px;"><a href="/admin/trees" style="color:#4caf6d;">🌳 Generador de árboles</a></div>
   <h2>Estancia</h2>
   <div id="info" class="empty">Clica una casilla verde fosforito del mapa (o del minimapa) para ver su miniatura.</div>
   <canvas id="thumb" width="256" height="176" style="display:none;margin-top:10px;"></canvas>
