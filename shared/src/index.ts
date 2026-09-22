@@ -16,12 +16,14 @@ export const WORLD_MAX = Math.ceil(WORLD_SIZE / 2) - 1;
 // vez al arrancar; si el servidor no responde o no hay nada guardado aún, usa
 // DEFAULT_VISION_SETTINGS.
 export interface VisionFogSettings {
-  sharpFraction: number; // 0..1: fracción del radio elíptico central que queda nítida (más alto = niebla más "cerrada")
-  vibration: number; // 0..1: cuánto "respira"/tiembla el límite nítido/borroso (0 = quieto)
+  ellipseScale: number; // tamaño de la propia elipse de niebla, relativo a la pantalla (1 = inscrita justo en el borde)
+  sharpFraction: number; // 0..1: fracción del radio elíptico (ya escalado por ellipseScale) que queda nítida
+  vibration: number; // 0..1: cuánto varía el difuminado (0 = estático, un valor de niebla fijo; más alto = más "respira"/tiembla)
   chromaticAberration: number; // 0..1: separación de canales de color en los bordes de la escena (0 = desactivada)
 }
 
 export const DEFAULT_VISION_SETTINGS: VisionFogSettings = {
+  ellipseScale: 1,
   sharpFraction: 0.72,
   vibration: 1,
   chromaticAberration: 0,

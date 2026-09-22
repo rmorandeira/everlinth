@@ -14,3 +14,7 @@ dist/
 /captura*.jpg
 /captura*.png
 /Imagen de Codex*.png
+
+# Material de referencia sin licencia clara para redistribuir, no forma parte del repo.
+/Grass Pack/
+/City tileset/

@@ -30,12 +30,15 @@ function organicJitter(time: number, speedA: number, speedB: number, phase: numb
 // recto, y ya cubre las esquinas sin necesidad de tratarlas aparte. Se redibuja
 // cada frame con el radio "respirando" un poco, así el límite nítido/borroso
 // tiembla en vez de ser una viñeta fija.
-function drawMask(w: number, h: number, sharpFraction: number): void {
+function drawMask(w: number, h: number, sharpFraction: number, ellipseScale: number): void {
   const ctx = maskCtx!;
   ctx.clearRect(0, 0, w, h);
   ctx.save();
   ctx.translate(w / 2, h / 2);
-  ctx.scale(w / 2, h / 2); // 1 unidad = borde de la elipse inscrita en la pantalla
+  // 1 unidad = borde de la elipse inscrita en la pantalla, multiplicado por
+  // ellipseScale: <1 la encoge (niebla más agresiva, entra antes), >1 la agranda
+  // (puede sacar la niebla fuera de la pantalla, dejando todo nítido).
+  ctx.scale((w / 2) * ellipseScale, (h / 2) * ellipseScale);
 
   const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
   gradient.addColorStop(0, "rgba(255,255,255,0)");
@@ -87,13 +90,14 @@ export function applyEdgeBlur(
   height: number,
   time: number,
   sharpFractionBase: number = SHARP_FRACTION,
-  vibration: number = 1
+  vibration: number = 1,
+  ellipseScale: number = 1
 ): void {
   if (width <= 0 || height <= 0) return;
   ensureBuffers(width, height);
 
   const sharpFraction = sharpFractionBase + organicJitter(time, 0.9, 2.6, 0.4) * RADIUS_JITTER * vibration;
-  drawMask(width, height, sharpFraction);
+  drawMask(width, height, sharpFraction, ellipseScale);
 
   const blurPx = Math.max(2, BLUR_PX + organicJitter(time, 2.2, 7.3, 1.7) * BLUR_JITTER * vibration);
   smallCtx!.clearRect(0, 0, smallCanvas!.width, smallCanvas!.height);

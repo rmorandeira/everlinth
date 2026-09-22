@@ -375,7 +375,7 @@ function frame(now: number): void {
     // antes que cualquier efecto de color — así el tinte de día/noche se aplica
     // por igual a la zona nítida y a la difuminada, en vez de quedar él mismo
     // borroso en los bordes.
-    applyEdgeBlur(sceneCtx, sceneCanvas, w, h, time, visionSettings.sharpFraction, visionSettings.vibration);
+    applyEdgeBlur(sceneCtx, sceneCanvas, w, h, time, visionSettings.sharpFraction, visionSettings.vibration, visionSettings.ellipseScale);
 
     const dn = getDayNight();
     applyDayNightOverlay(sceneCtx, w, h, dn);

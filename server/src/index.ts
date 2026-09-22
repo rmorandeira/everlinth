@@ -38,14 +38,21 @@ app.get("/settings.json", (_req, res) => {
 
 app.post("/admin/settings/vision", (req, res) => {
   const body = req.body as Partial<VisionFogSettings>;
+  const ellipseScale = Number(body.ellipseScale ?? 1);
   const sharpFraction = Number(body.sharpFraction);
   const vibration = Number(body.vibration);
   const chromaticAberration = Number(body.chromaticAberration ?? 0);
-  if (!Number.isFinite(sharpFraction) || !Number.isFinite(vibration) || !Number.isFinite(chromaticAberration)) {
+  if (
+    !Number.isFinite(ellipseScale) ||
+    !Number.isFinite(sharpFraction) ||
+    !Number.isFinite(vibration) ||
+    !Number.isFinite(chromaticAberration)
+  ) {
     res.status(400).json({ error: "invalid body" });
     return;
   }
   const clamped: VisionFogSettings = {
+    ellipseScale: Math.min(2, Math.max(0.2, ellipseScale)),
     sharpFraction: Math.min(0.98, Math.max(0.03, sharpFraction)),
     vibration: Math.min(6, Math.max(0, vibration)),
     chromaticAberration: Math.min(1, Math.max(0, chromaticAberration)),
@@ -196,6 +203,7 @@ app.get("/admin", (_req, res) => {
 
   <div id="visionPanel">
     <h2>Niebla de visión (global, afecta a todos)</h2>
+    <div class="stat">Tamaño de elipse: <input id="fogEllipse" type="range" min="20" max="200" value="100"> <span id="fogEllipseLabel"></span></div>
     <div class="stat">Tamaño: <input id="fogSize" type="range" min="3" max="98" value="72"> <span id="fogSizeLabel"></span></div>
     <div class="stat">Vibración: <input id="fogVibration" type="range" min="0" max="600" value="100"> <span id="fogVibrationLabel"></span></div>
     <div class="stat">Aberración cromática: <input id="chromaAb" type="range" min="0" max="100" value="0"> <span id="chromaAbLabel"></span></div>
@@ -551,6 +559,8 @@ app.get("/admin", (_req, res) => {
   });
 
   // ---- Niebla de visión / aberración cromática: ajustes globales del juego ----
+  const fogEllipseInput = document.getElementById('fogEllipse');
+  const fogEllipseLabel = document.getElementById('fogEllipseLabel');
   const fogSizeInput = document.getElementById('fogSize');
   const fogSizeLabel = document.getElementById('fogSizeLabel');
   const fogVibrationInput = document.getElementById('fogVibration');
@@ -559,6 +569,7 @@ app.get("/admin", (_req, res) => {
   const chromaAbLabel = document.getElementById('chromaAbLabel');
 
   function updateVisionLabels() {
+    fogEllipseLabel.textContent = fogEllipseInput.value + '%';
     fogSizeLabel.textContent = fogSizeInput.value + '%';
     fogVibrationLabel.textContent = fogVibrationInput.value + '%';
     chromaAbLabel.textContent = chromaAbInput.value + '%';
@@ -567,6 +578,7 @@ app.get("/admin", (_req, res) => {
   async function loadVisionSettings() {
     const res = await fetch('/settings.json');
     const s = await res.json();
+    fogEllipseInput.value = Math.round((s.ellipseScale ?? 1) * 100);
     fogSizeInput.value = Math.round(s.sharpFraction * 100);
     fogVibrationInput.value = Math.round(s.vibration * 100);
     chromaAbInput.value = Math.round(s.chromaticAberration * 100);
@@ -579,6 +591,7 @@ app.get("/admin", (_req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        ellipseScale: Number(fogEllipseInput.value) / 100,
         sharpFraction: Number(fogSizeInput.value) / 100,
         vibration: Number(fogVibrationInput.value) / 100,
         chromaticAberration: Number(chromaAbInput.value) / 100,
@@ -586,7 +599,7 @@ app.get("/admin", (_req, res) => {
     });
   }
 
-  for (const input of [fogSizeInput, fogVibrationInput, chromaAbInput]) {
+  for (const input of [fogEllipseInput, fogSizeInput, fogVibrationInput, chromaAbInput]) {
     input.addEventListener('input', updateVisionLabels);
     input.addEventListener('change', saveVisionSettings);
   }
