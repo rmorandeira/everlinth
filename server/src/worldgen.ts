@@ -9,6 +9,7 @@ import {
   type ItemState,
   type PlacedTree,
   type ExoticTier,
+  type BiomeId,
 } from "@roi/shared";
 import { makeRng, seedFromCoords } from "./rng.js";
 import { MONSTER_KINDS, ITEM_KINDS, pickWeighted } from "./content.js";
@@ -145,8 +146,20 @@ export interface GeneratedScreen {
   discoveryXp: number;
 }
 
+// Tiles "decorativos/obstáculo" (todo lo que no es la propia hierba/camino/agua
+// del suelo). Badlands los excluye por completo: solo terreno llano + agua, más
+// los árboles procedurales (que se plantan aparte, ver más abajo).
+const NON_GROUND_TILES = new Set<TileType>([TileType.Tree, TileType.Rock, TileType.Building, TileType.Fence, TileType.Cactus]);
+const GROUND_ONLY_BIOMES = new Set<BiomeId>(["badlands"]);
+
 export function generateScreen(sx: number, sy: number): GeneratedScreen {
   const rng = makeRng(seedFromCoords(sx, sy));
+
+  // La clasificación de bioma solo depende de (sx,sy) y de lo pintado en el
+  // admin, nunca del contenido de la propia pantalla, así que puede resolverse
+  // antes de generar los tiles y usarse para filtrar qué se coloca.
+  const { biome, biomeSource, biomeBlend } = classifyBiome(sx, sy);
+  const groundOnly = GROUND_ONLY_BIOMES.has(biome);
 
   const tiles: TileType[][] = Array.from({ length: SCREEN_HEIGHT }, () =>
     Array.from({ length: SCREEN_WIDTH }, () => TileType.Grass)
@@ -181,6 +194,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   for (const [key, def] of Object.entries(TILE_DEFS)) {
     if (def.placement !== "rare") continue;
     const t = Number(key) as TileType;
+    if (groundOnly && NON_GROUND_TILES.has(t)) continue;
     if (rng() >= (def.chance ?? 0)) continue;
     const bx = 1 + Math.floor(rng() * (SCREEN_WIDTH - 2));
     const by = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
@@ -193,9 +207,9 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   // --- "scatter": disperso por celda, con agrupamiento ("cluster") entre vecinos ---
   // Colocar un tile sube la probabilidad de que sus celdas vecinas sean del mismo tipo,
   // así los árboles/rocas aparecen en manchas/bosquecillos en vez de puntos sueltos.
-  const scatterDefs = Object.entries(TILE_DEFS).filter(([, def]) => def.placement === "scatter") as Array<
-    [string, (typeof TILE_DEFS)[TileType]]
-  >;
+  const scatterDefs = Object.entries(TILE_DEFS).filter(
+    ([key, def]) => def.placement === "scatter" && !(groundOnly && NON_GROUND_TILES.has(Number(key) as TileType))
+  ) as Array<[string, (typeof TILE_DEFS)[TileType]]>;
   const influence = new Map<TileType, number[][]>();
   for (const [key] of scatterDefs) {
     influence.set(
@@ -238,6 +252,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   for (const [key, def] of Object.entries(TILE_DEFS)) {
     if (def.placement !== "segment") continue;
     const t = Number(key) as TileType;
+    if (groundOnly && NON_GROUND_TILES.has(t)) continue;
     if (rng() >= (def.chance ?? 0)) continue;
     const horizontal = rng() < 0.5;
     const length = 2 + Math.floor(rng() * 3);
@@ -315,8 +330,6 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   else if (score < 20) exoticTier = "uncommon";
   else if (score < 35) exoticTier = "rare";
   else exoticTier = "epic";
-
-  const { biome, biomeSource, biomeBlend } = classifyBiome(sx, sy);
 
   // Árboles generados (ver TreeDef/admin/trees): puramente decorativos, no
   // bloquean movimiento. Solo se plantan si hay alguno guardado compatible con
