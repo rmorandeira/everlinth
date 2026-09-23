@@ -1,7 +1,6 @@
 import "./style.css";
 import {
   DEFAULT_VISION_SETTINGS,
-  type BiomeId,
   type Direction,
   type ExoticTier,
   type InputState,
@@ -18,20 +17,9 @@ import {
 import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
 import { setupGamepad, GAMEPAD_BUTTON_LABELS, START_BUTTON } from "./gamepad.js";
-import { renderScene, computeLayout, type Layout, type Tileset } from "./render/scene.js";
-import { toScreen, TILE_H } from "./render/iso.js";
-import { getDayNight, applyDayNightOverlay } from "./render/daynight.js";
-import { WeatherSystem, applyHeatShimmer, pickWeather } from "./render/weather.js";
-import { applyEdgeBlur } from "./render/edgeblur.js";
-import { applyChromaticAberration } from "./render/chromatic.js";
-import { applyFlashlight, drawCursorDot } from "./render/flashlight.js";
-import { loadTileset, type RasterBiome } from "./render/tileset.js";
-
-// Solo "classic" tiene arte propio de momento (el resto cae en "badlands", el
-// set original) — ver RASTER_SOURCES_BY_BIOME en tileset.ts.
-function rasterBiomeFor(biome: BiomeId): RasterBiome {
-  return biome === "classic" ? "classic" : "badlands";
-}
+import { WeatherSystem, pickWeather } from "./render/weather.js";
+import { drawCursorDot } from "./render/flashlight.js";
+import { createScene3D } from "./render3d/scene3d.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
 const loginForm = document.getElementById("login-form") as HTMLFormElement;
@@ -48,28 +36,12 @@ const statsEl = document.getElementById("stats") as HTMLDivElement;
 const discoveryEl = document.getElementById("discovery") as HTMLDivElement;
 const screenCodeEl = document.getElementById("screen-code") as HTMLDivElement;
 
-const sceneCtx = sceneCanvas.getContext("2d")!;
-const buffer = document.createElement("canvas");
-const bufferCtx = buffer.getContext("2d")!;
 const weatherCtx = weatherCanvas.getContext("2d")!;
 const weather = new WeatherSystem();
 
-let layout: Layout = { scale: 1, originX: 0, originY: 0 };
-let tileset: Tileset | null = null;
-let activeRasterBiome: RasterBiome | null = null;
-loadTileset("badlands").then((t) => (tileset = t));
-
-// Cambia el tileset activo cuando la estancia entra en un bioma con arte propio
-// distinto — loadTileset cachea por bioma, así que repetir uno ya visto no
-// vuelve a descargar imágenes.
-function ensureTilesetFor(biome: BiomeId): void {
-  const wanted = rasterBiomeFor(biome);
-  if (wanted === activeRasterBiome) return;
-  activeRasterBiome = wanted;
-  loadTileset(wanted).then((t) => {
-    if (activeRasterBiome === wanted) tileset = t;
-  });
-}
+// Fase 0 de la migración a 3D (ver plan en .claude/plans): el canvas #scene,
+// que antes tenía un contexto 2D, ahora lo posee three.js por completo.
+const scene3d = createScene3D(sceneCanvas);
 
 // Ajustes de la niebla de visión: editables desde el backoffice, se piden una
 // vez al arrancar (si falla la petición, se queda con los valores por defecto).
@@ -92,13 +64,10 @@ function resizeCanvases(): void {
   const dpr = window.devicePixelRatio || 1;
   const w = Math.round(window.innerWidth * dpr);
   const h = Math.round(window.innerHeight * dpr);
-  sceneCanvas.width = w;
-  sceneCanvas.height = h;
-  buffer.width = w;
-  buffer.height = h;
+  scene3d.renderer.setPixelRatio(dpr);
+  scene3d.resize(window.innerWidth, window.innerHeight);
   weatherCanvas.width = w;
   weatherCanvas.height = h;
-  layout = computeLayout(w, h);
   weather.resize(w, h);
 }
 window.addEventListener("resize", resizeCanvases);
@@ -116,42 +85,9 @@ gameEl.addEventListener("mousemove", (ev) => {
   };
 });
 
-// La linterna es puramente un efecto visual del cliente (no se manda al
-// servidor ni afecta a la partida), así que su tecla se maneja aparte de
-// setupInput, que es solo para acciones que sí viajan como ClientMessage.
-let flashlightOn = false;
-window.addEventListener("keydown", (ev) => {
-  if (ev.key === "l" || ev.key === "L") flashlightOn = !flashlightOn;
-});
-
-// Punto de origen de la linterna: la mano derecha del personaje, no el centro
-// del cuerpo. Offsets calculados a mano a partir de drawStickGuy (scene.ts):
-// baseY (pies) = toScreen().y + TILE_H/2 - 2; el brazo derecho está a x≈6,
-// altura de mano y≈-13 relativo a baseY, en las unidades locales del dibujo —
-// todo ya multiplicado por el 0.5 al que se escaló el personaje.
-function worldToCanvasPx(x: number, y: number): { x: number; y: number } {
-  const p = toScreen(x, y);
-  const BASE_Y_OFFSET = TILE_H / 2 - 2;
-  const HAND_OFFSET_X = 6 * 0.5;
-  const HAND_OFFSET_Y = BASE_Y_OFFSET + -13 * 0.5;
-  return {
-    x: (p.x + HAND_OFFSET_X) * layout.scale + layout.originX,
-    y: (p.y + HAND_OFFSET_Y) * layout.scale + layout.originY,
-  };
-}
-
-// Centro del cuerpo del personaje (no los pies ni la mano): mismo anclaje de
-// pies que drawStickGuy (scene.ts, baseY = toScreen().y + TILE_H/2 - 2) menos
-// media altura del sprite ya escalado, para apuntar aprox. al torso.
-function worldToCanvasCenterPx(x: number, y: number): { x: number; y: number } {
-  const p = toScreen(x, y);
-  const BASE_Y_OFFSET = TILE_H / 2 - 2;
-  const BODY_CENTER_Y_OFFSET = BASE_Y_OFFSET - 10;
-  return {
-    x: p.x * layout.scale + layout.originX,
-    y: (p.y + BODY_CENTER_Y_OFFSET) * layout.scale + layout.originY,
-  };
-}
+// La linterna (SpotLight real), la niebla de visión (THREE.Fog) y el
+// día/noche (luces reales) vuelven en la Fase 4 del plan 3D — de momento el
+// cursor personalizado se mantiene solo para el canvas de clima.
 
 let you: PlayerPrivateState | null = null;
 let currentScreen: ScreenData | null = null;
@@ -168,28 +104,10 @@ function lerpTowards(current: number, target: number, dt: number, rate = 18): nu
   return current + (target - current) * t;
 }
 
-interface Transition {
-  active: boolean;
-  dir: Direction;
-  start: number;
-  duration: number;
-  snapshot: HTMLCanvasElement;
-}
-let transition: Transition | null = null;
-
-// Las 4 direcciones son relativas a la pantalla (arriba/abajo/izq/dcha tal como se ven).
-// Este vector es hacia dónde sale la escena VIEJA (la nueva entra por el lado opuesto):
-// si sales por arriba, la sala vieja se va hacia abajo y la nueva entra desde arriba.
-const SCREEN_DIR_VECTOR: Record<Direction, { x: number; y: number }> = {
-  N: { x: 0, y: 1 },
-  S: { x: 0, y: -1 },
-  W: { x: 1, y: 0 },
-  E: { x: -1, y: 0 },
-};
-
-function dirVector(dir: Direction): { x: number; y: number } {
-  return SCREEN_DIR_VECTOR[dir];
-}
+// La transición deslizante entre pantallas (captura+desliza dos canvas 2D) no
+// aplica a un mundo 3D continuo — Fase 6 del plan decidirá su reemplazo
+// (probablemente un barrido de cámara). De momento el cambio de sala es
+// instantáneo.
 
 let conn: GameConnection | null = null;
 
@@ -212,25 +130,6 @@ function findItem(id: string): ItemState | undefined {
   return currentScreen?.items.find((i) => i.id === id);
 }
 
-function beginScreenTransition(newScreen: ScreenData): void {
-  if (!currentScreen) return;
-  const dx = newScreen.sx - currentScreen.sx;
-  const dy = newScreen.sy - currentScreen.sy;
-  let dir: Direction | null = null;
-  if (dx > 0) dir = "E";
-  else if (dx < 0) dir = "W";
-  else if (dy > 0) dir = "S";
-  else if (dy < 0) dir = "N";
-  if (!dir) return;
-
-  const snapshot = document.createElement("canvas");
-  snapshot.width = sceneCanvas.width;
-  snapshot.height = sceneCanvas.height;
-  snapshot.getContext("2d")!.drawImage(sceneCanvas, 0, 0);
-
-  transition = { active: true, dir, start: performance.now(), duration: 380, snapshot };
-}
-
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case "joined":
@@ -242,12 +141,8 @@ function handleServerMessage(msg: ServerMessage): void {
       refreshGamepadUi();
       break;
     case "screen":
-      if (currentScreen && (currentScreen.sx !== msg.screen.sx || currentScreen.sy !== msg.screen.sy)) {
-        beginScreenTransition(msg.screen);
-      }
       currentScreen = msg.screen;
       currentNeighbors = msg.neighbors;
-      ensureTilesetFor(msg.screen.biome);
       otherPlayers.clear();
       otherDisplay.clear();
       for (const p of msg.players) {
@@ -429,7 +324,6 @@ function resetToLogin(): void {
   currentScreen = null;
   otherPlayers.clear();
   otherDisplay.clear();
-  transition = null;
   gameEl.classList.add("hidden");
   loginEl.classList.remove("hidden");
   refreshGamepadUi();
@@ -463,9 +357,8 @@ let lastTime = performance.now();
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - lastTime) / 1000);
   lastTime = now;
-  const time = now / 1000;
 
-  if (you && currentScreen && tileset) {
+  if (you && currentScreen) {
     youDisplay.x = lerpTowards(youDisplay.x, you.x, dt);
     youDisplay.y = lerpTowards(youDisplay.y, you.y, dt);
     for (const [username, p] of otherPlayers) {
@@ -475,79 +368,10 @@ function frame(now: number): void {
       otherDisplay.set(username, d);
     }
 
-    const youDrawn = { ...you, x: youDisplay.x, y: youDisplay.y };
-    const othersDrawn = [...otherPlayers.values()].map((p) => {
-      const d = otherDisplay.get(p.username)!;
-      return { ...p, x: d.x, y: d.y };
-    });
-
-    const w = sceneCanvas.width;
-    const h = sceneCanvas.height;
-
-    if (transition?.active) {
-      const t = Math.min(1, (now - transition.start) / transition.duration);
-      const ease = 1 - Math.pow(1 - t, 3);
-      const vec = dirVector(transition.dir);
-      // Distancia de deslizamiento = tamaño del canvas en el eje del movimiento,
-      // así la escena vieja y la nueva encajan sin huecos ni solapes en todo momento.
-      const K = vec.x !== 0 ? w : h;
-
-      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, treeDefs, othersDrawn, youDrawn, time);
-
-      sceneCtx.clearRect(0, 0, w, h);
-      sceneCtx.save();
-      sceneCtx.translate(vec.x * ease * K, vec.y * ease * K);
-      sceneCtx.drawImage(transition.snapshot, 0, 0);
-      sceneCtx.restore();
-
-      sceneCtx.save();
-      sceneCtx.translate(vec.x * (ease - 1) * K, vec.y * (ease - 1) * K);
-      sceneCtx.drawImage(buffer, 0, 0);
-      sceneCtx.restore();
-
-      if (t >= 1) transition = null;
-    } else {
-      renderScene(bufferCtx, w, h, layout, tileset, currentScreen, currentNeighbors, treeDefs, othersDrawn, youDrawn, time);
-      if (weather.getType() === "heat") {
-        applyHeatShimmer(sceneCtx, buffer, time);
-      } else {
-        sceneCtx.clearRect(0, 0, w, h);
-        sceneCtx.drawImage(buffer, 0, 0);
-      }
-    }
-
-    // La niebla de visión (difuminado N/S/E/O) actúa sobre la escena en crudo,
-    // antes que cualquier efecto de color — así el tinte de día/noche se aplica
-    // por igual a la zona nítida y a la difuminada, en vez de quedar él mismo
-    // borroso en los bordes.
-    const fogCenter = worldToCanvasCenterPx(youDisplay.x, youDisplay.y);
-    applyEdgeBlur(
-      sceneCtx,
-      sceneCanvas,
-      w,
-      h,
-      time,
-      visionSettings.sharpFraction,
-      visionSettings.vibration,
-      visionSettings.ellipseScale,
-      visionSettings.blurStrength,
-      fogCenter.x,
-      fogCenter.y
-    );
-
-    const dn = getDayNight();
-    applyDayNightOverlay(sceneCtx, w, h, dn);
-
-    // Linterna: se enciende/apaga con L. El cono sale del personaje y apunta
-    // hacia donde esté el cursor, perforando la oscuridad (mezcla aditiva).
-    if (flashlightOn) {
-      const origin = worldToCanvasPx(youDisplay.x, youDisplay.y);
-      applyFlashlight(sceneCtx, origin.x, origin.y, cursorPx.x, cursorPx.y, dn.darkness);
-    }
-
-    // Aberración cromática: último paso, solo sobre la escena (nunca el HUD, que
-    // vive en elementos DOM aparte y en el canvas de clima).
-    applyChromaticAberration(sceneCtx, sceneCanvas, w, h, visionSettings.chromaticAberration);
+    // Fase 0: solo terreno, sin decoración/jugadores/efectos todavía (ver
+    // plan). scene.y del juego (fila) es la Z de mundo en three.js.
+    scene3d.updateGround(currentScreen, currentNeighbors);
+    scene3d.render(youDisplay.x, youDisplay.y);
   }
 
   weather.update(dt);
