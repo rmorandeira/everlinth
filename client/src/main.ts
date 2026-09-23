@@ -369,10 +369,10 @@ function frame(now: number): void {
       otherDisplay.set(username, d);
     }
 
-    // Fase 1: terreno instanciado + obstáculos (ver plan). Jugadores/árboles
-    // procedurales/efectos todavía no. scene.y del juego (fila) es la Z de
-    // mundo en three.js.
-    scene3d.updateGround(currentScreen, currentNeighbors);
+    // Fase 2: terreno + obstáculos + árboles procedurales 3D (ver plan).
+    // Jugadores/efectos todavía no. scene.y del juego (fila) es la Z de mundo
+    // en three.js.
+    scene3d.updateGround(currentScreen, currentNeighbors, treeDefs);
     scene3d.render(youDisplay.x, youDisplay.y, time);
   }
 

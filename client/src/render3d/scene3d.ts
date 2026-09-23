@@ -9,9 +9,10 @@
 // — columna de tile = X de mundo, fila de tile = Z de mundo, altura = Y. El
 // aspecto de rombo isométrico sale solo del ángulo de la cámara (isoCamera.ts).
 import * as THREE from "three";
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type ScreenData, type NeighborTiles } from "@roi/shared";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type TreeDef } from "@roi/shared";
 import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
+import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
 
 const VIEW_HALF_HEIGHT = 9; // unidades de mundo visibles verticalmente (ajustable, ver Fase 5: zoom dinámico)
 
@@ -39,7 +40,7 @@ function groundColor(tile: TileType, n: number, out: THREE.Color): THREE.Color {
 export interface Scene3D {
   renderer: THREE.WebGLRenderer;
   resize(width: number, height: number): void;
-  updateGround(screen: ScreenData, neighbors: NeighborTiles[]): void;
+  updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
   render(playerX: number, playerZ: number, time: number): void;
   dispose(): void;
 }
@@ -61,8 +62,24 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   let groundMesh: THREE.InstancedMesh | null = null;
   let obstacleGroup: THREE.Group | null = null;
+  let treeGroup: THREE.Group | null = null;
   let waterInstances: number[] = []; // índices dentro de groundMesh que son agua, para el brillo animado
+  let treeUpdaters: Array<{ update: (time: number, def: TreeDef) => void; def: TreeDef }> = [];
   let lastKey = "";
+
+  // Geometría por (treeDefId + índice de instancia): 100% determinista, se
+  // construye una única vez y sobrevive a los cambios de pantalla — igual
+  // que las variantes de obstáculos, solo se reconstruye si se pierde el def.
+  const treeResourceCache = new Map<string, TreeResources>();
+  function treeResourcesFor(defId: string, index: number, instanceDef: TreeDef): TreeResources {
+    const key = `${defId}:${index}`;
+    let r = treeResourceCache.get(key);
+    if (!r) {
+      r = buildTreeResources(instanceDef);
+      treeResourceCache.set(key, r);
+    }
+    return r;
+  }
 
   function collectGrid(
     tiles: TileType[][],
@@ -87,19 +104,51 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     }
   }
 
-  function updateGround(screen: ScreenData, neighbors: NeighborTiles[]): void {
+  // Árboles generados (ver TreeDef/admin/trees): puramente decorativos. Si el
+  // catálogo aún no ha llegado (fetch en curso) o el id ya no existe, se
+  // omiten en silencio — se resuelve solo en el siguiente cambio de pantalla.
+  function collectTrees(
+    placedTrees: PlacedTree[],
+    offsetX: number,
+    offsetZ: number,
+    treeDefs: Map<string, TreeDef>,
+    group: THREE.Group,
+    updaters: Array<{ update: (time: number, def: TreeDef) => void; def: TreeDef }>
+  ): void {
+    for (const pt of placedTrees) {
+      const def = treeDefs.get(pt.treeDefId);
+      if (!def) continue;
+      for (const inst of resolveTreeInstances(def)) {
+        const resources = treeResourcesFor(def.id, inst.index, inst.instanceDef);
+        const handle = instantiateTree(resources);
+        handle.root.position.set(pt.x + offsetX + inst.offsetX, 0, pt.y + offsetZ + inst.offsetZ);
+        group.add(handle.root);
+        updaters.push({ update: handle.update, def: inst.instanceDef });
+      }
+    }
+  }
+
+  function updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void {
     const key = `${screen.sx},${screen.sy}`;
     if (key === lastKey) return;
     lastKey = key;
 
     if (groundMesh) scene.remove(groundMesh);
     if (obstacleGroup) scene.remove(obstacleGroup);
+    if (treeGroup) scene.remove(treeGroup);
 
     const positions: Array<{ x: number; z: number; tile: TileType }> = [];
     const obstacles = new THREE.Group();
+    const trees = new THREE.Group();
+    const updaters: Array<{ update: (time: number, def: TreeDef) => void; def: TreeDef }> = [];
+
     collectGrid(screen.tiles, 0, 0, positions, obstacles);
+    collectTrees(screen.placedTrees, 0, 0, treeDefs, trees, updaters);
     for (const n of neighbors) {
-      collectGrid(n.tiles, (n.sx - screen.sx) * SCREEN_WIDTH, (n.sy - screen.sy) * SCREEN_HEIGHT, positions, obstacles);
+      const offsetX = (n.sx - screen.sx) * SCREEN_WIDTH;
+      const offsetZ = (n.sy - screen.sy) * SCREEN_HEIGHT;
+      collectGrid(n.tiles, offsetX, offsetZ, positions, obstacles);
+      collectTrees(n.placedTrees, offsetX, offsetZ, treeDefs, trees, updaters);
     }
 
     const mesh = new THREE.InstancedMesh(tileGeo, tileMat, positions.length);
@@ -117,9 +166,12 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
     scene.add(mesh);
     scene.add(obstacles);
+    scene.add(trees);
     groundMesh = mesh;
     obstacleGroup = obstacles;
+    treeGroup = trees;
     waterInstances = newWaterInstances;
+    treeUpdaters = updaters;
   }
 
   // Brillo del agua: como no hay textura ni shader propio, se simula
@@ -144,6 +196,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   function render(playerX: number, playerZ: number, time: number): void {
     iso.setTarget(playerX, playerZ);
     animateWater(time);
+    for (const t of treeUpdaters) t.update(time, t.def);
     renderer.render(scene, iso.camera);
   }
 
