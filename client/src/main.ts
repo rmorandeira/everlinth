@@ -357,6 +357,7 @@ let lastTime = performance.now();
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - lastTime) / 1000);
   lastTime = now;
+  const time = now / 1000;
 
   if (you && currentScreen) {
     youDisplay.x = lerpTowards(youDisplay.x, you.x, dt);
@@ -368,10 +369,11 @@ function frame(now: number): void {
       otherDisplay.set(username, d);
     }
 
-    // Fase 0: solo terreno, sin decoración/jugadores/efectos todavía (ver
-    // plan). scene.y del juego (fila) es la Z de mundo en three.js.
+    // Fase 1: terreno instanciado + obstáculos (ver plan). Jugadores/árboles
+    // procedurales/efectos todavía no. scene.y del juego (fila) es la Z de
+    // mundo en three.js.
     scene3d.updateGround(currentScreen, currentNeighbors);
-    scene3d.render(youDisplay.x, youDisplay.y);
+    scene3d.render(youDisplay.x, youDisplay.y, time);
   }
 
   weather.update(dt);
