@@ -152,6 +152,18 @@ export interface GeneratedScreen {
 const NON_GROUND_TILES = new Set<TileType>([TileType.Tree, TileType.Rock, TileType.Building, TileType.Fence, TileType.Cactus]);
 const GROUND_ONLY_BIOMES = new Set<BiomeId>(["badlands"]);
 
+// Los edificios generados en 3D (SkyscraperGenerator, ver client/render3d)
+// tienen una escala arquitectónica real que no cabe en un solo tile: reservan
+// un hueco cuadrado de este tamaño, o no se plantan esta vez si no hay hueco
+// limpio cerca — nunca un hueco recortado a medias contra un vecino. El
+// mínimo real del generador (con sus propios mínimos de ladrillo/cornisa)
+// mide ~6.66×6.66 unidades — más de lo que cabe de alto en una pantalla de
+// SCREEN_HEIGHT=9 (7 filas interiores tras el cruce perimetral), así que
+// buildings3d.ts reescala la malla ya construida al tamaño de este hueco en
+// vez de pedirle al generador un footprint menor (sus mínimos no bajan de
+// ahí por mucho que se le pida).
+const BUILDING_FOOTPRINT = 5;
+
 export function generateScreen(sx: number, sy: number): GeneratedScreen {
   const rng = makeRng(seedFromCoords(sx, sy));
 
@@ -198,7 +210,27 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     if (rng() >= (def.chance ?? 0)) continue;
     const bx = 1 + Math.floor(rng() * (SCREEN_WIDTH - 2));
     const by = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
-    if (!isOnCross(bx, by) && tiles[by][bx] === TileType.Grass) {
+
+    if (t === TileType.Building) {
+      const size = BUILDING_FOOTPRINT;
+      let fits = bx + size <= SCREEN_WIDTH - 1 && by + size <= SCREEN_HEIGHT - 1;
+      outer: for (let dy = 0; fits && dy < size; dy++) {
+        for (let dx = 0; dx < size; dx++) {
+          if (isOnCross(bx + dx, by + dy) || tiles[by + dy][bx + dx] !== TileType.Grass) {
+            fits = false;
+            break outer;
+          }
+        }
+      }
+      if (fits) {
+        for (let dy = 0; dy < size; dy++) {
+          for (let dx = 0; dx < size; dx++) {
+            tiles[by + dy][bx + dx] = t;
+          }
+        }
+        present.add(t);
+      }
+    } else if (!isOnCross(bx, by) && tiles[by][bx] === TileType.Grass) {
       tiles[by][bx] = t;
       present.add(t);
     }

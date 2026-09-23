@@ -13,6 +13,7 @@ import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type PlacedTree, type ScreenData
 import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
+import { buildSkyscraper, disposeSkyscrapers } from "./buildings3d.js";
 
 const VIEW_HALF_HEIGHT = 9; // unidades de mundo visibles verticalmente (ajustable, ver Fase 5: zoom dinámico)
 
@@ -81,6 +82,20 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     return r;
   }
 
+  // Un edificio ocupa varias celdas Building contiguas (ver BUILDING_FOOTPRINT
+  // en worldgen.ts): solo se planta la torre una vez, en la esquina superior-
+  // izquierda del grupo, para no clonarla en cada una de sus celdas.
+  function isBuildingAnchor(tiles: TileType[][], row: number, col: number): boolean {
+    if (col > 0 && tiles[row][col - 1] === TileType.Building) return false;
+    if (row > 0 && tiles[row - 1][col] === TileType.Building) return false;
+    return true;
+  }
+  function buildingFootprint(tiles: TileType[][], row: number, col: number): number {
+    let size = 0;
+    while (col + size < tiles[row].length && tiles[row][col + size] === TileType.Building) size++;
+    return size;
+  }
+
   function collectGrid(
     tiles: TileType[][],
     offsetX: number,
@@ -94,6 +109,16 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
         const x = col + offsetX;
         const z = row + offsetZ;
         positions.push({ x, z, tile });
+
+        if (tile === TileType.Building) {
+          if (isBuildingAnchor(tiles, row, col)) {
+            const size = buildingFootprint(tiles, row, col);
+            const building = buildSkyscraper(x, z, size);
+            building.position.set(x + (size - 1) / 2, 0, z + (size - 1) / 2);
+            obstacles.add(building);
+          }
+          continue;
+        }
 
         const obstacle = buildObstacle(tile, hash2(x + 0.5, z + 0.5));
         if (obstacle) {
@@ -136,6 +161,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     if (groundMesh) scene.remove(groundMesh);
     if (obstacleGroup) scene.remove(obstacleGroup);
     if (treeGroup) scene.remove(treeGroup);
+    disposeSkyscrapers();
 
     const positions: Array<{ x: number; z: number; tile: TileType }> = [];
     const obstacles = new THREE.Group();

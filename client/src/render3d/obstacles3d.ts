@@ -1,9 +1,10 @@
 // Fase 1 de la migración a 3D (ver plan): formas low-poly sin textura, color
-// plano por vértice, para los TileType "obstáculo" (Rock/Building/Fence/
-// Cactus — Tree queda para el sistema de árboles procedurales de la Fase 2,
-// no se toca aquí). Cada tipo tiene un puñado de variantes fijas construidas
-// UNA vez; cada aparición en el mundo es un `.clone()` barato (comparte
-// geometría/material, solo copia la transformación).
+// plano por vértice, para los TileType "obstáculo" (Rock/Fence/Cactus —
+// Building usa el SkyscraperGenerator real, ver buildings3d.ts; Tree queda
+// para el sistema de árboles procedurales de la Fase 2). Cada tipo tiene un
+// puñado de variantes fijas construidas UNA vez; cada aparición en el mundo
+// es un `.clone()` barato (comparte geometría/material, solo copia la
+// transformación).
 //
 // El recuento de estos tiles por pantalla es bajo (como mucho un puñado,
 // según las probabilidades de worldgen), así que no hace falta InstancedMesh
@@ -29,24 +30,6 @@ function buildRockVariant(scale: number): THREE.Group {
   return group;
 }
 const ROCK_VARIANTS = [buildRockVariant(0.8), buildRockVariant(1.15)];
-
-// --- Edificio: caseta de tejado a cuatro aguas, colores cálidos (diorama) ---
-const ROOF_COLORS = [0xd94f4f, 0x4f7ed9, 0xe0a23a];
-function buildBuildingVariant(roofColor: number): THREE.Group {
-  const group = new THREE.Group();
-  const body = box(0.85, 0.55, 0.85, 0xf1e6d0);
-  body.position.y = 0.275;
-  group.add(body);
-  const roof = new THREE.Mesh(
-    new THREE.ConeGeometry(0.68, 0.45, 4),
-    new THREE.MeshLambertMaterial({ color: roofColor, flatShading: true })
-  );
-  roof.position.y = 0.55 + 0.225;
-  roof.rotation.y = Math.PI / 4;
-  group.add(roof);
-  return group;
-}
-const BUILDING_VARIANTS = ROOF_COLORS.map(buildBuildingVariant);
 
 // --- Valla: dos postes + un travesaño, madera ---
 function buildFenceVariant(): THREE.Group {
@@ -80,7 +63,6 @@ const CACTUS_VARIANTS = [buildCactusVariant()];
 
 const VARIANTS_BY_TYPE: Partial<Record<TileType, THREE.Group[]>> = {
   [TileType.Rock]: ROCK_VARIANTS,
-  [TileType.Building]: BUILDING_VARIANTS,
   [TileType.Fence]: FENCE_VARIANTS,
   [TileType.Cactus]: CACTUS_VARIANTS,
 };
