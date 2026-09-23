@@ -20,6 +20,7 @@ import { setupGamepad, GAMEPAD_BUTTON_LABELS, START_BUTTON } from "./gamepad.js"
 import { WeatherSystem, pickWeather } from "./render/weather.js";
 import { drawCursorDot } from "./render/flashlight.js";
 import { createScene3D } from "./render3d/scene3d.js";
+import { MONSTER_COLORS, MONSTER_COLOR_DEFAULT, type FigureEntity } from "./render3d/figures3d.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
 const loginForm = document.getElementById("login-form") as HTMLFormElement;
@@ -369,10 +370,24 @@ function frame(now: number): void {
       otherDisplay.set(username, d);
     }
 
-    // Fase 2: terreno + obstáculos + árboles procedurales 3D (ver plan).
-    // Jugadores/efectos todavía no. scene.y del juego (fila) es la Z de mundo
-    // en three.js.
+    // Fase 3: terreno + obstáculos + árboles + jugadores/monstruos en 3D (ver
+    // plan). Efectos (niebla/linterna/día-noche) todavía no. scene.y del
+    // juego (fila) es la Z de mundo en three.js.
     scene3d.updateGround(currentScreen, currentNeighbors, treeDefs);
+
+    const entities: FigureEntity[] = [
+      { id: you.username, x: youDisplay.x, z: youDisplay.y, color: 0xf0f0f0, label: you.username },
+    ];
+    for (const [username, p] of otherPlayers) {
+      const d = otherDisplay.get(username)!;
+      entities.push({ id: username, x: d.x, z: d.y, color: 0x3ba0e0, label: username });
+    }
+    for (const m of currentScreen.monsters) {
+      if (!m.alive) continue;
+      entities.push({ id: m.id, x: m.x, z: m.y, color: MONSTER_COLORS[m.kind] ?? MONSTER_COLOR_DEFAULT, label: m.kind });
+    }
+    scene3d.updateFigures(entities, time);
+
     scene3d.render(youDisplay.x, youDisplay.y, time);
   }
 

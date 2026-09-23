@@ -14,6 +14,7 @@ import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
 import { buildSkyscraper, disposeSkyscrapers } from "./buildings3d.js";
+import { createFigureManager, type FigureEntity } from "./figures3d.js";
 
 const VIEW_HALF_HEIGHT = 9; // unidades de mundo visibles verticalmente (ajustable, ver Fase 5: zoom dinámico)
 
@@ -42,6 +43,7 @@ export interface Scene3D {
   renderer: THREE.WebGLRenderer;
   resize(width: number, height: number): void;
   updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
+  updateFigures(entities: FigureEntity[], time: number): void;
   render(playerX: number, playerZ: number, time: number): void;
   dispose(): void;
 }
@@ -57,6 +59,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 
   const iso = createIsoCamera();
+
+  const figures = createFigureManager();
+  scene.add(figures.group);
 
   const tileGeo = new THREE.BoxGeometry(0.98, 0.1, 0.98);
   const tileMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
@@ -219,6 +224,10 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     iso.setViewSize(VIEW_HALF_HEIGHT, width / height);
   }
 
+  function updateFigures(entities: FigureEntity[], time: number): void {
+    figures.update(entities, time);
+  }
+
   function render(playerX: number, playerZ: number, time: number): void {
     iso.setTarget(playerX, playerZ);
     animateWater(time);
@@ -231,5 +240,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, render, dispose };
+  return { renderer, resize, updateGround, updateFigures, render, dispose };
 }
