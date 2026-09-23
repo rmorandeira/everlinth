@@ -14,6 +14,18 @@ export const ISO_CAMERA_DIST = 50;
 
 const DIR = new THREE.Vector3(Math.cos(PITCH) * Math.cos(YAW), Math.sin(PITCH), Math.cos(PITCH) * Math.sin(YAW));
 
+// Ejes propios de la imagen de esta cámara (a qué dirección de mundo
+// corresponden "derecha" y "arriba" en pantalla): como el ángulo nunca
+// cambia, son constantes. Sirven para proyectar un punto de mundo al plano
+// de la cámara sin necesitar el propio objeto Camera (ver fitHalfHeightToGrid
+// en scene3d.ts, que calcula cuánto hay que alejar la cámara para que quepa
+// toda la sala en pantalla — el equivalente 3D de computeLayout() en el
+// scene.ts 2D).
+const FORWARD = DIR.clone().negate();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+export const CAMERA_RIGHT = new THREE.Vector3().crossVectors(FORWARD, WORLD_UP).normalize();
+export const CAMERA_UP = new THREE.Vector3().crossVectors(CAMERA_RIGHT, FORWARD).normalize();
+
 export interface IsoCamera {
   camera: THREE.OrthographicCamera;
   /** halfHeight: mitad de la altura visible, en unidades de mundo (1 unidad = 1 tile). */

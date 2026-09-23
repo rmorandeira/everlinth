@@ -146,6 +146,9 @@ function handleServerMessage(msg: ServerMessage): void {
       refreshGamepadUi();
       break;
     case "screen":
+      if (currentScreen && (currentScreen.sx !== msg.screen.sx || currentScreen.sy !== msg.screen.sy)) {
+        scene3d.setCameraMood("action", 0.5); // empuje sutil de zoom al cruzar de pantalla
+      }
       currentScreen = msg.screen;
       currentNeighbors = msg.neighbors;
       otherPlayers.clear();
@@ -186,6 +189,7 @@ function handleServerMessage(msg: ServerMessage): void {
     }
     case "discovery":
       showDiscovery(msg.tier, msg.xp);
+      scene3d.setCameraMood("action", 1.2);
       break;
     case "died":
       alert("Has muerto. Tu personaje se ha perdido para siempre.");
@@ -295,12 +299,25 @@ function handleGamepadDirs(dirs: InputState): void {
   conn?.send({ type: "input", dirs });
 }
 
+// Un pequeño acercamiento de cámara al atacar/recoger (ver Fase 5 del plan
+// 3D): mismo hook setCameraMood que el cambio de pantalla y el descubrimiento,
+// disparado desde el único punto por el que pasan tanto teclado como mando.
+function sendAttack(): void {
+  conn?.send({ type: "attack" });
+  scene3d.setCameraMood("action", 0.6);
+}
+
+function sendPickup(): void {
+  conn?.send({ type: "pickup" });
+  scene3d.setCameraMood("action", 0.6);
+}
+
 function handleGamepadAttack(): void {
   if (gamepadConnected && !loginEl.classList.contains("hidden")) {
     activateKey(KEY_ROWS[keySelRow][keySelCol]);
     return;
   }
-  conn?.send({ type: "attack" });
+  sendAttack();
 }
 
 function handleGamepadPickup(): void {
@@ -308,7 +325,7 @@ function handleGamepadPickup(): void {
     activateKey("⌫");
     return;
   }
-  conn?.send({ type: "pickup" });
+  sendPickup();
 }
 
 function handleGamepadStart(): void {
@@ -352,8 +369,8 @@ loginForm.addEventListener("submit", async (ev) => {
 
 setupInput(
   (dirs: InputState) => conn?.send({ type: "input", dirs }),
-  () => conn?.send({ type: "attack" }),
-  () => conn?.send({ type: "pickup" })
+  sendAttack,
+  sendPickup
 );
 
 setupGamepad(handleGamepadDirs, handleGamepadAttack, handleGamepadPickup, handleGamepadStart, handleRightStick, handleGamepadConnectedChange);
@@ -397,7 +414,7 @@ function frame(now: number): void {
     // three.js, a partir del cursor ya trackeado en píxeles de canvas.
     const cursorNdcX = (cursorPx.x / sceneCanvas.width) * 2 - 1;
     const cursorNdcY = -(cursorPx.y / sceneCanvas.height) * 2 + 1;
-    scene3d.render(youDisplay.x, youDisplay.y, time, visionSettings, { enabled: flashlightOn, cursorNdcX, cursorNdcY });
+    scene3d.render(youDisplay.x, youDisplay.y, time, dt, visionSettings, { enabled: flashlightOn, cursorNdcX, cursorNdcY });
   }
 
   weather.update(dt);

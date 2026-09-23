@@ -10,14 +10,51 @@
 // aspecto de rombo isométrico sale solo del ángulo de la cámara (isoCamera.ts).
 import * as THREE from "three";
 import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type TreeDef, type VisionFogSettings } from "@roi/shared";
-import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
+import { createIsoCamera, CAMERA_RIGHT, CAMERA_UP, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
 import { buildSkyscraper, disposeSkyscrapers } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
+import { createCameraRig, type CameraMood } from "./cameraRig.js";
 
-const VIEW_HALF_HEIGHT = 9; // unidades de mundo visibles verticalmente (ajustable, ver Fase 5: zoom dinámico)
+// Cuánto de más se acerca la cámara respecto al ajuste exacto de la sala —
+// igual que el "overscan" de computeLayout() en el scene.ts 2D: recorta un
+// pelín el margen decorativo para que nunca se vea una franja vacía, sin
+// llegar a cortar la rejilla jugable.
+const OVERSCAN = 1.1;
+
+// Equivalente 3D de computeLayout() (scene.ts 2D): calcula cuánto hay que
+// alejar la cámara (half-height del frustum ortográfico) para que la sala
+// SCREEN_WIDTH×SCREEN_HEIGHT entera quepa en la ventana, sea cual sea su
+// proporción — proyectando las 4 esquinas de la rejilla sobre los ejes
+// propios de la cámara (CAMERA_RIGHT/CAMERA_UP), igual que 2D usaba toScreen()
+// para las mismas 4 esquinas. Se recalcula solo cuando cambia el aspecto de
+// la ventana (ver resize()), no cada frame.
+const GRID_CORNERS = [
+  [0, 0],
+  [SCREEN_WIDTH - 1, 0],
+  [0, SCREEN_HEIGHT - 1],
+  [SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1],
+].map(([x, z]) => new THREE.Vector3(x, 0, z));
+
+function fitHalfHeightToGrid(aspect: number): number {
+  let minU = Infinity;
+  let maxU = -Infinity;
+  let minV = Infinity;
+  let maxV = -Infinity;
+  for (const corner of GRID_CORNERS) {
+    const u = corner.dot(CAMERA_RIGHT);
+    const v = corner.dot(CAMERA_UP);
+    if (u < minU) minU = u;
+    if (u > maxU) maxU = u;
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
+  const gridW = maxU - minU + 1; // +1 tile de margen total, como el TILE_W/2 a cada lado del 2D
+  const gridH = maxV - minV + 1;
+  return Math.max(gridH / 2, gridW / (2 * aspect)) / OVERSCAN;
+}
 
 // Ruido determinista barato por celda (mismo criterio que hash2 en scene.ts 2D):
 // decide la variante de color del suelo y la rotación/variante de un obstáculo.
@@ -45,7 +82,8 @@ export interface Scene3D {
   resize(width: number, height: number): void;
   updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
   updateFigures(entities: FigureEntity[], time: number): void;
-  render(playerX: number, playerZ: number, time: number, vision: VisionFogSettings, flashlight: FlashlightParams): void;
+  setCameraMood(mood: CameraMood, holdSeconds: number): void;
+  render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams): void;
   dispose(): void;
 }
 
@@ -56,6 +94,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const lighting = createLighting3D(scene);
 
   const iso = createIsoCamera();
+  const cameraRig = createCameraRig();
+  let aspect = 1;
+  let restHalfHeight = fitHalfHeightToGrid(aspect);
 
   const figures = createFigureManager();
   scene.add(figures.group);
@@ -218,14 +259,21 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   function resize(width: number, height: number): void {
     renderer.setSize(width, height, false);
-    iso.setViewSize(VIEW_HALF_HEIGHT, width / height);
+    aspect = width / height;
+    restHalfHeight = fitHalfHeightToGrid(aspect);
   }
 
   function updateFigures(entities: FigureEntity[], time: number): void {
     figures.update(entities, time);
   }
 
-  function render(playerX: number, playerZ: number, time: number, vision: VisionFogSettings, flashlight: FlashlightParams): void {
+  function setCameraMood(mood: CameraMood, holdSeconds: number): void {
+    cameraRig.pulse(mood, holdSeconds);
+  }
+
+  function render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams): void {
+    const halfHeight = cameraRig.update(restHalfHeight, dt);
+    iso.setViewSize(halfHeight, aspect);
     iso.setTarget(playerX, playerZ);
     // El raycast de la linterna (dentro de lighting.update) necesita la
     // matriz de mundo YA actualizada — normalmente eso lo hace
@@ -244,5 +292,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, render, dispose };
+  return { renderer, resize, updateGround, updateFigures, setCameraMood, render, dispose };
 }
