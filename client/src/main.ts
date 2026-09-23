@@ -86,9 +86,13 @@ gameEl.addEventListener("mousemove", (ev) => {
   };
 });
 
-// La linterna (SpotLight real), la niebla de visión (THREE.Fog) y el
-// día/noche (luces reales) vuelven en la Fase 4 del plan 3D — de momento el
-// cursor personalizado se mantiene solo para el canvas de clima.
+// La linterna es puramente un efecto visual del cliente (no se manda al
+// servidor ni afecta a la partida), así que su tecla se maneja aparte de
+// setupInput, que es solo para acciones que sí viajan como ClientMessage.
+let flashlightOn = false;
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "l" || ev.key === "L") flashlightOn = !flashlightOn;
+});
 
 let you: PlayerPrivateState | null = null;
 let currentScreen: ScreenData | null = null;
@@ -370,9 +374,9 @@ function frame(now: number): void {
       otherDisplay.set(username, d);
     }
 
-    // Fase 3: terreno + obstáculos + árboles + jugadores/monstruos en 3D (ver
-    // plan). Efectos (niebla/linterna/día-noche) todavía no. scene.y del
-    // juego (fila) es la Z de mundo en three.js.
+    // Fase 4: terreno + obstáculos + árboles + jugadores/monstruos + luz/
+    // niebla/linterna reales en 3D (ver plan). scene.y del juego (fila) es
+    // la Z de mundo en three.js.
     scene3d.updateGround(currentScreen, currentNeighbors, treeDefs);
 
     const entities: FigureEntity[] = [
@@ -388,7 +392,12 @@ function frame(now: number): void {
     }
     scene3d.updateFigures(entities, time);
 
-    scene3d.render(youDisplay.x, youDisplay.y, time);
+    // Coordenadas normalizadas (-1..1, Y hacia arriba) del cursor para el
+    // raycast de la linterna contra el suelo — misma conversión estándar de
+    // three.js, a partir del cursor ya trackeado en píxeles de canvas.
+    const cursorNdcX = (cursorPx.x / sceneCanvas.width) * 2 - 1;
+    const cursorNdcY = -(cursorPx.y / sceneCanvas.height) * 2 + 1;
+    scene3d.render(youDisplay.x, youDisplay.y, time, visionSettings, { enabled: flashlightOn, cursorNdcX, cursorNdcY });
   }
 
   weather.update(dt);

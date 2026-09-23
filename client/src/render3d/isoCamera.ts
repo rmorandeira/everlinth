@@ -7,7 +7,10 @@ import * as THREE from "three";
 
 const YAW = Math.PI / 4;
 const PITCH = Math.atan(0.5);
-const DIST = 50;
+// Distancia fija cámara↔jugador: exportada porque THREE.Fog mide "cerca/lejos"
+// como distancia a la CÁMARA, no al jugador (ver lighting3d.ts) — sin este
+// desplazamiento, la niebla se calcularía centrada en 0 en vez de aquí.
+export const ISO_CAMERA_DIST = 50;
 
 const DIR = new THREE.Vector3(Math.cos(PITCH) * Math.cos(YAW), Math.sin(PITCH), Math.cos(PITCH) * Math.sin(YAW));
 
@@ -35,7 +38,7 @@ export function createIsoCamera(): IsoCamera {
   const target = new THREE.Vector3();
   function setTarget(x: number, z: number, y = 0): void {
     target.set(x, y, z);
-    camera.position.copy(target).addScaledVector(DIR, DIST);
+    camera.position.copy(target).addScaledVector(DIR, ISO_CAMERA_DIST);
     camera.lookAt(target);
   }
 

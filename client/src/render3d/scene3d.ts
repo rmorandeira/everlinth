@@ -9,12 +9,13 @@
 // — columna de tile = X de mundo, fila de tile = Z de mundo, altura = Y. El
 // aspecto de rombo isométrico sale solo del ángulo de la cámara (isoCamera.ts).
 import * as THREE from "three";
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type TreeDef } from "@roi/shared";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type TreeDef, type VisionFogSettings } from "@roi/shared";
 import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
 import { buildSkyscraper, disposeSkyscrapers } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
+import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 
 const VIEW_HALF_HEIGHT = 9; // unidades de mundo visibles verticalmente (ajustable, ver Fase 5: zoom dinámico)
 
@@ -44,19 +45,15 @@ export interface Scene3D {
   resize(width: number, height: number): void;
   updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
   updateFigures(entities: FigureEntity[], time: number): void;
-  render(playerX: number, playerZ: number, time: number): void;
+  render(playerX: number, playerZ: number, time: number, vision: VisionFogSettings, flashlight: FlashlightParams): void;
   dispose(): void;
 }
 
 export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x14181f);
 
-  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-  sun.position.set(6, 12, 4);
-  scene.add(sun);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const lighting = createLighting3D(scene);
 
   const iso = createIsoCamera();
 
@@ -228,10 +225,17 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     figures.update(entities, time);
   }
 
-  function render(playerX: number, playerZ: number, time: number): void {
+  function render(playerX: number, playerZ: number, time: number, vision: VisionFogSettings, flashlight: FlashlightParams): void {
     iso.setTarget(playerX, playerZ);
+    // El raycast de la linterna (dentro de lighting.update) necesita la
+    // matriz de mundo YA actualizada — normalmente eso lo hace
+    // renderer.render() al recorrer la escena, pero eso ocurre DESPUÉS, así
+    // que sin esto el rayo se calcularía con la posición de cámara del frame
+    // anterior (o ninguna, en el primer frame).
+    iso.camera.updateMatrixWorld();
     animateWater(time);
     for (const t of treeUpdaters) t.update(time, t.def);
+    lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
     renderer.render(scene, iso.camera);
   }
 
