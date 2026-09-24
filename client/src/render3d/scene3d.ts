@@ -17,6 +17,7 @@ import { buildSkyscraper, disposeSkyscrapers } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { createCameraRig, type CameraMood } from "./cameraRig.js";
+import { createPostFx3D } from "./postfx3d.js";
 
 // Cuánto de más se acerca la cámara respecto al ajuste exacto de la sala —
 // igual que el "overscan" de computeLayout() en el scene.ts 2D: recorta un
@@ -83,7 +84,7 @@ export interface Scene3D {
   updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
   updateFigures(entities: FigureEntity[], time: number): void;
   setCameraMood(mood: CameraMood, holdSeconds: number): void;
-  render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams): void;
+  render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void;
   dispose(): void;
 }
 
@@ -95,6 +96,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   const iso = createIsoCamera();
   const cameraRig = createCameraRig();
+  const postfx = createPostFx3D(renderer);
   let aspect = 1;
   let restHalfHeight = fitHalfHeightToGrid(aspect);
 
@@ -259,6 +261,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   function resize(width: number, height: number): void {
     renderer.setSize(width, height, false);
+    postfx.resize(width, height, renderer.getPixelRatio());
     aspect = width / height;
     restHalfHeight = fitHalfHeightToGrid(aspect);
   }
@@ -271,7 +274,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     cameraRig.pulse(mood, holdSeconds);
   }
 
-  function render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams): void {
+  function render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void {
     const halfHeight = cameraRig.update(restHalfHeight, dt);
     iso.setViewSize(halfHeight, aspect);
     iso.setTarget(playerX, playerZ);
@@ -284,7 +287,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     animateWater(time);
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
-    renderer.render(scene, iso.camera);
+    postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
   function dispose(): void {

@@ -1,6 +1,8 @@
 import "./style.css";
 import {
   DEFAULT_VISION_SETTINGS,
+  SCREEN_HEIGHT,
+  SCREEN_WIDTH,
   type Direction,
   type ExoticTier,
   type InputState,
@@ -18,7 +20,7 @@ import { GameConnection } from "./net.js";
 import { setupInput } from "./input.js";
 import { setupGamepad, GAMEPAD_BUTTON_LABELS, START_BUTTON } from "./gamepad.js";
 import { WeatherSystem, pickWeather } from "./render/weather.js";
-import { drawCursorDot } from "./render/flashlight.js";
+import { drawCursorDot } from "./render/cursor.js";
 import { createScene3D } from "./render3d/scene3d.js";
 import { MONSTER_COLORS, MONSTER_COLOR_DEFAULT, type FigureEntity } from "./render3d/figures3d.js";
 
@@ -74,7 +76,7 @@ function resizeCanvases(): void {
 window.addEventListener("resize", resizeCanvases);
 resizeCanvases();
 
-// Cursor personalizado (punto rojo 4x4, ver flashlight.ts): se oculta el cursor
+// Cursor personalizado (punto rojo 4x4, ver render/cursor.ts): se oculta el cursor
 // nativo por CSS y se sigue la posición aquí, en coordenadas de canvas (píxeles
 // reales, contando devicePixelRatio) para poder dibujarlo y para apuntar la linterna.
 let cursorPx = { x: 0, y: 0 };
@@ -108,11 +110,6 @@ function lerpTowards(current: number, target: number, dt: number, rate = 18): nu
   const t = 1 - Math.exp(-rate * dt);
   return current + (target - current) * t;
 }
-
-// La transición deslizante entre pantallas (captura+desliza dos canvas 2D) no
-// aplica a un mundo 3D continuo — Fase 6 del plan decidirá su reemplazo
-// (probablemente un barrido de cámara). De momento el cambio de sala es
-// instantáneo.
 
 let conn: GameConnection | null = null;
 
@@ -148,6 +145,11 @@ function handleServerMessage(msg: ServerMessage): void {
     case "screen":
       if (currentScreen && (currentScreen.sx !== msg.screen.sx || currentScreen.sy !== msg.screen.sy)) {
         scene3d.setCameraMood("action", 0.5); // empuje sutil de zoom al cruzar de pantalla
+        // El mundo se re-basa en la sala nueva (offset 0): desplazar la posición
+        // suavizada la misma cantidad mantiene al jugador y a la cámara donde
+        // estaban, en vez de deslizarlos por toda la sala nueva.
+        youDisplay.x += (currentScreen.sx - msg.screen.sx) * SCREEN_WIDTH;
+        youDisplay.y += (currentScreen.sy - msg.screen.sy) * SCREEN_HEIGHT;
       }
       currentScreen = msg.screen;
       currentNeighbors = msg.neighbors;
@@ -414,7 +416,7 @@ function frame(now: number): void {
     // three.js, a partir del cursor ya trackeado en píxeles de canvas.
     const cursorNdcX = (cursorPx.x / sceneCanvas.width) * 2 - 1;
     const cursorNdcY = -(cursorPx.y / sceneCanvas.height) * 2 + 1;
-    scene3d.render(youDisplay.x, youDisplay.y, time, dt, visionSettings, { enabled: flashlightOn, cursorNdcX, cursorNdcY });
+    scene3d.render(youDisplay.x, youDisplay.y, time, dt, visionSettings, { enabled: flashlightOn, cursorNdcX, cursorNdcY }, weather.getType() === "heat" ? 1 : 0);
   }
 
   weather.update(dt);

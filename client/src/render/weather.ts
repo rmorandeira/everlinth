@@ -125,19 +125,3 @@ export class WeatherSystem {
     return this.type;
   }
 }
-
-// Efecto de calor: distorsiona la escena ya renderizada en franjas horizontales onduladas.
-// Se aplica sobre el canvas de juego (retro), pero el desplazamiento se calcula con
-// coma flotante e interpolación suave para que el propio efecto se sienta "HD".
-export function applyHeatShimmer(
-  destCtx: CanvasRenderingContext2D,
-  source: HTMLCanvasElement,
-  time: number
-): void {
-  const { width, height } = source;
-  const sliceHeight = 4;
-  for (let y = 0; y < height; y += sliceHeight) {
-    const offset = Math.sin(y * 0.05 + time * 3) * 3.5 + Math.sin(y * 0.011 + time * 1.3) * 2;
-    destCtx.drawImage(source, 0, y, width, sliceHeight, offset, y, width, sliceHeight);
-  }
-}

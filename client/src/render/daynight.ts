@@ -22,17 +22,3 @@ export function getDayNight(date: Date = new Date()): DayNight {
 
   return { darkness, glow };
 }
-
-export function applyDayNightOverlay(ctx: CanvasRenderingContext2D, width: number, height: number, dn: DayNight): void {
-  if (dn.darkness > 0.01) {
-    ctx.fillStyle = `rgba(10, 12, 45, ${dn.darkness * 0.65})`;
-    ctx.fillRect(0, 0, width, height);
-  }
-  if (dn.glow > 0.05) {
-    const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, `rgba(255, 140, 60, ${dn.glow * 0.18})`);
-    gradient.addColorStop(1, `rgba(255, 90, 60, 0)`);
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-  }
-}
