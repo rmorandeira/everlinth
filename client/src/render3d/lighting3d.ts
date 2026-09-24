@@ -35,7 +35,7 @@ const NIGHT_AMBIENT = new THREE.Color(0x33406b);
 const GLOW_SUN = new THREE.Color(0xffb066);
 const WHITE = new THREE.Color(0xffffff);
 
-const FOG_RADIUS = 9; // = VIEW_HALF_HEIGHT en scene3d.ts: cuánto mundo es "visible" antes de la niebla
+const FOG_RADIUS = 15; // = VIEW_HALF_HEIGHT en scene3d.ts: cuánto mundo es "visible" antes de la niebla
 
 export interface FlashlightParams {
   enabled: boolean;
@@ -119,7 +119,7 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     if (fl.enabled) {
       ndc.set(fl.cursorNdcX, fl.cursorNdcY);
       raycaster.setFromCamera(ndc, camera);
-      flashlight.position.set(playerX, 0.9, playerZ);
+      flashlight.position.set(playerX, 0.5, playerZ);
       if (raycaster.ray.intersectPlane(groundPlane, hitPoint)) {
         flashlight.target.position.copy(hitPoint);
       } else {

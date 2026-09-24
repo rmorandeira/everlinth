@@ -13,11 +13,12 @@ import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type PlacedTree, type ScreenData
 import { createIsoCamera, CAMERA_RIGHT, CAMERA_UP, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
-import { buildSkyscraper, disposeSkyscrapers } from "./buildings3d.js";
+import { buildBuilding, disposeBuildings } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { createCameraRig, type CameraMood } from "./cameraRig.js";
 import { createPostFx3D } from "./postfx3d.js";
+import { buildCityProps } from "./city3d.js";
 
 // Cuánto de más se acerca la cámara respecto al ajuste exacto de la sala —
 // igual que el "overscan" de computeLayout() en el scene.ts 2D: recorta un
@@ -71,10 +72,15 @@ function pick<T>(arr: T[], n: number): T {
 const GRASS_SHADES = [0x5cb85c, 0x4fa350, 0x66c266];
 const WATER_SHADES = [0x2e6fc4, 0x3a7fd4];
 const DIRT_COLOR = 0xb8a06a;
+const ROAD_COLOR = 0x3a3d42;
+const SIDEWALK_COLOR = 0xbdb8ac;
+const SIDEWALK_RAISE = 0.04; // acera algo más alta que la calzada: bordillo
 
 function groundColor(tile: TileType, n: number, out: THREE.Color): THREE.Color {
   if (tile === TileType.Water) return out.set(pick(WATER_SHADES, n));
   if (tile === TileType.Path) return out.set(DIRT_COLOR);
+  if (tile === TileType.Road) return out.set(ROAD_COLOR);
+  if (tile === TileType.Sidewalk) return out.set(SIDEWALK_COLOR);
   return out.set(pick(GRASS_SHADES, n)); // Grass y cualquier obstáculo (llevan grama debajo)
 }
 
@@ -148,6 +154,8 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     positions: Array<{ x: number; z: number; tile: TileType }>,
     obstacles: THREE.Group
   ): void {
+    const cityProps = buildCityProps(tiles, offsetX, offsetZ);
+    if (cityProps) obstacles.add(cityProps);
     for (let row = 0; row < tiles.length; row++) {
       for (let col = 0; col < tiles[row].length; col++) {
         const tile = tiles[row][col];
@@ -158,7 +166,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
         if (tile === TileType.Building) {
           if (isBuildingAnchor(tiles, row, col)) {
             const size = buildingFootprint(tiles, row, col);
-            const building = buildSkyscraper(x, z, size);
+            const building = buildBuilding(x, z, size);
             building.position.set(x + (size - 1) / 2, 0, z + (size - 1) / 2);
             obstacles.add(building);
           }
@@ -206,7 +214,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     if (groundMesh) scene.remove(groundMesh);
     if (obstacleGroup) scene.remove(obstacleGroup);
     if (treeGroup) scene.remove(treeGroup);
-    disposeSkyscrapers();
+    disposeBuildings();
 
     const positions: Array<{ x: number; z: number; tile: TileType }> = [];
     const obstacles = new THREE.Group();
@@ -227,7 +235,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     const c = new THREE.Color();
     const newWaterInstances: number[] = [];
     positions.forEach((p, i) => {
-      m.makeTranslation(p.x, 0, p.z);
+      m.makeTranslation(p.x, p.tile === TileType.Sidewalk ? SIDEWALK_RAISE : 0, p.z);
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, groundColor(p.tile, hash2(p.x, p.z), c));
       if (p.tile === TileType.Water) newWaterInstances.push(i);

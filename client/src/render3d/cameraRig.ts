@@ -8,8 +8,8 @@
 export type CameraMood = "explore" | "action";
 
 const MOOD_SCALE: Record<CameraMood, number> = {
-  explore: 1,
-  action: 0.72, // más cerca: combate/recogida/descubrimiento piden ver más detalle, no más mapa
+  explore: 1.8, // más lejos que el ajuste exacto de la sala: se ve más mundo y el jugador queda pequeño
+  action: 1.3, // más cerca: combate/recogida/descubrimiento piden ver más detalle, no más mapa
 };
 
 export interface CameraRig {

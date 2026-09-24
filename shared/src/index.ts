@@ -62,6 +62,8 @@ export enum TileType {
   Building = 5,
   Fence = 6,
   Cactus = 7,
+  Road = 8,
+  Sidewalk = 9,
 }
 
 // Cómo se coloca un tile proceduralmente sobre la hierba base al generar una pantalla:
@@ -92,7 +94,24 @@ export const TILE_DEFS: Record<TileType, TileDef> = {
   [TileType.Building]: { blocking: true, placement: "rare", chance: 0.12, exoticBonus: 15 },
   [TileType.Fence]: { blocking: true, placement: "segment", chance: 0.3, exoticBonus: 3 },
   [TileType.Cactus]: { blocking: true, placement: "scatter", weight: 0.025, cluster: 0.05 },
+  // Solo los coloca el bioma "city" (ver cityCell), nunca el reparto aleatorio.
+  [TileType.Road]: { blocking: false, placement: "base" },
+  [TileType.Sidewalk]: { blocking: false, placement: "base" },
 };
+
+// ---- Ciudad ----
+// Escala realista: 1 tile ≈ 3 m. Cada sala (SCREEN_WIDTH×SCREEN_HEIGHT) es
+// exactamente una manzana: las filas 0-3 y las columnas 0-3 son las calles que
+// la rodean por el norte y el oeste (acera, dos carriles, acera) y el resto son
+// parcelas. Al estar alineado con la sala, las calles continúan sin costuras
+// entre salas contiguas y cliente y servidor comparten esta única definición.
+export const CITY_STREET_SIZE = 4;
+export type CityCell = "lot" | "sidewalk" | "road";
+export function cityCell(col: number, row: number): CityCell {
+  if (col >= CITY_STREET_SIZE && row >= CITY_STREET_SIZE) return "lot";
+  if ((col >= 1 && col <= 2) || (row >= 1 && row <= 2)) return "road";
+  return "sidewalk";
+}
 
 export const BLOCKING_TILES = new Set<TileType>(
   Object.entries(TILE_DEFS)
@@ -117,7 +136,7 @@ export function screenKey(c: ScreenCoord): string {
 // punto más, no O(n^2) relaciones que mantener a mano. La distancia entre dos
 // biomas en ese espacio decide cuántas estancias mínimas de transición hacen
 // falta para pasar de uno a otro sin salto brusco (ver minTransitionScreens).
-export type BiomeId = "classic" | "grimdark" | "badlands" | "cyberpunk" | "ega" | "cga" | "sea";
+export type BiomeId = "classic" | "grimdark" | "badlands" | "cyberpunk" | "ega" | "cga" | "sea" | "city";
 
 export interface BiomeDef {
   id: BiomeId;
@@ -135,6 +154,7 @@ export const BIOME_CATALOG: Record<BiomeId, BiomeDef> = {
   cyberpunk: { id: "cyberpunk", label: "Cyberpunk", temp: 0, tech: 1, debugColor: "#c026d3" },
   ega: { id: "ega", label: "EGA", temp: -0.3, tech: 0.6, debugColor: "#5555ff" },
   cga: { id: "cga", label: "CGA", temp: -0.2, tech: 0.55, debugColor: "#55ffff" },
+  city: { id: "city", label: "Ciudad", temp: 0.15, tech: 0.8, debugColor: "#8a8f98" },
   sea: { id: "sea", label: "Mar", temp: 0, tech: -0.2, blocking: true, debugColor: "#1f5fa8" },
 };
 

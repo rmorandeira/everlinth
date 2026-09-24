@@ -3,6 +3,7 @@ import {
   SCREEN_HEIGHT,
   TileType,
   TILE_DEFS,
+  cityCell,
   BLOCKING_TILES,
   type ScreenData,
   type MonsterState,
@@ -164,6 +165,27 @@ const GROUND_ONLY_BIOMES = new Set<BiomeId>(["badlands"]);
 // ahí por mucho que se le pida).
 const BUILDING_FOOTPRINT = 5;
 
+// Ciudad: dos parcelas por manzana (ver cityCell en shared) donde, con cierta
+// probabilidad, se levanta un edificio de 3 o 4 tiles de lado (9-12 m). Un
+// hueco vacío queda como solar de hierba. Los edificios son siempre cuadrados
+// de celdas Building contiguas, separados por al menos una columna de hierba
+// para que el cliente los distinga como edificios independientes.
+function placeCityBuildings(tiles: TileType[][], rng: () => number, present: Set<TileType>): void {
+  const slots = [
+    { col: 5, maxSize: 3 },
+    { col: 10, maxSize: 4 },
+  ];
+  for (const slot of slots) {
+    if (rng() > 0.85) continue;
+    const size = slot.maxSize === 4 && rng() < 0.4 ? 4 : 3;
+    const row = size === 4 ? 4 : 5;
+    for (let dy = 0; dy < size; dy++) {
+      for (let dx = 0; dx < size; dx++) tiles[row + dy][slot.col + dx] = TileType.Building;
+    }
+    present.add(TileType.Building);
+  }
+}
+
 export function generateScreen(sx: number, sy: number): GeneratedScreen {
   const rng = makeRng(seedFromCoords(sx, sy));
 
@@ -172,6 +194,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   // antes de generar los tiles y usarse para filtrar qué se coloca.
   const { biome, biomeSource, biomeBlend } = classifyBiome(sx, sy);
   const groundOnly = GROUND_ONLY_BIOMES.has(biome);
+  const isCity = biome === "city";
 
   const tiles: TileType[][] = Array.from({ length: SCREEN_HEIGHT }, () =>
     Array.from({ length: SCREEN_WIDTH }, () => TileType.Grass)
@@ -180,9 +203,19 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   // Presencia de cada tile "raro" en la pantalla, para el bono de XP de descubrimiento.
   const present = new Set<TileType>();
 
+  if (isCity) {
+    for (let y = 0; y < SCREEN_HEIGHT; y++) {
+      for (let x = 0; x < SCREEN_WIDTH; x++) {
+        const c = cityCell(x, y);
+        tiles[y][x] = c === "road" ? TileType.Road : c === "sidewalk" ? TileType.Sidewalk : TileType.Grass;
+      }
+    }
+    placeCityBuildings(tiles, rng, present);
+  }
+
   // --- "blob": manchas orgánicas (agua) ---
   for (const [key, def] of Object.entries(TILE_DEFS)) {
-    if (def.placement !== "blob") continue;
+    if (def.placement !== "blob" || isCity) continue;
     const t = Number(key) as TileType;
     const seeds = rng() < (def.chance ?? 0) ? 1 : rng() < (def.chance ?? 0) * 0.4 ? 2 : 0;
     for (let i = 0; i < seeds; i++) {
@@ -204,7 +237,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
 
   // --- "rare": como mucho una unidad por pantalla (p.ej. un edificio) ---
   for (const [key, def] of Object.entries(TILE_DEFS)) {
-    if (def.placement !== "rare") continue;
+    if (def.placement !== "rare" || isCity) continue;
     const t = Number(key) as TileType;
     if (groundOnly && NON_GROUND_TILES.has(t)) continue;
     if (rng() >= (def.chance ?? 0)) continue;
@@ -240,7 +273,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   // Colocar un tile sube la probabilidad de que sus celdas vecinas sean del mismo tipo,
   // así los árboles/rocas aparecen en manchas/bosquecillos en vez de puntos sueltos.
   const scatterDefs = Object.entries(TILE_DEFS).filter(
-    ([key, def]) => def.placement === "scatter" && !(groundOnly && NON_GROUND_TILES.has(Number(key) as TileType))
+    ([key, def]) => def.placement === "scatter" && !isCity && !(groundOnly && NON_GROUND_TILES.has(Number(key) as TileType))
   ) as Array<[string, (typeof TILE_DEFS)[TileType]]>;
   const influence = new Map<TileType, number[][]>();
   for (const [key] of scatterDefs) {
@@ -282,7 +315,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
 
   // --- "segment": un tramo corto en línea (p.ej. una valla), nunca sobre el camino garantizado ---
   for (const [key, def] of Object.entries(TILE_DEFS)) {
-    if (def.placement !== "segment") continue;
+    if (def.placement !== "segment" || isCity) continue;
     const t = Number(key) as TileType;
     if (groundOnly && NON_GROUND_TILES.has(t)) continue;
     if (rng() >= (def.chance ?? 0)) continue;
