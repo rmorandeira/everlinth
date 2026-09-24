@@ -96,6 +96,8 @@ export interface Scene3D {
 
 export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const scene = new THREE.Scene();
 
   const lighting = createLighting3D(scene);
@@ -243,6 +245,15 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
+    mesh.receiveShadow = true;
+    for (const grp of [obstacles, trees]) {
+      grp.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          o.castShadow = true;
+          o.receiveShadow = true;
+        }
+      });
+    }
     scene.add(mesh);
     scene.add(obstacles);
     scene.add(trees);

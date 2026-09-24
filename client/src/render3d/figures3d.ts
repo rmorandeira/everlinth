@@ -114,6 +114,10 @@ function buildRig(color: number, label?: string): Rig {
     root.add(sprite);
   }
 
+  root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && !(o as THREE.Sprite).isSprite && o !== shadow) o.castShadow = true;
+  });
+
   return { root, legL, legR, armL, armR, phase: 0, lastX: 0, lastZ: 0, facing: 0 };
 }
 

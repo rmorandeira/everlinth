@@ -57,7 +57,20 @@ export interface Lighting3D {
 export function createLighting3D(scene: THREE.Scene): Lighting3D {
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
   sun.position.set(6, 12, 4);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  const sc = sun.shadow.camera;
+  sc.left = -22;
+  sc.right = 22;
+  sc.top = 22;
+  sc.bottom = -22;
+  sc.near = 1;
+  sc.far = 60;
+  sc.updateProjectionMatrix();
+  sun.shadow.bias = -0.0005;
+  sun.shadow.normalBias = 0.03;
   scene.add(sun);
+  scene.add(sun.target);
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.55);
   scene.add(ambient);
@@ -91,15 +104,18 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     camera: THREE.Camera
   ): void {
     const dn = getDayNight();
+    sun.position.set(playerX - 7, 11, playerZ + 9);
+    sun.target.position.set(playerX, 0, playerZ);
+    sun.target.updateMatrixWorld();
 
     skyMix.copy(NIGHT_SKY).lerp(DAY_SKY, 1 - dn.darkness);
     if (dn.glow > 0.01) skyMix.lerp(GLOW_TINT, dn.glow * 0.35);
     bgColor.copy(skyMix);
     fog.color.copy(skyMix);
 
-    ambient.intensity = THREE.MathUtils.lerp(0.6, 0.16, dn.darkness);
+    ambient.intensity = THREE.MathUtils.lerp(0.38, 0.16, dn.darkness);
     ambient.color.copy(WHITE).lerp(NIGHT_AMBIENT, dn.darkness);
-    sun.intensity = THREE.MathUtils.lerp(1.4, 0.25, dn.darkness);
+    sun.intensity = THREE.MathUtils.lerp(1.9, 0.25, dn.darkness);
     sun.color.copy(WHITE).lerp(GLOW_SUN, dn.glow);
 
     // Mismos ajustes del backoffice que en 2D, remapeados a near/far
