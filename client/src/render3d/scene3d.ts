@@ -9,7 +9,7 @@
 // — columna de tile = X de mundo, fila de tile = Z de mundo, altura = Y. El
 // aspecto de rombo isométrico sale solo del ángulo de la cámara (isoCamera.ts).
 import * as THREE from "three";
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type TreeDef, type VisionFogSettings } from "@roi/shared";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type CityData, type TreeDef, type VisionFogSettings } from "@roi/shared";
 import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
@@ -18,7 +18,7 @@ import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { createOcclusion3D } from "./occlusion3d.js";
 import { createPostFx3D } from "./postfx3d.js";
-import { buildCityProps } from "./city3d.js";
+import { buildCityLayer } from "./city3d.js";
 
 // Zoom FIJO: mitad de alto del frustum ortográfico, en unidades de render
 // (1 unidad = 3 m). Con 7, una persona de 1,8 m ocupa ~32 px a 720p: la escena
@@ -39,15 +39,14 @@ function pick<T>(arr: T[], n: number): T {
 const GRASS_SHADES = [0x5cb85c, 0x4fa350, 0x66c266];
 const WATER_SHADES = [0x2e6fc4, 0x3a7fd4];
 const DIRT_COLOR = 0xb8a06a;
-const ROAD_COLOR = 0x3a3d42;
 const SIDEWALK_COLOR = 0xbdb8ac;
-const SIDEWALK_RAISE = 0.04; // acera algo más alta que la calzada: bordillo
 
 function groundColor(tile: TileType, n: number, out: THREE.Color): THREE.Color {
   if (tile === TileType.Water) return out.set(pick(WATER_SHADES, n));
   if (tile === TileType.Path) return out.set(DIRT_COLOR);
-  if (tile === TileType.Road) return out.set(ROAD_COLOR);
-  if (tile === TileType.Sidewalk) return out.set(SIDEWALK_COLOR);
+  // Ciudad: todo el suelo es pavimento; el asfalto lo dibuja city3d como cintas
+  // vectoriales encima (los tiles solo sirven para colisión y saldrían en escalera).
+  if (tile === TileType.Road || tile === TileType.Sidewalk) return out.set(SIDEWALK_COLOR);
   return out.set(pick(GRASS_SHADES, n)); // Grass y cualquier obstáculo (llevan grama debajo)
 }
 
@@ -83,14 +82,11 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const figures = createFigureManager();
   scene.add(figures.group);
 
-  // Suelo: un plano por tile (2 triángulos) en vez de una caja (12); solo las aceras, que
-  // van algo más altas (bordillo), usan caja para que se vea el canto.
+  // Suelo: un plano por tile (2 triángulos) en vez de una caja (12).
   const tileGeo = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE).rotateX(-Math.PI / 2).translate(0, 0.05, 0);
-  const curbGeo = new THREE.BoxGeometry(0.98 * TILE_SIZE, 0.1, 0.98 * TILE_SIZE);
   const tileMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
 
   let groundMesh: THREE.InstancedMesh | null = null;
-  let curbMesh: THREE.InstancedMesh | null = null;
   let obstacleGroup: THREE.Group | null = null;
   let treeGroup: THREE.Group | null = null;
   let waterInstances: number[] = []; // índices dentro de groundMesh que son agua, para el brillo animado
@@ -136,19 +132,21 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     roomX: number,
     roomY: number,
     positions: Array<{ x: number; z: number; tile: TileType }>,
-    obstacles: THREE.Group
+    obstacles: THREE.Group,
+    city: CityData | undefined
   ): void {
     const gx0 = roomX * SCREEN_WIDTH;
     const gz0 = roomY * SCREEN_HEIGHT;
-    const cityProps = buildCityProps(tiles, offsetX, offsetZ, gx0, gz0);
-    if (cityProps) obstacles.add(cityProps);
-    const urban = cityProps !== null;
+    // Ciudad vectorial: los edificios los levanta buildCityLayer a partir de sus
+    // polígonos; aquí sus celdas Building solo aportan suelo (pavimento).
+    const urban = city !== undefined;
     for (let row = 0; row < tiles.length; row++) {
       for (let col = 0; col < tiles[row].length; col++) {
         const tile = tiles[row][col];
         const x = col + offsetX;
         const z = row + offsetZ;
-        positions.push({ x, z, tile });
+        positions.push({ x, z, tile: urban && tile === TileType.Building ? TileType.Sidewalk : tile });
+        if (urban) continue;
 
         if (tile === TileType.Building) {
           if (isBuildingAnchor(tiles, row, col)) {
@@ -205,7 +203,6 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     lastKey = key;
 
     if (groundMesh) scene.remove(groundMesh);
-    if (curbMesh) scene.remove(curbMesh);
     if (obstacleGroup) {
       scene.remove(obstacleGroup);
       obstacleGroup.traverse((o) => {
@@ -221,41 +218,38 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     const trees = new THREE.Group();
     const updaters: Array<{ update: (time: number, def: TreeDef) => void; def: TreeDef }> = [];
 
-    collectGrid(screen.tiles, 0, 0, screen.sx, screen.sy, positions, obstacles);
+    collectGrid(screen.tiles, 0, 0, screen.sx, screen.sy, positions, obstacles, screen.city);
     collectTrees(screen.placedTrees, 0, 0, treeDefs, trees, updaters);
     for (const n of neighbors) {
       const offsetX = (n.sx - screen.sx) * SCREEN_WIDTH;
       const offsetZ = (n.sy - screen.sy) * SCREEN_HEIGHT;
-      collectGrid(n.tiles, offsetX, offsetZ, n.sx, n.sy, positions, obstacles);
+      collectGrid(n.tiles, offsetX, offsetZ, n.sx, n.sy, positions, obstacles, n.city);
       // Los árboles procedurales son caros (cientos de mallas animadas): solo en la sala actual y las contiguas.
       if (Math.abs(n.sx - screen.sx) <= 1 && Math.abs(n.sy - screen.sy) <= 1) {
         collectTrees(n.placedTrees, offsetX, offsetZ, treeDefs, trees, updaters);
       }
     }
 
-    const curbs = positions.filter((p) => p.tile === TileType.Sidewalk);
-    const flats = positions.filter((p) => p.tile !== TileType.Sidewalk);
-    const mesh = new THREE.InstancedMesh(tileGeo, tileMat, flats.length);
-    const curb = new THREE.InstancedMesh(curbGeo, tileMat, curbs.length);
+    const cityDatas = [screen.city, ...neighbors.map((n) => n.city)].filter((c): c is CityData => c !== undefined);
+    const cityLayer = cityDatas.length > 0 ? buildCityLayer(cityDatas, screen.sx * SCREEN_WIDTH, screen.sy * SCREEN_HEIGHT) : null;
+    if (cityLayer) {
+      obstacles.add(cityLayer.group);
+      for (const bg of cityLayer.buildings) occlusion.register(bg);
+    }
+
+    const mesh = new THREE.InstancedMesh(tileGeo, tileMat, positions.length);
     const m = new THREE.Matrix4();
     const c = new THREE.Color();
     const newWaterInstances: number[] = [];
-    flats.forEach((p, i) => {
+    positions.forEach((p, i) => {
       m.makeTranslation(p.x * T, 0, p.z * T);
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, groundColor(p.tile, hash2(p.x, p.z), c));
       if (p.tile === TileType.Water) newWaterInstances.push(i);
     });
-    curbs.forEach((p, i) => {
-      m.makeTranslation(p.x * T, SIDEWALK_RAISE, p.z * T);
-      curb.setMatrixAt(i, m);
-      curb.setColorAt(i, groundColor(p.tile, hash2(p.x, p.z), c));
-    });
-    for (const im of [mesh, curb]) {
-      im.instanceMatrix.needsUpdate = true;
-      if (im.instanceColor) im.instanceColor.needsUpdate = true;
-      im.receiveShadow = true;
-    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.receiveShadow = true;
 
     for (const grp of [obstacles, trees]) {
       grp.traverse((o) => {
@@ -266,11 +260,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
       });
     }
     scene.add(mesh);
-    scene.add(curb);
     scene.add(obstacles);
     scene.add(trees);
     groundMesh = mesh;
-    curbMesh = curb;
     obstacleGroup = obstacles;
     treeGroup = trees;
     waterInstances = newWaterInstances;
@@ -387,7 +379,6 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   function dispose(): void {
     tileGeo.dispose();
-    curbGeo.dispose();
     tileMat.dispose();
   }
 

@@ -101,111 +101,6 @@ export const TILE_DEFS: Record<TileType, TileDef> = {
   [TileType.Sidewalk]: { blocking: false, placement: "base" },
 };
 
-// ---- Ciudad ----
-// 1 tile ≈ 1,5 m. La red de calles NO es una cuadrícula regular: vive en
-// coordenadas GLOBALES de tile (independiente de cómo se troceen las salas), así
-// que continúa sin costuras entre salas y cliente y servidor comparten esta única
-// definición. Hay calles verticales (índice k) y horizontales (índice j) con
-// posición base irregular, ancho variable (5/7/9 tiles), tramos que faltan o
-// hacen un pequeño quiebro, avenidas de doble sentido y calles de sentido único.
-// Cada calle va flanqueada de aceras de 2 tiles.
-export type CityKind = "lot" | "sidewalk" | "road";
-export interface CityCellInfo {
-  kind: CityKind;
-  /** Solo en calzada: 'h' calle horizontal, 'v' vertical, 'x' cruce. */
-  axis: "h" | "v" | "x" | null;
-  /** Solo en calzada no-cruce: centro (tile global) y semiancho de su calle. */
-  lineCenter: number;
-  lineHalf: number;
-  oneWay: boolean;
-  /** Sentido (+1/-1) de las calles de sentido único. */
-  dir: number;
-  /** Manzana convertida en parque (sin edificios). */
-  park: boolean;
-}
-
-const CITY_PX = 44;
-const CITY_PY = 30;
-const CITY_SIDEWALK = 2;
-
-function chash(a: number, b: number, c: number): number {
-  const s = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453;
-  return s - Math.floor(s);
-}
-const xbCache = new Map<number, number>();
-const ybCache = new Map<number, number>();
-function xBase(k: number): number {
-  let v = xbCache.get(k);
-  if (v === undefined) xbCache.set(k, (v = k * CITY_PX + Math.round((chash(k, 0, 1) - 0.5) * 14)));
-  return v;
-}
-function yBase(j: number): number {
-  let v = ybCache.get(j);
-  if (v === undefined) ybCache.set(j, (v = j * CITY_PY + Math.round((chash(0, j, 2) - 0.5) * 10)));
-  return v;
-}
-function bandIndex(v: number, base: (i: number) => number, period: number): number {
-  let i = Math.floor(v / period);
-  while (base(i + 1) <= v) i++;
-  while (base(i) > v) i--;
-  return i;
-}
-
-interface StreetLine {
-  center: number;
-  half: number;
-  exists: boolean;
-  oneWay: boolean;
-  dir: number;
-}
-// Calle de índice 'i' en el tramo 'band' (entre dos calles perpendiculares).
-// Sus quiebros (±2) quedan siempre ocultos bajo la calzada de la calle que cruza.
-function streetLine(i: number, band: number, base: number, salt: number): StreetLine {
-  const avenue = chash(i, salt, 3) < 0.25;
-  const half = avenue ? 4 : chash(i, salt, 4) < 0.5 ? 2 : 3;
-  return {
-    center: base + (avenue ? 0 : Math.round((chash(i, band + salt, 8) - 0.5) * 4)),
-    half,
-    exists: avenue || chash(i, band + salt, 5) > 0.15,
-    oneWay: !avenue && chash(i, band + salt, 6) < 0.6,
-    dir: chash(i, band + salt, 7) < 0.5 ? 1 : -1,
-  };
-}
-
-const CITY_LOT: CityCellInfo = { kind: "lot", axis: null, lineCenter: 0, lineHalf: 0, oneWay: false, dir: 1, park: false };
-export function cityAt(gx: number, gy: number): CityCellInfo {
-  const ib = bandIndex(gx, xBase, CITY_PX);
-  const jb = bandIndex(gy, yBase, CITY_PY);
-
-  let roadH: StreetLine | null = null;
-  let sideH = false;
-  const j0 = Math.round(gy / CITY_PY);
-  for (let j = j0 - 1; j <= j0 + 1; j++) {
-    const l = streetLine(j, ib, yBase(j), 100);
-    if (!l.exists) continue;
-    const d = Math.abs(gy - l.center);
-    if (d <= l.half) roadH = l;
-    else if (d <= l.half + CITY_SIDEWALK) sideH = true;
-  }
-  let roadV: StreetLine | null = null;
-  let sideV = false;
-  const k0 = Math.round(gx / CITY_PX);
-  for (let k = k0 - 1; k <= k0 + 1; k++) {
-    const l = streetLine(k, jb, xBase(k), 200);
-    if (!l.exists) continue;
-    const d = Math.abs(gx - l.center);
-    if (d <= l.half) roadV = l;
-    else if (d <= l.half + CITY_SIDEWALK) sideV = true;
-  }
-
-  if (roadH && roadV) return { kind: "road", axis: "x", lineCenter: 0, lineHalf: 0, oneWay: false, dir: 1, park: false };
-  if (roadH) return { kind: "road", axis: "h", lineCenter: roadH.center, lineHalf: roadH.half, oneWay: roadH.oneWay, dir: roadH.dir, park: false };
-  if (roadV) return { kind: "road", axis: "v", lineCenter: roadV.center, lineHalf: roadV.half, oneWay: roadV.oneWay, dir: roadV.dir, park: false };
-  if (sideH || sideV) return { kind: "sidewalk", axis: null, lineCenter: 0, lineHalf: 0, oneWay: false, dir: 1, park: false };
-  const park = chash(ib, jb, 9) < 0.07;
-  return park ? { ...CITY_LOT, park: true } : CITY_LOT;
-}
-
 export const BLOCKING_TILES = new Set<TileType>(
   Object.entries(TILE_DEFS)
     .filter(([, def]) => def.blocking)
@@ -330,6 +225,8 @@ export interface ScreenData {
   biomeSource: BiomeSource;
   biomeBlend: BiomeBlend | null;
   code: string; // huella alfanumérica del contenido de la estancia (tiles + elementos)
+  /** Solo bioma city: geometría vectorial de calles y edificios (no se guarda, se regenera). */
+  city?: CityData;
 }
 
 // Terreno (solo tiles, sin monstruos/objetos/entidades) de una estancia vecina a
@@ -341,7 +238,34 @@ export interface NeighborTiles {
   sy: number;
   tiles: TileType[][];
   placedTrees: PlacedTree[];
+  city?: CityData;
 }
+
+// Geometría vectorial de la ciudad (coordenadas GLOBALES de tile): el servidor la
+// genera con MapGenerator (server/src/citygen) y el cliente dibuja las calles como
+// cintas y los edificios como polígonos extruidos, así las diagonales salen limpias
+// (los tiles solo sirven para colisión). kind: 0 calle menor, 1 mayor, 2 avenida.
+export interface CityRoad {
+  id: string;
+  kind: 0 | 1 | 2;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+export interface CityBuilding {
+  id: string;
+  floors: number;
+  pts: Array<[number, number]>;
+}
+export interface CityData {
+  roads: CityRoad[];
+  buildings: CityBuilding[];
+  /** Cruces de calles (para pasos de cebra y cortar las marcas). */
+  nodes: Array<[number, number]>;
+}
+export const CITY_ROAD_HALF = [1.6, 2.4, 3.4];
+export const CITY_SIDEWALK_W = 1.5;
 
 // Definición de un "árbol" generado proceduralmente desde el backoffice (ver
 // /admin/trees): un tronco con varias ramas principales terminadas en racimos

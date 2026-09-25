@@ -388,6 +388,67 @@ export function buildBuilding(globalX: number, globalZ: number, wTiles: number, 
   return group;
 }
 
+// Edificio de la ciudad vectorial (ver CityBuilding en shared): polígono de planta
+// arbitrario (coordenadas GLOBALES de tile) extruido con texturas de fachada. Los
+// altos se escalonan (retranqueos hacia el centroide). originGX/originGZ: tile
+// global que corresponde al origen de la escena. Devuelve el Group ya colocado.
+export function buildPolygonBuilding(id: string, ptsTiles: Array<[number, number]>, floors: number, originGX: number, originGZ: number): THREE.Group {
+  const group = new THREE.Group();
+  if (!ready || ptsTiles.length < 3) return group;
+  let cx = 0;
+  let cz = 0;
+  for (const [x, z] of ptsTiles) {
+    cx += x;
+    cz += z;
+  }
+  cx /= ptsTiles.length;
+  cz /= ptsTiles.length;
+  let pts: P[] = ptsTiles.map(([x, z]) => [(x - cx) * TILE_SIZE, (z - cz) * TILE_SIZE] as P);
+  // Misma orientación que rectPoly (área con signo positiva): normales hacia fuera.
+  let area2 = 0;
+  for (let k = 0; k < pts.length; k++) {
+    const q = pts[(k + 1) % pts.length];
+    area2 += pts[k][0] * q[1] - q[0] * pts[k][1];
+  }
+  if (area2 < 0) pts = pts.reverse();
+
+  let hsh = 0;
+  for (let k = 0; k < id.length; k++) hsh = (hsh * 31 + id.charCodeAt(k)) | 0;
+  const seed = (hsh % 100000) / 7.3;
+  const n = hash2(seed, 0.77);
+  const n2 = hash2(seed, 4.7);
+  const roof = roofMaterial(pick(ROOF_COLORS, hash2(seed, 7.3)));
+  const batch = new PlaneBatch();
+  const xs = pts.map((p) => p[0]);
+  const zs = pts.map((p) => p[1]);
+  const hx = (Math.max(...xs) - Math.min(...xs)) / 2;
+  const hz = (Math.max(...zs) - Math.min(...zs)) / 2;
+
+  let top: number;
+  let dhx = hx * 0.55;
+  let dhz = hz * 0.55;
+  if (floors <= 3 && n2 < 0.35) {
+    top = extrudeLowrise(batch, pts, pick(byCat.lowrise, n), roof);
+  } else {
+    const tex = chooseTower(Math.max(3, Math.min(floors, 8)), n);
+    if (floors >= 14 && Math.min(hx, hz) > 1.2) {
+      const f0 = Math.round(floors * 0.55);
+      const f1 = Math.round(floors * 0.28);
+      top = extrudeTower(batch, pts, 0, f0, tex, true, seed, roof);
+      top = extrudeTower(batch, scalePoly(pts, 0.74), top, f1, tex, false, seed + 1, roof);
+      top = extrudeTower(batch, scalePoly(pts, 0.5), top, Math.max(2, floors - f0 - f1), tex, false, seed + 2, roof);
+      dhx = hx * 0.3;
+      dhz = hz * 0.3;
+    } else {
+      top = extrudeTower(batch, pts, 0, floors, tex, true, seed, roof);
+    }
+  }
+  roofDecor(batch, top, dhx, dhz, seed);
+  batch.build(group);
+  group.position.set((cx - originGX) * TILE_SIZE, 0, (cz - originGZ) * TILE_SIZE);
+  return group;
+}
+
 export function disposeBuildings(): void {
   for (const g of activeGeometries) g.dispose();
   activeGeometries.length = 0;

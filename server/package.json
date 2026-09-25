@@ -10,7 +10,14 @@
   },
   "dependencies": {
     "@roi/shared": "*",
+    "d3-quadtree": "^3.0.1",
     "express": "^4.19.2",
+    "isect": "^3.0.3",
+    "jsts": "^2.3.0",
+    "loglevel": "^1.9.2",
+    "polyk": "^0.24.0",
+    "simplex-noise": "^2.4.0",
+    "simplify-js": "^1.2.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -25,6 +25,7 @@ import {
 } from "@roi/shared";
 import { getScreen, saveScreen, getPlayer, savePlayer, deletePlayer } from "./db.js";
 import { generateScreen } from "./worldgen.js";
+import { rasterRoom } from "./citygen/index.js";
 import { MONSTER_KINDS } from "./content.js";
 
 const NO_INPUT: InputState = { N: false, S: false, E: false, W: false };
@@ -188,17 +189,22 @@ export class GameServer {
     const key = screenKey({ sx, sy });
     const cached = this.screenCache.get(key);
     if (cached) return { screen: cached, discoveryXp: null };
+    const withCity = (sc: ScreenData): ScreenData => {
+      // La geometría vectorial de la ciudad no se guarda: se regenera (determinista).
+      if (sc.biome === "city" && !sc.city) sc.city = rasterRoom(sx, sy).city;
+      return sc;
+    };
 
     const existing = getScreen(sx, sy);
     // Salas guardadas con otro tamaño (versión anterior del mundo): se regeneran.
     if (existing && existing.tiles.length === SCREEN_HEIGHT && existing.tiles[0].length === SCREEN_WIDTH) {
-      this.screenCache.set(key, existing);
+      this.screenCache.set(key, withCity(existing));
       return { screen: existing, discoveryXp: null };
     }
 
     const { screen, discoveryXp } = generateScreen(sx, sy);
     saveScreen(screen);
-    this.screenCache.set(key, screen);
+    this.screenCache.set(key, withCity(screen));
     return { screen, discoveryXp };
   }
 
@@ -220,7 +226,7 @@ export class GameServer {
         const nsy = sy + dy;
         if (nsx < WORLD_MIN || nsx > WORLD_MAX || nsy < WORLD_MIN || nsy > WORLD_MAX) continue;
         const { screen } = this.ensureScreenLoaded(nsx, nsy);
-        neighbors.push({ sx: nsx, sy: nsy, tiles: screen.tiles, placedTrees: screen.placedTrees });
+        neighbors.push({ sx: nsx, sy: nsy, tiles: screen.tiles, placedTrees: screen.placedTrees, city: screen.city });
       }
     }
     return neighbors;
