@@ -1,6 +1,7 @@
 import "./style.css";
 import {
   DEFAULT_VISION_SETTINGS,
+  GIANT_SCALE,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
   type Direction,
@@ -120,7 +121,7 @@ const otherPlayers = new Map<string, PlayerPublicState>();
 let youDisplay = { x: 0, y: 0 };
 const otherDisplay = new Map<string, { x: number; y: number }>();
 // Zombis: posiciones GLOBALES (sala*tamaño + local), suavizadas entre snapshots.
-const zombieTargets = new Map<number, { gx: number; gy: number }>();
+const zombieTargets = new Map<number, { gx: number; gy: number; giant: boolean }>();
 const zombieDisplay = new Map<number, { gx: number; gy: number }>();
 const ZOMBIE_COLOR = 0x5b8f45;
 let aimAngle = 0;
@@ -272,7 +273,7 @@ function handleServerMessage(msg: ServerMessage): void {
     case "zombies": {
       zombieTargets.clear();
       for (const z of msg.zombies) {
-        zombieTargets.set(z.id, { gx: z.gx, gy: z.gy });
+        zombieTargets.set(z.id, { gx: z.gx, gy: z.gy, giant: z.giant === true });
         if (!zombieDisplay.has(z.id)) zombieDisplay.set(z.id, { gx: z.gx, gy: z.gy });
       }
       for (const id of zombieDisplay.keys()) if (!zombieTargets.has(id)) zombieDisplay.delete(id);
@@ -284,6 +285,11 @@ function handleServerMessage(msg: ServerMessage): void {
         const oy = currentScreen.sy * SCREEN_HEIGHT;
         scene3d.addTracer(msg.from.gx - ox, msg.from.gy - oy, msg.to.gx - ox, msg.to.gy - oy);
         scene3d.gunImpact(msg.to.gx - ox, msg.to.gy - oy);
+        // De vez en cuando una trazadora rebota en lo que ha golpeado (no en zombis).
+        if (msg.hit === "wall" && Math.random() < 0.18) {
+          const shotLen = Math.hypot(msg.to.gx - msg.from.gx, msg.to.gy - msg.from.gy);
+          scene3d.gunRicochet(msg.to.gx - ox, msg.to.gy - oy, msg.to.gx - msg.from.gx, msg.to.gy - msg.from.gy, shotLen > 14);
+        }
         if (you) {
           // Disparo de otro jugador: su fogonazo y su sonido, atenuado con la distancia.
           const d = Math.hypot(msg.from.gx - (ox + youDisplay.x), msg.from.gy - (oy + youDisplay.y));
@@ -576,7 +582,8 @@ function frame(now: number): void {
         d.gx = lerpTowards(d.gx, t.gx, dt, 14);
         d.gy = lerpTowards(d.gy, t.gy, dt, 14);
       }
-      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR, silhouette: 0xff3b3b, zombie: true });
+      const giant = t?.giant === true;
+      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR, silhouette: giant ? 0xff8a1a : 0xff3b3b, zombie: true, scale: giant ? GIANT_SCALE : 1 });
     }
     for (const m of currentScreen.monsters) {
       if (!m.alive) continue;

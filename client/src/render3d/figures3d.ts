@@ -94,7 +94,7 @@ interface Rig {
   speed: number;
 }
 
-function buildRig(color: number, label: string | undefined, armed: boolean, silhouette: number | undefined, zombie: boolean, seed: number): Rig {
+function buildRig(color: number, label: string | undefined, armed: boolean, silhouette: number | undefined, zombie: boolean, seed: number, scale = 1): Rig {
   const parts: Part[] = [];
   const part = (kind: PartKind, parent: THREE.Object3D, col: number, x = 0, y = 0, z = 0): THREE.Object3D => {
     const a = new THREE.Object3D();
@@ -111,13 +111,13 @@ function buildRig(color: number, label: string | undefined, armed: boolean, silh
     return pivot;
   };
 
-  const skin = zombie ? 0x93a874 : HUMAN_SKINS[seed % HUMAN_SKINS.length];
+  const skin = zombie ? (scale > 1.5 ? 0x7a8f5c : 0x93a874) : HUMAN_SKINS[seed % HUMAN_SKINS.length];
   const shirt = zombie ? ZOMBIE_SHIRTS[seed % ZOMBIE_SHIRTS.length] : color;
   const pants = zombie ? 0x35363c : 0x2b2f38;
   const shoes = 0x1a1a1c;
 
   const root = new THREE.Group();
-  root.scale.setScalar(FIGURE_SCALE);
+  root.scale.setScalar(FIGURE_SCALE * scale);
   const body = new THREE.Group();
   root.add(body);
 
@@ -184,6 +184,8 @@ export interface FigureEntity {
   z: number;
   color: number;
   label?: string;
+  /** Tamaño relativo (1 = persona normal; los zombis gigantes son más grandes). */
+  scale?: number;
   /** Anda como un zombi: encorvado, brazos al frente, arrastrando los pies. */
   zombie?: boolean;
   /** Color de su silueta cuando queda tapada (sin silueta si no se da). */
@@ -285,7 +287,7 @@ export function createFigureManager(): FigureManager {
       seen.add(e.id);
       let rig = rigs.get(e.id);
       if (!rig) {
-        rig = buildRig(e.color, e.label, e.armed === true, e.silhouette, e.zombie === true, seedOf(e.id));
+        rig = buildRig(e.color, e.label, e.armed === true, e.silhouette, e.zombie === true, seedOf(e.id), e.scale ?? 1);
         rig.lastX = e.x;
         rig.lastZ = e.z;
         rigs.set(e.id, rig);
@@ -296,7 +298,7 @@ export function createFigureManager(): FigureManager {
       const dz = e.z - rig.lastZ;
       const dist = Math.hypot(dx, dz);
       if (dist > 0.0008) {
-        rig.phase += dist * 16;
+        rig.phase += (dist * 16) / (e.scale ?? 1);
         rig.facing = Math.atan2(dx, dz);
       }
       rig.lastX = e.x;

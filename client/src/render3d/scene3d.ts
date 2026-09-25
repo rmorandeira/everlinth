@@ -69,6 +69,11 @@ export interface Scene3D {
   gunFire(tileX: number, tileZ: number, dx: number, dz: number): void;
   /** Chispa y luz del impacto de una bala (tiles, locales a la sala). */
   gunImpact(tileX: number, tileZ: number): void;
+  /**
+   * Rebote de una trazadora en (tileX,tileZ) que venía en la dirección (dx,dz):
+   * far = el impacto fue lejos del tirador (sale en parábola) o cerca (rebota).
+   */
+  gunRicochet(tileX: number, tileZ: number, dx: number, dz: number, far: boolean): void;
   /** Trazador de bala efímero entre dos puntos del suelo. */
   addTracer(x0: number, z0: number, x1: number, z1: number): void;
   render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void;
@@ -332,11 +337,14 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const tracerGeo = new THREE.BoxGeometry(1, 0.035, 0.035);
   const tracers: Array<{ mesh: THREE.Mesh; life: number }> = [];
   const TRACER_LIFE = 0.11;
+  const TRACER_COLORS = [0xffe08a, 0xfff0b8, 0xffd060, 0xffb347, 0xffc978, 0xff8f4a];
   function addTracer(tx0: number, tz0: number, tx1: number, tz1: number): void {
     const x0 = tx0 * T, z0 = tz0 * T, x1 = tx1 * T, z1 = tz1 * T;
     const len = Math.hypot(x1 - x0, z1 - z0);
     if (len < 0.05) return;
-    const mesh = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, fog: false }));
+    // Color algo distinto en cada trazadora (del amarillo pálido al naranja, alguna rojiza).
+    const color = TRACER_COLORS[Math.floor(Math.random() * TRACER_COLORS.length)];
+    const mesh = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({ color, transparent: true, fog: false, blending: THREE.AdditiveBlending, depthWrite: false }));
     mesh.scale.x = len;
     mesh.position.set((x0 + x1) / 2, 0.38, (z0 + z1) / 2);
     mesh.rotation.y = -Math.atan2(z1 - z0, x1 - x0);
@@ -370,6 +378,11 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   }
   function gunImpact(tileX: number, tileZ: number): void {
     gunFx.impact(tileX * T, tileZ * T);
+  }
+  function gunRicochet(tileX: number, tileZ: number, dx: number, dz: number, far: boolean): void {
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-6) return;
+    gunFx.ricochet(tileX * T, tileZ * T, dx / l, dz / l, far);
   }
 
   function rotateCamera(step: number): void {
@@ -439,5 +452,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, gunFire, gunImpact, render, dispose, stats };
+  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, gunFire, gunImpact, gunRicochet, render, dispose, stats };
 }

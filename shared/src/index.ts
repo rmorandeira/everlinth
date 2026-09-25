@@ -362,7 +362,11 @@ export interface ZombieState {
   gx: number;
   gy: number;
   hp: number;
+  /** Zombi gigante: más grande, lento y resistente (solo aparece con hordas grandes). */
+  giant?: boolean;
 }
+export const GIANT_SCALE = 2.4;
+export const GIANT_HP = 40;
 export const ZOMBIE_MAX_HP = 3;
 export const ZOMBIE_VIEW_RANGE = 60;
 export const GUN_RANGE = 36;
@@ -393,6 +397,7 @@ export type ServerMessage =
   | { type: "error"; message: string }
   | { type: "visionSettings"; settings: VisionFogSettings }
   | { type: "zombies"; zombies: ZombieState[] }
-  | { type: "shot"; from: { gx: number; gy: number }; to: { gx: number; gy: number } }
+  // hit: qué detuvo la bala (un zombi, un obstáculo, o nada: fin del alcance).
+  | { type: "shot"; from: { gx: number; gy: number }; to: { gx: number; gy: number }; hit: "zombie" | "wall" | "none" }
   // Al tirador, cada vez que mata un zombi.
   | { type: "kill" };

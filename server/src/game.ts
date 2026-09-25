@@ -10,6 +10,7 @@ import {
   WORLD_MIN,
   WORLD_MAX,
   ZOMBIE_MAX_HP,
+  GIANT_HP,
   ZOMBIE_VIEW_RANGE,
   GUN_RANGE,
   GUN_FIRE_MS,
@@ -379,8 +380,15 @@ export class GameServer {
     const len = Math.hypot(dxRaw, dzRaw);
     if (len < 1e-6) return;
     conn.lastShot = now;
-    const dx = dxRaw / len;
-    const dz = dzRaw / len;
+    // Dispersión del arma: cada bala se desvía un poco de donde se apunta (normal con
+    // σ ≈ 2,3°, aproximada sumando uniformes), así las ráfagas abren un pequeño cono.
+    const spread = (Math.random() + Math.random() + Math.random() - 1.5) * 0.08;
+    const cs = Math.cos(spread);
+    const sn = Math.sin(spread);
+    const ax = dxRaw / len;
+    const az = dzRaw / len;
+    const dx = ax * cs - az * sn;
+    const dz = ax * sn + az * cs;
     const ox = player.sx * SCREEN_WIDTH + player.x;
     const oy = player.sy * SCREEN_HEIGHT + player.y;
 
@@ -400,7 +408,7 @@ export class GameServer {
       const ry = z.gy - oy;
       const t = rx * dx + ry * dz;
       if (t < 0 || t > hitT) continue;
-      if (Math.abs(rx * dz - ry * dx) < 0.7) {
+      if (Math.abs(rx * dz - ry * dx) < (z.giant ? 1.5 : 0.7)) {
         hit = z;
         hitT = t;
       }
@@ -409,12 +417,12 @@ export class GameServer {
       hit.hp -= 1;
       if (hit.hp <= 0) {
         this.zombies = this.zombies.filter((z) => z !== hit);
-        this.grantXp(player, 2);
+        this.grantXp(player, hit.giant ? 20 : 2);
         send(conn.socket, { type: "youUpdate", you: player });
         send(conn.socket, { type: "kill" });
       }
     }
-    const shot: ServerMessage = { type: "shot", from: { gx: ox, gy: oy }, to: { gx: ox + dx * hitT, gy: oy + dz * hitT } };
+    const shot: ServerMessage = { type: "shot", from: { gx: ox, gy: oy }, to: { gx: ox + dx * hitT, gy: oy + dz * hitT }, hit: hit ? "zombie" : wall < GUN_RANGE ? "wall" : "none" };
     for (const c of this.connections) {
       if (!c.username) continue;
       const p = this.players.get(c.username);
@@ -426,7 +434,7 @@ export class GameServer {
   // aparecen en grupos en un anillo fuera de pantalla, caminan despacio
   // arrastrándose hacia el jugador más cercano, se empujan entre ellos para no
   // amontonarse en un punto, y muerden al contacto. Se descartan si quedan lejos de todos.
-  private static readonly HORDE_SIZE = 70;
+  private static readonly HORDE_SIZE = 180;
   private tickZombies(dt: number): void {
     const targets: Array<{ conn: Connection; player: PlayerPrivateState; gx: number; gy: number }> = [];
     for (const [username, conn] of this.connByUsername) {
@@ -444,21 +452,30 @@ export class GameServer {
     }
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.zombies.length < GameServer.HORDE_SIZE * targets.length) {
-      this.spawnTimer = 0.3;
+      this.spawnTimer = 0.2;
       const t = targets[Math.floor(Math.random() * targets.length)];
       // un grupo de 2-5 alrededor de un punto del anillo
       const ang = Math.random() * Math.PI * 2;
       const r = 28 + Math.random() * 12;
       const cx = t.gx + Math.cos(ang) * r;
       const cy = t.gy + Math.sin(ang) * r;
-      const n = 2 + Math.floor(Math.random() * 4);
+      const n = 3 + Math.floor(Math.random() * 6);
       for (let i = 0; i < n; i++) {
         for (let attempt = 0; attempt < 5; attempt++) {
           const gx = cx + (Math.random() - 0.5) * 6;
           const gy = cy + (Math.random() - 0.5) * 6;
           if (this.isBlockedAt(0, 0, gx, gy)) continue;
-          // lentos, arrastrándose: 0,8-1,6 tiles/s (el jugador corre a más de 7)
-          this.zombies.push({ id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 0.8 + Math.random() * 0.8, hitCooldown: 0 });
+          // De vez en cuando, si la horda alrededor del jugador ya es muy grande, un
+          // gigante (máximo 2 a la vez por jugador): muy lento y muy resistente.
+          const nearCount = this.zombies.filter((zz) => Math.abs(zz.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(zz.gy - t.gy) < ZOMBIE_VIEW_RANGE).length;
+          const giants = this.zombies.filter((zz) => zz.giant && Math.abs(zz.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(zz.gy - t.gy) < ZOMBIE_VIEW_RANGE).length;
+          const giant = nearCount > 100 && giants < 2 && Math.random() < 0.02;
+          // lentos, arrastrándose: 0,8-1,6 tiles/s (el jugador corre a más de 7); gigantes 0,5-0,7
+          this.zombies.push(
+            giant
+              ? { id: this.nextZombieId++, gx, gy, hp: GIANT_HP, speed: 0.5 + Math.random() * 0.2, hitCooldown: 0, giant: true }
+              : { id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 0.8 + Math.random() * 0.8, hitCooldown: 0 }
+          );
           break;
         }
       }
@@ -477,10 +494,10 @@ export class GameServer {
       }
       if (nd > ZOMBIE_VIEW_RANGE * 1.6) return false;
       z.hitCooldown -= dt;
-      if (nd < 0.9) {
+      if (nd < (z.giant ? 1.9 : 0.9)) {
         if (z.hitCooldown <= 0 && !dead.has(near.conn)) {
           z.hitCooldown = 1;
-          near.player.hp -= 2;
+          near.player.hp -= z.giant ? 6 : 2;
           if (near.player.hp <= 0) {
             dead.add(near.conn);
             this.handleDeath(near.conn, near.player);
@@ -513,7 +530,7 @@ export class GameServer {
       if (dead.has(t.conn)) continue;
       const list = this.zombies
         .filter((z) => Math.abs(z.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(z.gy - t.gy) < ZOMBIE_VIEW_RANGE)
-        .map((z) => ({ id: z.id, gx: Math.round(z.gx * 100) / 100, gy: Math.round(z.gy * 100) / 100, hp: z.hp }));
+        .map((z) => ({ id: z.id, gx: Math.round(z.gx * 100) / 100, gy: Math.round(z.gy * 100) / 100, hp: z.hp, ...(z.giant ? { giant: true } : {}) }));
       send(t.conn.socket, { type: "zombies", zombies: list });
     }
   }

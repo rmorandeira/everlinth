@@ -91,6 +91,8 @@ export interface GunFx {
   fire(x: number, z: number, dx: number, dz: number): void;
   /** Impacto de la bala en (x,z). */
   impact(x: number, z: number): void;
+  /** Trazadora que rebota en (x,z) viniendo en la dirección (dx,dz); far = impacto lejano. */
+  ricochet(x: number, z: number, dx: number, dz: number, far: boolean): void;
   update(dt: number): void;
 }
 
@@ -140,6 +142,89 @@ export function createGunFx(scene: THREE.Scene): GunFx {
     p.sprite.visible = true;
   }
 
+  // ---- Rebotes de trazadora ----
+  // Una bala que roza o golpea en ángulo sale desviada. Si el impacto fue lejos del
+  // tirador (la bala llega con menos energía y en ángulo más rasante), sale hacia
+  // arriba y describe una parábola por la gravedad; si fue cerca, rebota con fuerza
+  // casi en horizontal y se apaga enseguida. Se dibuja como un trazo luminoso
+  // orientado según su velocidad (con estela), que el bloom hace brillar.
+  interface Bounce {
+    mesh: THREE.Mesh;
+    px: number;
+    py: number;
+    pz: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    age: number;
+    life: number;
+    gravity: number;
+  }
+  const bounceGeo = new THREE.BoxGeometry(1, 0.03, 0.03).translate(-0.5, 0, 0); // estela hacia atrás
+  const bounces: Bounce[] = [];
+  const RICO_COLORS = [0xffe08a, 0xffc060, 0xff9a50];
+  const tmpDir = new THREE.Vector3();
+  function ricochet(x: number, z: number, dx: number, dz: number, far: boolean): void {
+    // Normal de la superficie: más o menos contra la bala, con un ángulo al azar;
+    // la dirección de salida es el reflejo de la de llegada.
+    const na = Math.atan2(-dz, -dx) + (Math.random() - 0.5) * 1.8;
+    const nx = Math.cos(na);
+    const nz = Math.sin(na);
+    const dot = dx * nx + dz * nz;
+    let rx = dx - 2 * dot * nx;
+    let rz = dz - 2 * dot * nz;
+    const rl = Math.hypot(rx, rz) || 1;
+    rx /= rl;
+    rz /= rl;
+    const mat = new THREE.MeshBasicMaterial({ color: RICO_COLORS[Math.floor(Math.random() * RICO_COLORS.length)], transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+    const mesh = new THREE.Mesh(bounceGeo, mat);
+    scene.add(mesh);
+    const speed = far ? 7 + Math.random() * 4 : 16 + Math.random() * 8;
+    bounces.push({
+      mesh,
+      px: x,
+      py: 0.4 + Math.random() * 0.4,
+      pz: z,
+      vx: rx * speed * (far ? 0.6 : 1),
+      vy: far ? 5 + Math.random() * 4 : 0.5 + Math.random() * 1.5,
+      vz: rz * speed * (far ? 0.6 : 1),
+      age: 0,
+      life: far ? 1.1 + Math.random() * 0.5 : 0.22 + Math.random() * 0.15,
+      gravity: 14,
+    });
+  }
+  function updateBounces(dt: number): void {
+    for (let i = bounces.length - 1; i >= 0; i--) {
+      const b = bounces[i];
+      b.age += dt;
+      b.vy -= b.gravity * dt;
+      b.px += b.vx * dt;
+      b.py += b.vy * dt;
+      b.pz += b.vz * dt;
+      if (b.py < 0.06) {
+        // toca el suelo: pequeño rebote amortiguado
+        b.py = 0.06;
+        b.vy = Math.abs(b.vy) * 0.3;
+        b.vx *= 0.5;
+        b.vz *= 0.5;
+      }
+      const t = b.age / b.life;
+      if (t >= 1) {
+        scene.remove(b.mesh);
+        (b.mesh.material as THREE.Material).dispose();
+        bounces.splice(i, 1);
+        continue;
+      }
+      const sp = Math.hypot(b.vx, b.vy, b.vz);
+      b.mesh.position.set(b.px, b.py, b.pz);
+      tmpDir.set(b.px + b.vx, b.py + b.vy, b.pz + b.vz);
+      b.mesh.lookAt(tmpDir);
+      b.mesh.rotateY(-Math.PI / 2); // el eje largo (X) de la geometría hacia la velocidad
+      b.mesh.scale.x = Math.min(1.2, 0.05 * sp + 0.1);
+      (b.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - t * t;
+    }
+  }
+
   let flashT = 0;
   let hitT = 0;
   let flashPower = 1;
@@ -174,6 +259,7 @@ export function createGunFx(scene: THREE.Scene): GunFx {
   }
 
   function update(dt: number): void {
+    updateBounces(dt);
     flashT = Math.max(0, flashT - dt);
     const f = flashT / FLASH_TIME; // 1 → 0
     const k = f * f * flashPower;
@@ -210,5 +296,5 @@ export function createGunFx(scene: THREE.Scene): GunFx {
     }
   }
 
-  return { fire, impact, update };
+  return { fire, impact, ricochet, update };
 }
