@@ -126,16 +126,16 @@ function generateDistrict(dx: number, dy: number): District {
   try {
     const rand = Math.random;
     const rr = (min: number, max?: number): number => (max === undefined ? rand() * min : min + rand() * (max - min));
-    const field = new TensorField({ globalNoise: false, noiseSizePark: 20, noiseAnglePark: 90, noiseSizeGlobal: 30, noiseAngleGlobal: 20 });
-    const SPAWN = 0.7;
+    // Ruido global de rotación: tuerce las calles poco a poco (sin él, cada zona del
+    // campo es una cuadrícula perfecta). Más campos base y más pequeños que en el
+    // generador original, para que la orientación cambie cada pocas manzanas.
+    const field = new TensorField({ globalNoise: true, noiseSizePark: 20, noiseAnglePark: 90, noiseSizeGlobal: 140, noiseAngleGlobal: 22 });
+    const SPAWN = 0.85;
     const size = dims.clone().multiplyScalar(SPAWN);
     const o = dims.clone().multiplyScalar((1 - SPAWN) / 2).add(origin);
-    const grid = (loc: Vector): void => field.addGrid(loc, rr(DISTRICT_W / 4, DISTRICT_W), rr(50), rr(Math.PI / 2));
-    grid(o);
-    grid(o.clone().add(size));
-    grid(o.clone().add(new Vector(size.x, 0)));
-    grid(o.clone().add(new Vector(0, size.y)));
-    field.addRadial(new Vector(rand() * size.x, rand() * size.y).add(o), rr(DISTRICT_W / 10, DISTRICT_W / 5), rr(50));
+    const at = (): Vector => new Vector(rand() * size.x, rand() * size.y).add(o);
+    for (let i = 0; i < 7; i++) field.addGrid(at(), rr(DISTRICT_W / 8, DISTRICT_W / 3), rr(10, 40), rr(Math.PI / 2));
+    for (let i = 0; i < 2; i++) field.addRadial(at(), rr(DISTRICT_W / 14, DISTRICT_W / 7), rr(10, 40));
 
     const integrator = new RK4Integrator(field, minorP);
     const roads = (params: StreamlineParams, existing: StreamlineGenerator[]): StreamlineGenerator => {
@@ -166,7 +166,7 @@ function generateDistrict(dx: number, dy: number): District {
 
     const all = mainG.allStreamlinesSimple.concat(majorG.allStreamlinesSimple, minorG.allStreamlinesSimple);
     const g = new Graph(all, minorP.dstep, true);
-    const pf = new PolygonFinder(g.nodes, { maxLength: 20, minArea: 50, shrinkSpacing: 5.2, chanceNoDivide: 0.05 }, field);
+    const pf = new PolygonFinder(g.nodes, { maxLength: 20, minArea: 40, shrinkSpacing: 3.9, chanceNoDivide: 0.05 }, field);
     pf.findPolygons();
     pf.shrink(false);
     pf.divide(false);
