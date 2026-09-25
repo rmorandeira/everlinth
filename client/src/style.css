@@ -238,3 +238,43 @@ html, body {
   transform: translateX(18px);
   background: #fff;
 }
+
+#time-control {
+  position: absolute;
+  top: 40px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  font-size: 13px;
+  text-shadow: 1px 1px 0 #000;
+  user-select: none;
+  z-index: 5;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+#time-control input[type="range"] {
+  width: 140px;
+  cursor: pointer;
+  accent-color: #e8b400;
+}
+#time-label {
+  min-width: 40px;
+  font-variant-numeric: tabular-nums;
+}
+#time-real {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+#time-real.active {
+  background: #e8b400;
+  color: #111;
+  border-color: #e8b400;
+}

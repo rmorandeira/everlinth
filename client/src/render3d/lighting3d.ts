@@ -18,7 +18,7 @@
 //   cursor contra el plano de suelo (y=0) en vez de un cono de gradiente 2D.
 import * as THREE from "three";
 import type { VisionFogSettings } from "@roi/shared";
-import { getDayNight } from "../render/daynight.js";
+import { getDayNight, getHour } from "../render/daynight.js";
 import { ISO_CAMERA_DIST } from "./isoCamera.js";
 
 // Dos frecuencias superpuestas (no un único seno), igual que organicJitter en
@@ -107,8 +107,17 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     camera: THREE.Camera
   ): void {
     const dn = getDayNight();
-    // Sol alto (~70°): en una ciudad de rascacielos un sol bajo deja casi todo en sombra.
-    sun.position.set(playerX - 5, 24, playerZ + 7);
+    // El sol recorre el cielo con la hora: sale por el este (6 h), culmina a mediodía
+    // y se pone por el oeste (18 h). Nunca baja de ~35° de elevación: en una ciudad de
+    // rascacielos un sol más bajo deja casi todo en sombra. De noche, la luna (misma
+    // luz, azulada) queda alta y fija.
+    const hour = getHour();
+    const dayT = THREE.MathUtils.clamp((hour - 6) / 12, 0, 1); // 0 amanecer → 1 ocaso
+    const isDay = hour >= 6 && hour <= 18;
+    const az = isDay ? Math.PI * (1 - dayT) : Math.PI * 0.35;
+    const elev = isDay ? THREE.MathUtils.lerp(0.6, 1.25, Math.sin(Math.PI * dayT)) : 1.1;
+    const SUN_R = 26;
+    sun.position.set(playerX + Math.cos(az) * Math.cos(elev) * SUN_R, Math.sin(elev) * SUN_R, playerZ + Math.sin(az) * Math.cos(elev) * SUN_R * 0.7 + 4);
     sun.target.position.set(playerX, 0, playerZ);
     sun.target.updateMatrixWorld();
 

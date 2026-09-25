@@ -27,6 +27,12 @@
       <div id="discovery" class="hidden"></div>
       <div id="screen-code"></div>
       <canvas id="minimap"></canvas>
+      <div id="time-control" title="Hora del día">
+        <span class="text">Hora</span>
+        <input type="range" id="time-slider" min="0" max="24" step="0.25" value="12" />
+        <span id="time-label">--:--</span>
+        <button id="time-real" type="button" title="Volver a la hora real">Real</button>
+      </div>
       <label id="zombie-toggle" title="Activar o desactivar los zombis (tecla Z)">
         <input type="checkbox" id="zombie-toggle-input" checked />
         <span class="switch"></span>

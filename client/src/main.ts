@@ -24,6 +24,7 @@ import { WeatherSystem, pickWeather } from "./render/weather.js";
 import { drawCursorDot } from "./render/cursor.js";
 import { createScene3D } from "./render3d/scene3d.js";
 import { createMinimap, type MinimapDot } from "./render/minimap.js";
+import { getHour, setHourOverride } from "./render/daynight.js";
 import { unlockAudio, playStep, playGunshot, playGunTail, playLaugh } from "./audio.js";
 import { MONSTER_COLORS, MONSTER_COLOR_DEFAULT, type FigureEntity } from "./render3d/figures3d.js";
 
@@ -154,6 +155,45 @@ window.addEventListener("keydown", (ev) => {
     sendZombieSetting();
   }
 });
+
+// Control de la hora del día (0-24 h): mover el deslizador fija la hora; "Real"
+// vuelve a la hora del reloj. Se recuerda entre sesiones.
+const timeSlider = document.getElementById("time-slider") as HTMLInputElement;
+const timeLabel = document.getElementById("time-label") as HTMLSpanElement;
+const timeReal = document.getElementById("time-real") as HTMLButtonElement;
+const timeControl = document.getElementById("time-control") as HTMLDivElement;
+function fmtHour(h: number): string {
+  const hh = Math.floor(h) % 24;
+  const mm = Math.round((h - Math.floor(h)) * 60) % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+function refreshTimeUi(): void {
+  const h = getHour();
+  timeLabel.textContent = fmtHour(h);
+  if (document.activeElement !== timeSlider) timeSlider.value = String(h);
+}
+function setManualHour(h: number | null): void {
+  setHourOverride(h);
+  timeReal.classList.toggle("active", h === null);
+  try {
+    if (h === null) localStorage.removeItem("everlinth.hour");
+    else localStorage.setItem("everlinth.hour", String(h));
+  } catch {
+    /* ignorar */
+  }
+  refreshTimeUi();
+}
+timeSlider.addEventListener("input", () => setManualHour(Number(timeSlider.value)));
+timeReal.addEventListener("click", () => setManualHour(null));
+// que usar el control no dispare el arma
+timeControl.addEventListener("mousedown", (ev) => ev.stopPropagation());
+try {
+  const saved = localStorage.getItem("everlinth.hour");
+  setManualHour(saved !== null ? Number(saved) : null);
+} catch {
+  setManualHour(null);
+}
+setInterval(refreshTimeUi, 1000);
 
 // Racha de muertes: 4 zombis en 8 s → risa (como mucho una cada 12 s).
 const recentKills: number[] = [];
