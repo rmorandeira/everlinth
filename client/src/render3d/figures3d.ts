@@ -1,40 +1,44 @@
-// Fase 3 de la migración a 3D (ver plan): sustituye drawStickGuy/drawFigure
-// (client/src/render/scene.ts) por una figura low-poly compartida (cajas para
-// piernas/torso/brazos/cabeza), usada tanto para jugadores como monstruos —
-// solo cambia el color.
+// Figuras (personaje, otros jugadores, zombis, monstruos): una figura low-poly
+// estilizada — extremidades largas y finas (cápsulas), torso de hombros anchos y
+// cintura estrecha, cabeza pequeña, manos y pies — con colores de piel, ropa y
+// calzado.
 //
-// A diferencia del suelo/obstáculos/árboles (se reconstruyen solo al cambiar
-// de pantalla), jugadores y monstruos se mueven cada frame: este módulo
-// mantiene un Map<id, rig> vivo entre frames (id = username o
-// MonsterState.id) en vez de reconstruir nada. update() se llama una vez por
-// frame con la lista actual de entidades — crea el rig la primera vez que
-// aparece alguien, actualiza posición/animación mientras siga en la lista, y
-// LO RETIRA de la escena si deja de aparecer (cambio de pantalla, logout,
-// muerte). El playerAnims/otherDisplay de la versión 2D nunca limpiaba
-// entradas viejas (inofensivo allí, eran solo datos); aquí un rig sin limpiar
-// se quedaría visible en la escena para siempre.
+// Se dibujan con INSTANCING: cada tipo de pieza (pierna, pie, torso, cabeza…) de
+// todas las figuras es un único InstancedMesh con el color por instancia, así cien
+// zombis cuestan lo mismo en llamadas de dibujo que uno. Cada figura conserva una
+// jerarquía de Object3D (raíz → cuerpo → columna → brazos/cabeza, piernas) que NO se
+// dibuja: solo sirve para animar la pose y calcular la matriz de cada pieza.
+//
+// update() se llama una vez por frame con la lista actual de entidades: crea la
+// pose la primera vez que aparece alguien, la anima mientras siga en la lista y la
+// retira cuando deja de aparecer (cambio de pantalla, logout, muerte).
 import * as THREE from "three";
 
-const legGeo = new THREE.BoxGeometry(0.09, 0.4, 0.09);
-const torsoGeo = new THREE.BoxGeometry(0.32, 0.38, 0.2);
-const armGeo = new THREE.BoxGeometry(0.09, 0.34, 0.09);
-const headGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
-const shadowGeo = new THREE.CircleGeometry(0.22, 12);
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28 });
+// ---- Geometría de las piezas (proporciones sin escalar; ver FIGURE_SCALE) ----
+const LEG_LEN = 0.5;
+const ARM_LEN = 0.4;
+const PART_GEOS = {
+  leg: new THREE.CapsuleGeometry(0.042, LEG_LEN - 0.084, 3, 8),
+  arm: new THREE.CapsuleGeometry(0.032, ARM_LEN - 0.064, 3, 8),
+  torso: new THREE.CapsuleGeometry(0.1, 0.2, 3, 10),
+  pelvis: new THREE.BoxGeometry(0.19, 0.09, 0.11),
+  foot: new THREE.BoxGeometry(0.075, 0.045, 0.15),
+  head: new THREE.IcosahedronGeometry(0.082, 1),
+  hair: new THREE.SphereGeometry(0.086, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.55),
+  gun: new THREE.BoxGeometry(0.07, 0.09, 0.5),
+};
+type PartKind = keyof typeof PART_GEOS;
+const PART_KINDS = Object.keys(PART_GEOS) as PartKind[];
 
-const materialCache = new Map<number, THREE.MeshLambertMaterial>();
-function materialFor(color: number): THREE.MeshLambertMaterial {
-  let m = materialCache.get(color);
-  if (!m) {
-    m = new THREE.MeshLambertMaterial({ color });
-    materialCache.set(color, m);
-  }
-  return m;
-}
+const shadowGeo = new THREE.CircleGeometry(0.22, 12).rotateX(-Math.PI / 2);
+const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false });
 
-// Una textura de canvas por texto de etiqueta (no cambia por frame): el
-// Sprite en sí es barato de crear, uno por rig, referenciando el mismo
-// material — un Sprite ya mira siempre a cámara sin código extra.
+// Silueta a través de las paredes: las mismas piezas con un material que solo se
+// pinta donde la figura está TAPADA (prueba de profundidad invertida), en color plano
+// semitransparente (el color va por instancia).
+const silhouetteMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, depthFunc: THREE.GreaterDepth, fog: false });
+
+// Una textura de canvas por texto de etiqueta (no cambia por frame).
 const labelMaterialCache = new Map<string, THREE.SpriteMaterial>();
 function labelMaterialFor(text: string): THREE.SpriteMaterial {
   let mat = labelMaterialCache.get(text);
@@ -54,106 +58,115 @@ function labelMaterialFor(text: string): THREE.SpriteMaterial {
   return mat;
 }
 
-// Escala realista (1 tile ≈ 3 m): una persona de ~1.8 m mide ~0.6 tiles. El rig
-// está dibujado con ~1.05 de alto, así que se reduce de una vez en el grupo raíz.
-const FIGURE_SCALE = 0.62;
-const HIP_Y = 0.4; // pies en y=0, cadera a esta altura
-const SHOULDER_Y = HIP_Y + 0.36;
-const HEAD_Y = SHOULDER_Y + 0.17;
+// Escala realista (1 tile ≈ 3 m): una persona de ~1.8 m mide ~0.6 unidades. La figura
+// está dibujada con ~1.1 de alto, así que se reduce de una vez en la raíz.
+const FIGURE_SCALE = 0.56;
+const HIP_Y = LEG_LEN + 0.03; // pies en y=0, cadera a esta altura
+const SHOULDER_UP = 0.4; // hombros sobre la cadera (dentro de la columna)
+const HEAD_UP = 0.56;
+
+const ZOMBIE_SHIRTS = [0x6b5d4f, 0x4f5d6b, 0x5d6b4f, 0x7a4a4a, 0x8a7f6a, 0x3f4a5a];
+const HUMAN_SKINS = [0xd9a88a, 0xc08a68, 0x8d5d40, 0xe8c0a0];
+
+interface Part {
+  kind: PartKind;
+  anchor: THREE.Object3D; // su matriz de mundo es la de la pieza
+  color: THREE.Color;
+}
 
 interface Rig {
   root: THREE.Group;
+  body: THREE.Group; // todo menos la sombra (sube/baja al correr)
+  spine: THREE.Group; // torso, brazos y cabeza (se inclina)
+  head: THREE.Object3D;
   legL: THREE.Group;
   legR: THREE.Group;
   armL: THREE.Group;
   armR: THREE.Group;
+  parts: Part[];
+  silhouette: THREE.Color | null;
+  label: THREE.Sprite | null;
+  zombie: boolean;
   phase: number;
   lastX: number;
   lastZ: number;
   facing: number;
+  speed: number;
 }
 
-function buildLimb(sideX: number, pivotY: number, geo: THREE.BoxGeometry, mat: THREE.MeshLambertMaterial, halfLen: number, root: THREE.Group): THREE.Group {
-  const pivot = new THREE.Group();
-  pivot.position.set(sideX, pivotY, 0);
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = -halfLen;
-  pivot.add(mesh);
-  root.add(pivot);
-  return pivot;
-}
+function buildRig(color: number, label: string | undefined, armed: boolean, silhouette: number | undefined, zombie: boolean, seed: number): Rig {
+  const parts: Part[] = [];
+  const part = (kind: PartKind, parent: THREE.Object3D, col: number, x = 0, y = 0, z = 0): THREE.Object3D => {
+    const a = new THREE.Object3D();
+    a.position.set(x, y, z);
+    parent.add(a);
+    parts.push({ kind, anchor: a, color: new THREE.Color(col) });
+    return a;
+  };
+  const limb = (parent: THREE.Object3D, sideX: number, pivotY: number, kind: PartKind, len: number, col: number): THREE.Group => {
+    const pivot = new THREE.Group();
+    pivot.position.set(sideX, pivotY, 0);
+    parent.add(pivot);
+    part(kind, pivot, col, 0, -len / 2, 0);
+    return pivot;
+  };
 
-// Silueta a través de las paredes: copia de cada pieza con un material que solo se
-// pinta donde la figura está TAPADA (prueba de profundidad invertida), en un color
-// plano semitransparente. Así nunca se pierde de vista al jugador ni a los zombis.
-const silhouetteCache = new Map<number, THREE.MeshBasicMaterial>();
-function silhouetteMaterial(color: number): THREE.MeshBasicMaterial {
-  let m = silhouetteCache.get(color);
-  if (!m) {
-    m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false, depthFunc: THREE.GreaterDepth, fog: false });
-    silhouetteCache.set(color, m);
-  }
-  return m;
-}
-function addSilhouettes(root: THREE.Object3D, color: number): void {
-  const parts: THREE.Mesh[] = [];
-  root.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (m.isMesh && !(o as unknown as THREE.Sprite).isSprite && m.geometry !== shadowGeo) parts.push(m);
-  });
-  for (const p of parts) {
-    const ghost = new THREE.Mesh(p.geometry, silhouetteMaterial(color));
-    ghost.renderOrder = 10; // después de la escena opaca
-    p.add(ghost);
-  }
-}
+  const skin = zombie ? 0x93a874 : HUMAN_SKINS[seed % HUMAN_SKINS.length];
+  const shirt = zombie ? ZOMBIE_SHIRTS[seed % ZOMBIE_SHIRTS.length] : color;
+  const pants = zombie ? 0x35363c : 0x2b2f38;
+  const shoes = 0x1a1a1c;
 
-const gunGeo = new THREE.BoxGeometry(0.07, 0.09, 0.5);
-const gunMat = new THREE.MeshLambertMaterial({ color: 0x23262b });
-
-function buildRig(color: number, label?: string, armed = false, silhouette?: number): Rig {
   const root = new THREE.Group();
   root.scale.setScalar(FIGURE_SCALE);
+  const body = new THREE.Group();
+  root.add(body);
 
-  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.01;
-  root.add(shadow);
+  const legL = limb(body, -0.062, HIP_Y, "leg", LEG_LEN, pants);
+  const legR = limb(body, 0.062, HIP_Y, "leg", LEG_LEN, pants);
+  for (const leg of [legL, legR]) part("foot", leg, shoes, 0, -LEG_LEN + 0.02, 0.035);
+  part("pelvis", body, pants, 0, HIP_Y + 0.01, 0);
 
-  const mat = materialFor(color);
-  const legL = buildLimb(-0.06, HIP_Y, legGeo, mat, 0.2, root);
-  const legR = buildLimb(0.06, HIP_Y, legGeo, mat, 0.2, root);
-
-  const torso = new THREE.Mesh(torsoGeo, mat);
-  torso.position.y = HIP_Y + 0.19;
-  root.add(torso);
-
-  const armL = buildLimb(-0.2, SHOULDER_Y, armGeo, mat, 0.17, root);
-  const armR = buildLimb(0.2, SHOULDER_Y, armGeo, mat, 0.17, root);
-
-  const head = new THREE.Mesh(headGeo, mat);
-  head.position.y = HEAD_Y;
-  root.add(head);
-
-  if (armed) {
-    const gun = new THREE.Mesh(gunGeo, gunMat);
-    gun.position.set(0.12, SHOULDER_Y - 0.12, 0.26);
-    root.add(gun);
+  const spine = new THREE.Group();
+  spine.position.y = HIP_Y;
+  body.add(spine);
+  part("torso", spine, shirt, 0, 0.22, 0).scale.set(1.3, 1, 0.72);
+  const armL = limb(spine, -0.165, SHOULDER_UP, "arm", ARM_LEN, shirt);
+  const armR = limb(spine, 0.165, SHOULDER_UP, "arm", ARM_LEN, shirt);
+  for (const arm of [armL, armR]) part("head", arm, skin, 0, -ARM_LEN + 0.01, 0).scale.setScalar(0.42); // mano
+  const head = part("head", spine, skin, 0, HEAD_UP, 0);
+  if (!zombie) {
+    const hair = part("hair", head, 0x2a1d14, 0, 0.012, 0);
+    hair.rotation.x = -0.25;
   }
+  if (armed) part("gun", spine, 0x23262b, 0.12, SHOULDER_UP - 0.12, 0.26);
 
+  let sprite: THREE.Sprite | null = null;
   if (label) {
-    const sprite = new THREE.Sprite(labelMaterialFor(label));
-    sprite.scale.set(1.1, 0.275, 1); // compensa FIGURE_SCALE: la etiqueta sigue legible
-    sprite.position.y = HEAD_Y + 0.28;
+    sprite = new THREE.Sprite(labelMaterialFor(label));
+    sprite.scale.set(1.2, 0.3, 1); // compensa FIGURE_SCALE: la etiqueta sigue legible
+    sprite.position.y = HIP_Y + HEAD_UP + 0.3;
     root.add(sprite);
   }
 
-  root.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh && !(o as THREE.Sprite).isSprite && o !== shadow) o.castShadow = true;
-  });
-  if (silhouette !== undefined) addSilhouettes(root, silhouette);
-
-  return { root, legL, legR, armL, armR, phase: 0, lastX: 0, lastZ: 0, facing: 0 };
+  return {
+    root,
+    body,
+    spine,
+    head,
+    legL,
+    legR,
+    armL,
+    armR,
+    parts,
+    silhouette: silhouette !== undefined ? new THREE.Color(silhouette) : null,
+    label: sprite,
+    zombie,
+    phase: seed * 0.7,
+    lastX: 0,
+    lastZ: 0,
+    facing: 0,
+    speed: 0,
+  };
 }
 
 // Mismos colores que MONSTER_COLORS en el scene.ts 2D.
@@ -171,7 +184,7 @@ export interface FigureEntity {
   z: number;
   color: number;
   label?: string;
-  /** Anda como un zombi: brazos al frente, arrastrando una pierna, balanceándose. */
+  /** Anda como un zombi: encorvado, brazos al frente, arrastrando los pies. */
   zombie?: boolean;
   /** Color de su silueta cuando queda tapada (sin silueta si no se da). */
   silhouette?: number;
@@ -186,23 +199,97 @@ export interface FigureManager {
   update(entities: FigureEntity[], time: number): void;
 }
 
+function seedOf(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h) % 997;
+}
+
+const MAX_FIGURES = 400;
+
+function animate(rig: Rig, dist: number): void {
+  rig.speed += (dist - rig.speed) * 0.2;
+  const moving = Math.min(1, rig.speed / 0.02);
+  if (rig.zombie) {
+    // Zombi: encorvado, cabeza ladeada, brazos al frente; pasos muy cortos con los pies
+    // casi sin despegarse del suelo (se arrastran) y balanceo de un lado a otro.
+    const p = rig.phase * 0.6;
+    rig.spine.rotation.x = 0.42 + Math.sin(p * 2) * 0.03;
+    rig.spine.rotation.z = Math.sin(p) * 0.09;
+    rig.head.rotation.z = 0.35;
+    rig.head.rotation.x = -0.3;
+    rig.legL.rotation.x = Math.sin(p) * 0.2;
+    rig.legR.rotation.x = -Math.sin(p) * 0.2;
+    rig.legL.rotation.z = 0.04;
+    rig.legR.rotation.z = -0.04;
+    rig.armL.rotation.x = -1.1 + Math.sin(p + 0.5) * 0.1;
+    rig.armR.rotation.x = -0.95 + Math.sin(p + 2.1) * 0.12;
+    rig.body.position.y = -0.03 + Math.abs(Math.sin(p)) * 0.008;
+  } else {
+    // Personaje: carrera con braceo, algo inclinado hacia delante al moverse, con rebote.
+    const legSwing = Math.sin(rig.phase) * 0.65 * moving;
+    const armSwing = Math.sin(rig.phase + Math.PI) * 0.55 * moving;
+    rig.legL.rotation.x = legSwing;
+    rig.legR.rotation.x = -legSwing;
+    rig.armL.rotation.x = -armSwing;
+    rig.armR.rotation.x = armSwing;
+    rig.spine.rotation.x = 0.12 * moving;
+    rig.body.position.y = Math.abs(Math.sin(rig.phase)) * 0.03 * moving;
+  }
+}
+
 export function createFigureManager(): FigureManager {
   const group = new THREE.Group();
   const rigs = new Map<string, Rig>();
 
+  // Un InstancedMesh por tipo de pieza (cuerpo) y otro para su silueta.
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+  const meshes = new Map<PartKind, THREE.InstancedMesh>();
+  const ghosts = new Map<PartKind, THREE.InstancedMesh>();
+  for (const kind of PART_KINDS) {
+    const count = kind === "head" ? MAX_FIGURES * 3 : kind === "leg" || kind === "arm" || kind === "foot" ? MAX_FIGURES * 2 : MAX_FIGURES;
+    const m = new THREE.InstancedMesh(PART_GEOS[kind], bodyMat, count);
+    m.castShadow = true;
+    m.frustumCulled = false; // las instancias se mueven por todo el mundo
+    m.count = 0;
+    m.setColorAt(0, new THREE.Color(1, 1, 1));
+    group.add(m);
+    meshes.set(kind, m);
+    const g = new THREE.InstancedMesh(PART_GEOS[kind], silhouetteMat, count);
+    g.frustumCulled = false;
+    g.renderOrder = 10; // después de la escena opaca
+    g.count = 0;
+    g.setColorAt(0, new THREE.Color(1, 1, 1));
+    group.add(g);
+    ghosts.set(kind, g);
+  }
+  const shadows = new THREE.InstancedMesh(shadowGeo, shadowMat, MAX_FIGURES);
+  shadows.frustumCulled = false;
+  shadows.count = 0;
+  group.add(shadows);
+
+  const shadowM = new THREE.Matrix4();
+  const shadowPos = new THREE.Vector3();
+  const shadowQ = new THREE.Quaternion();
+  const shadowS = new THREE.Vector3();
+
   function update(entities: FigureEntity[], time: number): void {
-    void time; // reservado para animaciones futuras que no dependan del movimiento
+    void time;
     const seen = new Set<string>();
+    const counts = new Map<PartKind, number>();
+    const ghostCounts = new Map<PartKind, number>();
+    let shadowCount = 0;
 
     for (const e of entities) {
+      if (seen.size >= MAX_FIGURES) break;
       seen.add(e.id);
       let rig = rigs.get(e.id);
       if (!rig) {
-        rig = buildRig(e.color, e.label, e.armed, e.silhouette);
+        rig = buildRig(e.color, e.label, e.armed === true, e.silhouette, e.zombie === true, seedOf(e.id));
         rig.lastX = e.x;
         rig.lastZ = e.z;
         rigs.set(e.id, rig);
-        group.add(rig.root);
+        if (rig.label) group.add(rig.root); // solo para dibujar la etiqueta (sprite)
       }
 
       const dx = e.x - rig.lastX;
@@ -214,32 +301,48 @@ export function createFigureManager(): FigureManager {
       }
       rig.lastX = e.x;
       rig.lastZ = e.z;
-
       rig.root.position.set(e.x, 0, e.z);
       rig.root.rotation.y = e.facing ?? rig.facing;
+      animate(rig, dist);
+      rig.root.updateMatrixWorld(true);
 
-      if (e.zombie) {
-        // Zombi: pasos cortos y lentos, la pierna derecha se arrastra (apenas se
-        // levanta), brazos extendidos al frente que oscilan un poco y balanceo lateral.
-        const p = rig.phase * 0.55;
-        rig.legL.rotation.x = Math.sin(p) * 0.35;
-        rig.legR.rotation.x = -Math.sin(p) * 0.12 + 0.15;
-        rig.armL.rotation.x = -1.35 + Math.sin(p + 0.5) * 0.12;
-        rig.armR.rotation.x = -1.25 + Math.sin(p + 2.1) * 0.12;
-        rig.root.rotation.z = Math.sin(p) * 0.1;
-      } else {
-        const legSwing = Math.sin(rig.phase) * 0.5;
-        const armSwing = Math.sin(rig.phase + Math.PI) * 0.4;
-        rig.legL.rotation.x = legSwing;
-        rig.legR.rotation.x = -legSwing;
-        rig.armL.rotation.x = -armSwing;
-        rig.armR.rotation.x = armSwing;
+      for (const p of rig.parts) {
+        const im = meshes.get(p.kind)!;
+        const i = counts.get(p.kind) ?? 0;
+        if (i >= im.instanceMatrix.count) continue;
+        im.setMatrixAt(i, p.anchor.matrixWorld);
+        im.setColorAt(i, p.color);
+        counts.set(p.kind, i + 1);
+        if (rig.silhouette) {
+          const gm = ghosts.get(p.kind)!;
+          const j = ghostCounts.get(p.kind) ?? 0;
+          gm.setMatrixAt(j, p.anchor.matrixWorld);
+          gm.setColorAt(j, rig.silhouette);
+          ghostCounts.set(p.kind, j + 1);
+        }
+      }
+      rig.root.matrixWorld.decompose(shadowPos, shadowQ, shadowS);
+      shadowM.compose(shadowPos.setY(0.01), shadowQ, shadowS);
+      shadows.setMatrixAt(shadowCount++, shadowM);
+    }
+
+    for (const kind of PART_KINDS) {
+      for (const [map, cnt] of [
+        [meshes, counts],
+        [ghosts, ghostCounts],
+      ] as const) {
+        const im = map.get(kind)!;
+        im.count = cnt.get(kind) ?? 0;
+        im.instanceMatrix.needsUpdate = true;
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
       }
     }
+    shadows.count = shadowCount;
+    shadows.instanceMatrix.needsUpdate = true;
 
     for (const [id, rig] of rigs) {
       if (seen.has(id)) continue;
-      group.remove(rig.root);
+      if (rig.label) group.remove(rig.root);
       rigs.delete(id);
     }
   }
