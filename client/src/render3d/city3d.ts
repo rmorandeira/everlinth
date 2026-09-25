@@ -14,6 +14,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { TILE_SIZE, CITY_ROAD_HALF, type CityData, type CityRoad } from "@roi/shared";
 import { buildPolygonBuilding } from "./buildings3d.js";
+import { cloneModel, modelSize, modelsReady, KIT_SCALE, BUILDING_SETS, type Kit } from "./models3d.js";
 import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture } from "./roadTextures.js";
 
 // Asfalto texturizado (UV en coordenadas de mundo: se repite sin costuras entre
@@ -84,11 +85,18 @@ class Batch {
     l.push(g);
   }
   // Mesh suelto (farola, coche…): su geometría ya transformada, al lote.
+  loose: THREE.Object3D[] = [];
   addObject(o: THREE.Object3D): void {
     o.updateMatrixWorld(true);
     o.traverse((c) => {
       const mesh = c as THREE.Mesh;
       if (!mesh.isMesh) return;
+      if (Array.isArray(mesh.material) || !mesh.geometry.getAttribute("uv") || !mesh.geometry.getAttribute("normal")) {
+        const copy = new THREE.Mesh(mesh.geometry, mesh.material);
+        copy.applyMatrix4(mesh.matrixWorld);
+        this.loose.push(copy);
+        return;
+      }
       const g = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
       g.applyMatrix4(mesh.matrixWorld);
       this.add(mesh.material as THREE.Material, g);
@@ -96,6 +104,7 @@ class Batch {
   }
   build(): THREE.Group {
     const out = new THREE.Group();
+    for (const o of this.loose) out.add(o);
     for (const [mat, list] of this.lists) {
       const nonIdx = list.map((g) => (g.index ? g.toNonIndexed() : g));
       for (const g of nonIdx) {
@@ -152,7 +161,19 @@ function car(x: number, z: number, ang: number, color: number): THREE.Object3D {
 }
 
 // Farola de ~6 m (2 unidades); el brazo apunta hacia (dx,dz) (unitario).
+// Coloca un modelo del kit: escala del kit × k, frente (+Z) hacia (fx, fz).
+function kitProp(kit: Kit, name: string, x: number, z: number, fx: number, fz: number, k = 1): THREE.Object3D | null {
+  const m = cloneModel(`${kit}/${name}`);
+  if (!m) return null;
+  m.scale.setScalar(KIT_SCALE[kit] * k);
+  m.rotation.y = Math.atan2(fx, fz);
+  m.position.set(x, 0.05, z);
+  return m;
+}
+
 function streetlight(x: number, z: number, dx: number, dz: number): THREE.Object3D {
+  const k = kitProp("retro", "detail-light-single", x, z, dx, dz);
+  if (k) return k;
   const g = new THREE.Group();
   const pole = new THREE.Mesh(cylGeo, lambert(0x3d4248));
   pole.scale.set(0.09, 2.0, 0.09);
@@ -171,6 +192,8 @@ function streetlight(x: number, z: number, dx: number, dz: number): THREE.Object
 }
 
 function tree(x: number, z: number, color: number): THREE.Object3D {
+  const kt = kitProp("suburban", color % 2 === 0 ? "tree-large" : "tree-small", x, z, 0, 1, 0.9 + (color % 7) * 0.05);
+  if (kt) return kt;
   const g = new THREE.Group();
   const trunk = new THREE.Mesh(cylGeo, lambert(0x5a4030));
   trunk.scale.set(0.1, 0.6, 0.1);
@@ -340,11 +363,26 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
       const sy = py + ny * side * (half + 0.8);
       if (k % 3 === 0) b.addObject(streetlight(L(sx), Lz(sy), -nx * side, -ny * side));
       else if (h > 0.45) b.addObject(tree(L(sx), Lz(sy), CROWNS[Math.floor(h * 97) % CROWNS.length]));
+      else if (h < 0.12) {
+        // banco mirando a la calle, algo más adentro de la acera
+        const bx = px + nx * side * (half + 1.3);
+        const by = py + ny * side * (half + 1.3);
+        const bench = kitProp("retro", "detail-bench", L(bx), Lz(by), -nx * side, -ny * side, 0.5);
+        if (bench) b.addObject(bench);
+      } else if (h < 0.17) {
+        const dx2 = px + nx * side * (half + 1.4);
+        const dy2 = py + ny * side * (half + 1.4);
+        const dump = kitProp("retro", h < 0.145 ? "detail-dumpster-closed" : "detail-dumpster-open", L(dx2), Lz(dy2), ux, uy, 0.55);
+        if (dump) b.addObject(dump);
+      }
       const hc = hash2(Math.round(px * 5) + 1, Math.round(py * 5));
       const cside = -side;
       const cx = px + nx * cside * (half - 0.65);
       const cy = py + ny * cside * (half - 0.65);
-      if (hc > 0.55) {
+      if (hc > 0.95) {
+        const tr = kitProp("retro", ["truck-grey", "truck-green", "truck-flat"][Math.floor(h * 3) % 3], L(cx), Lz(cy), ux, uy, 0.62);
+        b.addObject(tr ?? car(L(cx), Lz(cy), ang, CAR_COLORS[Math.floor(h * 131) % CAR_COLORS.length]));
+      } else if (hc > 0.55) {
         b.addObject(car(L(cx), Lz(cy), ang, CAR_COLORS[Math.floor(h * 131) % CAR_COLORS.length]));
       } else if (hc < 0.14) {
         // hueco de aparcamiento vacío: mancha de aceite donde suele pararse el coche
@@ -404,6 +442,12 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
         const bandW = hi - lo;
         const at = (dist: number, off: number): [number, number] => [c.x - hx * dist + rx * off, c.y - hy * dist + ry * off];
         const rnd = hashStr(ckey + sgn + th.seg.id);
+        if (c.maxHalf >= CITY_ROAD_HALF[1] && !higher) {
+          // semáforo en la acera derecha, antes del paso de cebra, con el brazo sobre la calzada
+          const [qx, qy] = at(other + 2.6, half + 0.7);
+          const tl = kitProp("retro", "detail-light-traffic", L(qx), Lz(qy), -rx, -ry, 0.75);
+          if (tl) b.addObject(tl);
+        }
 
         if (higher || allWayStop) {
           const D = other + 2.35;
@@ -449,9 +493,108 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
 
   const buildings: THREE.Group[] = [];
   for (const bd of buildingDefs.values()) {
-    const g = buildPolygonBuilding(bd.id, bd.pts, bd.floors, originGX, originGZ);
+    const g = (modelsReady() && kitBuilding(bd, segs, originGX, originGZ)) || buildPolygonBuilding(bd.id, bd.pts, bd.floors, originGX, originGZ);
     buildings.push(g);
     group.add(g);
   }
   return { group, buildings };
+}
+
+// ---- Edificios de Kenney ajustados a una parcela poligonal ----
+// Rectángulo orientado de la parcela (según su arista más larga); el frente del
+// modelo mira a la calle más cercana. El modelo se elige por altura (plantas) entre
+// los que mejor encajan en la parcela, se escala para caber (dentro de un margen de
+// la escala natural del kit) y se estira un poco en vertical hacia las plantas pedidas.
+function kitBuilding(bd: CityData["buildings"][number], segs: CityRoad[], originGX: number, originGZ: number): THREE.Group | null {
+  const pts = bd.pts;
+  if (pts.length < 3) return null;
+  let best = 0;
+  let theta = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const q = pts[(i + 1) % pts.length];
+    const l = Math.hypot(q[0] - pts[i][0], q[1] - pts[i][1]);
+    if (l > best) {
+      best = l;
+      theta = Math.atan2(q[1] - pts[i][1], q[0] - pts[i][0]);
+    }
+  }
+  const ax = Math.cos(theta);
+  const ay = Math.sin(theta);
+  const bx = -ay;
+  const by = ax;
+  let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
+  for (const [x, y] of pts) {
+    const pa = x * ax + y * ay;
+    const pb = x * bx + y * by;
+    minA = Math.min(minA, pa); maxA = Math.max(maxA, pa);
+    minB = Math.min(minB, pb); maxB = Math.max(maxB, pb);
+  }
+  const ca = (minA + maxA) / 2;
+  const cb = (minB + maxB) / 2;
+  const cx = ax * ca + bx * cb;
+  const cy = ay * ca + by * cb;
+  const extA = maxA - minA;
+  const extB = maxB - minB;
+
+  // Calle más cercana → hacia dónde mira el frente.
+  let nd = Infinity;
+  let vx = 0;
+  let vy = 1;
+  for (const sg of segs) {
+    const ex = sg.x1 - sg.x0;
+    const ey = sg.y1 - sg.y0;
+    const l2 = ex * ex + ey * ey;
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((cx - sg.x0) * ex + (cy - sg.y0) * ey) / l2)) : 0;
+    const px = sg.x0 + t * ex - cx;
+    const py = sg.y0 + t * ey - cy;
+    const d = Math.hypot(px, py);
+    if (d < nd && d > 0.01) {
+      nd = d;
+      vx = px / d;
+      vy = py / d;
+    }
+  }
+  const alongA = Math.abs(vx * ax + vy * ay) > Math.abs(vx * bx + vy * by);
+  const sgnF = alongA ? Math.sign(vx * ax + vy * ay) || 1 : Math.sign(vx * bx + vy * by) || 1;
+  const fx = (alongA ? ax : bx) * sgnF;
+  const fy = (alongA ? ay : by) * sgnF;
+  const frontage = (alongA ? extB : extA) * T; // ancho de fachada (unidades de render)
+  const depth = (alongA ? extA : extB) * T;
+
+  let h = 0;
+  for (let i = 0; i < bd.id.length; i++) h = (h * 31 + bd.id.charCodeAt(i)) | 0;
+  const r1 = hash2((h % 10007) * 0.013, 1.7);
+  const r2 = hash2((h % 10009) * 0.017, 5.3);
+  const floors = bd.floors;
+  const set = floors <= 4 && r1 < 0.35 ? BUILDING_SETS.house : floors >= 14 ? BUILDING_SETS.tall : floors >= 7 ? BUILDING_SETS.mid : BUILDING_SETS.low;
+  const kit: Kit = set === BUILDING_SETS.house ? "suburban" : "commercial";
+
+  const fit = (key: string): number => {
+    const sz = modelSize(key);
+    if (!sz) return 0;
+    return Math.min((frontage * 0.94) / (sz.x * KIT_SCALE[kit]), (depth * 0.94) / (sz.z * KIT_SCALE[kit]));
+  };
+  // Candidatos que caben sin encogerse demasiado; si ninguno, el que mejor cabe.
+  let options = set.filter((k) => fit(k) >= 0.75);
+  let chosenSet = set;
+  if (options.length === 0) {
+    options = BUILDING_SETS.tiny.filter((k) => fit(k) >= 0.6);
+    chosenSet = BUILDING_SETS.tiny;
+  }
+  if (options.length === 0) return null;
+  const key = options[Math.floor(r2 * options.length) % options.length];
+  const sz = modelSize(key)!;
+  const m = Math.min(1.45, fit(key));
+  const base = KIT_SCALE[kit] * m;
+  const obj = cloneModel(key);
+  if (!obj) return null;
+  const naturalH = sz.y * base;
+  const stretch = kit === "suburban" ? 1 : Math.min(1.6, Math.max(0.85, (floors * 1.0) / naturalH));
+  obj.scale.set(base, base * stretch, base);
+  const g = new THREE.Group();
+  g.add(obj);
+  g.rotation.y = Math.atan2(fx, fy);
+  g.position.set((cx - originGX) * T, 0.05, (cy - originGZ) * T);
+  void chosenSet;
+  return g;
 }

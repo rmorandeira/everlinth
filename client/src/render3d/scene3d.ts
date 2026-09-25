@@ -19,6 +19,7 @@ import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { createOcclusion3D } from "./occlusion3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityLayer } from "./city3d.js";
+import { initModels, modelsReady } from "./models3d.js";
 
 // Zoom FIJO: mitad de alto del frustum ortográfico, en unidades de render
 // (1 unidad = 3 m). Con 7, una persona de 1,8 m ocupa ~32 px a 720p: la escena
@@ -200,10 +201,11 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   }
 
   void initBuildingTextures();
+  void initModels();
 
   function updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void {
     // Sin el manifest de texturas los edificios saldrían vacíos: se reintenta en el siguiente frame.
-    if (!buildingTexturesReady()) return;
+    if (!buildingTexturesReady() || !modelsReady()) return;
     const key = `${screen.sx},${screen.sy}`;
     if (key === lastKey) return;
     lastKey = key;
@@ -400,16 +402,16 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     towardCamera.copy(iso.camera.position).sub(playerVec).normalize();
     // Vista despejada: el jugador (con holgura amplia) y la línea hasta donde apunta
     // (hasta el alcance del arma) no pueden quedar tapados por ningún edificio.
-    const sight: Array<{ p: THREE.Vector3; margin: number }> = [{ p: playerVec.clone(), margin: 2.2 }];
+    const sight: Array<{ p: THREE.Vector3; margin: number }> = [{ p: playerVec.clone(), margin: 1.4 }];
     groundRaycaster.setFromCamera(ndcTmp.set(flashlight.cursorNdcX, flashlight.cursorNdcY), iso.camera);
     if (groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) {
       const dx = groundHit.x - playerX;
       const dz = groundHit.z - playerZ;
-      const len = Math.min(Math.hypot(dx, dz), GUN_RANGE * T);
+      const len = Math.min(Math.hypot(dx, dz), GUN_RANGE * T * 0.6);
       if (len > 0.5) {
         const ux = dx / Math.hypot(dx, dz);
         const uz = dz / Math.hypot(dx, dz);
-        for (let d = 1.2; d <= len; d += 1.2) sight.push({ p: new THREE.Vector3(playerX + ux * d, 0, playerZ + uz * d), margin: 0.9 });
+        for (let d = 1.5; d <= len; d += 1.5) sight.push({ p: new THREE.Vector3(playerX + ux * d, 0, playerZ + uz * d), margin: 0.35 });
       }
     }
     occlusion.update(sight, towardCamera, dt);
