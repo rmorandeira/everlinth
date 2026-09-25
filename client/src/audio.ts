@@ -45,7 +45,7 @@ export function playStep(volume = 1): void {
   lastStep = i;
   const src = ctx.createBufferSource();
   src.buffer = steps[i];
-  src.playbackRate.value = 0.92 + Math.random() * 0.16;
+  src.playbackRate.value = 1.1 + Math.random() * 0.16; // algo acelerado: suena a carrera
   const g = ctx.createGain();
   g.gain.value = volume * (0.75 + Math.random() * 0.25);
   src.connect(g).connect(master);
