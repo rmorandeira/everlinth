@@ -16,7 +16,7 @@ import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeRes
 import { buildBuilding, disposeBuildings, initBuildingTextures, buildingTexturesReady } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
-import { applyCutaway, updateCutaway } from "./cutaway3d.js";
+import { createOcclusion3D } from "./occlusion3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityLayer } from "./city3d.js";
 import { initModels, modelsReady } from "./models3d.js";
@@ -81,7 +81,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const lighting = createLighting3D(scene);
 
   const iso = createIsoCamera();
-  const bufSize = new THREE.Vector2();
+  const occlusion = createOcclusion3D();
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
   let aspect = 1;
@@ -161,7 +161,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
             const building = buildBuilding(gx0 + col, gz0 + row, w, d, urban);
             building.position.set((x + (w - 1) / 2) * T, 0, (z + (d - 1) / 2) * T);
             obstacles.add(building);
-            applyCutaway(building);
+            occlusion.register(building);
           }
           continue;
         }
@@ -219,6 +219,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     }
     if (treeGroup) scene.remove(treeGroup);
     disposeBuildings();
+    occlusion.clear();
 
     const positions: Array<{ x: number; z: number; tile: TileType }> = [];
     const obstacles = new THREE.Group();
@@ -241,7 +242,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     const cityLayer = cityDatas.length > 0 ? buildCityLayer(cityDatas, screen.sx * SCREEN_WIDTH, screen.sy * SCREEN_HEIGHT) : null;
     if (cityLayer) {
       obstacles.add(cityLayer.group);
-      for (const bg of cityLayer.buildings) applyCutaway(bg);
+      for (const bg of cityLayer.buildings) occlusion.register(bg);
     }
 
     const mesh = new THREE.InstancedMesh(tileGeo, tileMat, positions.length);
@@ -358,6 +359,8 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     return yaw;
   }
 
+  const towardCamera = new THREE.Vector3();
+  const playerVec = new THREE.Vector3();
   function render(playerTileX: number, playerTileZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void {
     const playerX = playerTileX * T;
     const playerZ = playerTileZ * T;
@@ -383,9 +386,23 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     updateTracers(dt);
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
-    // Zona despejada: triángulo jugador → esquinas inferiores (ver cutaway3d.ts).
-    renderer.getDrawingBufferSize(bufSize);
-    updateCutaway(iso.camera, playerX, playerZ, bufSize.x, bufSize.y);
+    playerVec.set(playerX, 0, playerZ);
+    iso.camera.getWorldDirection(towardCamera).negate();
+    // Vista despejada: el jugador (con holgura amplia) y la línea hasta donde apunta
+    // (hasta el alcance del arma) no pueden quedar tapados por ningún edificio.
+    const sight: Array<{ p: THREE.Vector3; margin: number }> = [{ p: playerVec.clone(), margin: 1.4 }];
+    groundRaycaster.setFromCamera(ndcTmp.set(flashlight.cursorNdcX, flashlight.cursorNdcY), iso.camera);
+    if (groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) {
+      const dx = groundHit.x - playerX;
+      const dz = groundHit.z - playerZ;
+      const len = Math.min(Math.hypot(dx, dz), GUN_RANGE * T * 0.6);
+      if (len > 0.5) {
+        const ux = dx / Math.hypot(dx, dz);
+        const uz = dz / Math.hypot(dx, dz);
+        for (let d = 1.5; d <= len; d += 1.5) sight.push({ p: new THREE.Vector3(playerX + ux * d, 0, playerZ + uz * d), margin: 0.35 });
+      }
+    }
+    occlusion.update(sight, towardCamera, dt);
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
@@ -407,7 +424,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
         if (o.userData.ownGeometry) owned++;
       }
     });
-    return { meshes, instances, textured, owned, treeMeshes };
+    return { meshes, instances, textured, owned, treeMeshes, ...occlusion.debug() };
   }
 
   function dispose(): void {
