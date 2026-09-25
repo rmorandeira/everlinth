@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EVERLINTH — Gestor de assets</title>
+  </head>
+  <body>
+    <aside id="list">
+      <div class="head">
+        <a href="/admin" class="back">← Backoffice</a>
+        <h1>Assets</h1>
+        <input id="search" type="search" placeholder="Buscar…" />
+        <div class="row">
+          <select id="filter-category"><option value="">Todas las categorías</option></select>
+          <select id="filter-biome"><option value="">Todos los biomas</option></select>
+        </div>
+        <button id="new-asset" type="button">+ Nuevo asset de primitivas</button>
+      </div>
+      <ul id="asset-list"></ul>
+    </aside>
+
+    <main id="viewer">
+      <canvas id="view"></canvas>
+      <div id="toolbar">
+        <button data-mode="translate" class="active" title="Mover (W)">Mover</button>
+        <button data-mode="rotate" title="Rotar (E)">Rotar</button>
+        <button data-mode="scale" title="Escalar (R)">Escalar</button>
+        <span class="sep"></span>
+        <button id="add-socket" title="Clic sobre el modelo para colocar un punto de unión">+ Punto de unión</button>
+        <button id="frame" title="Encuadrar (F)">Encuadrar</button>
+      </div>
+      <div id="hint">Arrastra para rotar · rueda para zoom · botón derecho para desplazar · 1 cuadro = 1,5 m</div>
+      <div id="status"></div>
+    </main>
+
+    <aside id="props">
+      <div id="empty">Elige un asset de la lista.</div>
+      <div id="editor" class="hidden">
+        <section>
+          <h2>General</h2>
+          <label>Nombre <input id="f-name" type="text" /></label>
+          <label>Categoría <select id="f-category"></select></label>
+          <div class="label">Biomas</div>
+          <div id="f-biomes" class="checks"></div>
+          <label>Escala <input id="f-scale" type="number" step="0.05" min="0.05" /></label>
+          <div class="meta" id="f-source"></div>
+          <label>Notas <textarea id="f-notes" rows="2"></textarea></label>
+        </section>
+
+        <section id="parts-section" class="hidden">
+          <h2>Primitivas</h2>
+          <div class="row wrap" id="add-part">
+            <button data-kind="box">Caja</button>
+            <button data-kind="cylinder">Cilindro</button>
+            <button data-kind="cone">Cono</button>
+            <button data-kind="sphere">Esfera</button>
+            <button data-kind="gable">Tejado 2 aguas</button>
+            <button data-kind="pyramid">Pirámide</button>
+          </div>
+          <ul id="parts" class="items"></ul>
+          <div id="part-detail" class="hidden">
+            <label>Color <input id="p-color" type="color" /></label>
+            <div class="row">
+              <button id="p-dup" type="button">Duplicar pieza</button>
+              <button id="p-del" type="button" class="danger">Borrar pieza</button>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Texturas</h2>
+          <div id="textures"></div>
+        </section>
+
+        <section>
+          <h2>Puntos de unión</h2>
+          <ul id="sockets" class="items"></ul>
+          <div id="socket-detail" class="hidden">
+            <label>Nombre <input id="s-name" type="text" /></label>
+            <label>Tipo <select id="s-type"></select></label>
+            <button id="s-del" type="button" class="danger">Borrar punto</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Generar con IA</h2>
+          <textarea id="ai-prompt" rows="3" placeholder="Describe el asset, p. ej. «Crea un edificio tipo la Casa Blanca». Puedes pegar una imagen (Ctrl+V)."></textarea>
+          <div id="ai-image" class="hidden"><img id="ai-image-img" alt="" /><button id="ai-image-clear" type="button">Quitar imagen</button></div>
+          <button id="ai-generate" type="button">Generar asset</button>
+          <div id="ai-result" class="meta"></div>
+        </section>
+
+        <div class="actions">
+          <button id="save" type="button" class="primary">Guardar</button>
+          <button id="duplicate" type="button">Duplicar</button>
+          <button id="delete" type="button" class="danger">Eliminar</button>
+        </div>
+      </div>
+    </aside>
+
+    <script type="module" src="/src/admin/assetEditor.ts"></script>
+  </body>
+</html>

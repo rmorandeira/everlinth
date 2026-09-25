@@ -20,3 +20,4 @@ dist/
 /City tileset/
 assets/
 /Sounds/
+server/.env

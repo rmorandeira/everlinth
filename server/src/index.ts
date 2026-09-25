@@ -7,13 +7,21 @@ import { WORLD_MIN, WORLD_MAX, TileType, BIOME_CATALOG, BIOME_IDS, DEFAULT_VISIO
 import { GameServer } from "./game.js";
 import { listScreenCoords, getScreen, listPaint, paintCells, unpaintCells, deleteScreens, getSetting, setSetting } from "./db.js";
 import { treesRouter } from "./adminTrees.js";
+import { assetsRouter } from "./adminAssets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Secretos locales (p. ej. ANTHROPIC_API_KEY) en server/.env, fuera del repositorio.
+try {
+  process.loadEnvFile(path.join(__dirname, "..", ".env"));
+} catch {
+  /* sin .env: se usan las variables de entorno del sistema */
+}
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 const app = express();
 app.use(express.json());
 app.use(treesRouter);
+app.use(assetsRouter);
 
 // Backoffice: mapa de administración del mundo. Nota MVP: sin autenticación
 // todavía; pensado solo para uso local/interno del admin.
@@ -191,6 +199,7 @@ app.get("/admin", (_req, res) => {
 </div>
 <div id="panel">
   <div style="margin-bottom:10px;"><a href="/admin/trees" style="color:#4caf6d;">🌳 Generador de árboles</a></div>
+  <div style="margin-bottom:10px;"><a href="/admin/assets" style="color:#4caf6d;">🧱 Gestor de assets</a></div>
   <h2>Estancia</h2>
   <div id="info" class="empty">Clica una casilla verde fosforito del mapa (o del minimapa) para ver su miniatura.</div>
   <canvas id="thumb" width="256" height="176" style="display:none;margin-top:10px;"></canvas>
