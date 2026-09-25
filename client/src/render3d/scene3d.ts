@@ -336,34 +336,45 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     return { x: groundHit.x / T, z: groundHit.z / T };
   }
 
-  const tracerGeo = new THREE.BoxGeometry(1, 0.035, 0.035);
-  const tracers: Array<{ mesh: THREE.Mesh; life: number }> = [];
-  const TRACER_LIFE = 0.11;
+  // Trazadoras: un trazo corto y FINO que viaja a gran velocidad desde la boca del
+  // cañón hasta el impacto (no una línea continua). Como en la munición real, solo
+  // una de cada pocas balas es trazadora: la ráfaga se ve discontinua.
+  const tracerGeo = new THREE.BoxGeometry(1, 0.012, 0.012).translate(-0.5, 0, 0); // la cola queda detrás
+  const tracers: Array<{ mesh: THREE.Mesh; x0: number; z0: number; ux: number; uz: number; len: number; d: number; streak: number }> = [];
+  const TRACER_SPEED = 95; // unidades de render por segundo (≈285 m/s: se ve el trazo avanzar)
+  const TRACER_EVERY = 3; // una de cada N balas
+  let tracerCount = 0;
   const TRACER_COLORS = [0xffe08a, 0xfff0b8, 0xffd060, 0xffb347, 0xffc978, 0xff8f4a];
   function addTracer(tx0: number, tz0: number, tx1: number, tz1: number): void {
+    if (tracerCount++ % TRACER_EVERY !== 0) return;
     const x0 = tx0 * T, z0 = tz0 * T, x1 = tx1 * T, z1 = tz1 * T;
     const len = Math.hypot(x1 - x0, z1 - z0);
     if (len < 0.05) return;
     // Color algo distinto en cada trazadora (del amarillo pálido al naranja, alguna rojiza).
     const color = TRACER_COLORS[Math.floor(Math.random() * TRACER_COLORS.length)];
     const mesh = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({ color, transparent: true, fog: false, blending: THREE.AdditiveBlending, depthWrite: false }));
-    mesh.scale.x = len;
-    mesh.position.set((x0 + x1) / 2, 0.38, (z0 + z1) / 2);
     mesh.rotation.y = -Math.atan2(z1 - z0, x1 - x0);
+    mesh.position.set(x0, 0.4, z0);
+    mesh.scale.x = 0.001;
     scene.add(mesh);
-    tracers.push({ mesh, life: TRACER_LIFE });
+    const ux = (x1 - x0) / len;
+    const uz = (z1 - z0) / len;
+    tracers.push({ mesh, x0, z0, ux, uz, len, d: 0.35, streak: 0.9 + Math.random() * 0.5 });
   }
   function updateTracers(dt: number): void {
     for (let i = tracers.length - 1; i >= 0; i--) {
       const t = tracers[i];
-      t.life -= dt;
-      if (t.life <= 0) {
+      t.d += TRACER_SPEED * dt;
+      const head = Math.min(t.d, t.len);
+      const tail = Math.max(0, t.d - t.streak);
+      if (tail >= t.len) {
         scene.remove(t.mesh);
         (t.mesh.material as THREE.Material).dispose();
         tracers.splice(i, 1);
-      } else {
-        (t.mesh.material as THREE.MeshBasicMaterial).opacity = t.life / TRACER_LIFE;
+        continue;
       }
+      t.mesh.position.set(t.x0 + t.ux * head, 0.4, t.z0 + t.uz * head);
+      t.mesh.scale.x = Math.max(0.001, head - tail);
     }
   }
 

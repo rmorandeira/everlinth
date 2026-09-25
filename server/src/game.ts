@@ -420,6 +420,12 @@ export class GameServer {
         this.grantXp(player, hit.giant ? 20 : 2);
         send(conn.socket, { type: "youUpdate", you: player });
         send(conn.socket, { type: "kill" });
+        const died: ServerMessage = { type: "zombieDied", gx: hit.gx, gy: hit.gy, giant: hit.giant === true };
+        for (const c of this.connections) {
+          if (!c.username) continue;
+          const p = this.players.get(c.username);
+          if (p && dist(p.sx * SCREEN_WIDTH + p.x, p.sy * SCREEN_HEIGHT + p.y, hit.gx, hit.gy) <= ZOMBIE_VIEW_RANGE) send(c.socket, died);
+        }
       }
     }
     const shot: ServerMessage = { type: "shot", from: { gx: ox, gy: oy }, to: { gx: ox + dx * hitT, gy: oy + dz * hitT }, hit: hit ? "zombie" : wall < GUN_RANGE ? "wall" : "none" };

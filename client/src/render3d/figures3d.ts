@@ -65,7 +65,11 @@ const HIP_Y = LEG_LEN + 0.03; // pies en y=0, cadera a esta altura
 const SHOULDER_UP = 0.4; // hombros sobre la cadera (dentro de la columna)
 const HEAD_UP = 0.56;
 
-const ZOMBIE_SHIRTS = [0x6b5d4f, 0x4f5d6b, 0x5d6b4f, 0x7a4a4a, 0x8a7f6a, 0x3f4a5a];
+// Zombis: ropa de calle apagada (grises, azules y verdes azulados, algún marrón),
+// pantalones oscuros y piel pálida grisácea, como una multitud real deslavada.
+const ZOMBIE_SHIRTS = [0x5f7478, 0x4d5d63, 0x6c7a70, 0x7d8387, 0x3f4f58, 0x5a6b73, 0x8a8f86, 0x6e6458, 0x4a5a52];
+const ZOMBIE_PANTS = [0x2f3438, 0x3b4046, 0x44403a, 0x2a3036];
+const ZOMBIE_SKINS = [0x9aa596, 0x8f9c8a, 0xa3a89a];
 const HUMAN_SKINS = [0xd9a88a, 0xc08a68, 0x8d5d40, 0xe8c0a0];
 
 interface Part {
@@ -87,6 +91,7 @@ interface Rig {
   silhouette: THREE.Color | null;
   label: THREE.Sprite | null;
   zombie: boolean;
+  corpse: boolean;
   phase: number;
   lastX: number;
   lastZ: number;
@@ -111,9 +116,9 @@ function buildRig(color: number, label: string | undefined, armed: boolean, silh
     return pivot;
   };
 
-  const skin = zombie ? (scale > 1.5 ? 0x7a8f5c : 0x93a874) : HUMAN_SKINS[seed % HUMAN_SKINS.length];
+  const skin = zombie ? (scale > 1.5 ? 0x7f8f70 : ZOMBIE_SKINS[seed % ZOMBIE_SKINS.length]) : HUMAN_SKINS[seed % HUMAN_SKINS.length];
   const shirt = zombie ? ZOMBIE_SHIRTS[seed % ZOMBIE_SHIRTS.length] : color;
-  const pants = zombie ? 0x35363c : 0x2b2f38;
+  const pants = zombie ? ZOMBIE_PANTS[(seed >> 2) % ZOMBIE_PANTS.length] : 0x2b2f38;
   const shoes = 0x1a1a1c;
 
   const root = new THREE.Group();
@@ -161,6 +166,7 @@ function buildRig(color: number, label: string | undefined, armed: boolean, silh
     silhouette: silhouette !== undefined ? new THREE.Color(silhouette) : null,
     label: sprite,
     zombie,
+    corpse: false,
     phase: seed * 0.7,
     lastX: 0,
     lastZ: 0,
@@ -186,6 +192,8 @@ export interface FigureEntity {
   label?: string;
   /** Tamaño relativo (1 = persona normal; los zombis gigantes son más grandes). */
   scale?: number;
+  /** Cadáver: tumbado en el suelo, inmóvil (brazos y piernas abiertos). */
+  corpse?: boolean;
   /** Anda como un zombi: encorvado, brazos al frente, arrastrando los pies. */
   zombie?: boolean;
   /** Color de su silueta cuando queda tapada (sin silueta si no se da). */
@@ -207,9 +215,25 @@ function seedOf(id: string): number {
   return Math.abs(h) % 997;
 }
 
-const MAX_FIGURES = 400;
+const MAX_FIGURES = 700;
+
+function poseCorpse(rig: Rig, seed: number): void {
+  // Tumbado boca arriba o boca abajo, con brazos y piernas en posturas distintas.
+  const faceDown = seed % 2 === 0;
+  rig.body.rotation.x = faceDown ? Math.PI / 2 : -Math.PI / 2;
+  rig.body.position.y = 0.09;
+  rig.body.position.z = faceDown ? -0.55 : 0.55; // que la cadera quede en el punto de muerte
+  rig.spine.rotation.x = 0;
+  rig.spine.rotation.z = ((seed % 7) - 3) * 0.06;
+  rig.head.rotation.z = ((seed % 5) - 2) * 0.35;
+  rig.armL.rotation.set(0, 0, 0.6 + (seed % 3) * 0.5);
+  rig.armR.rotation.set(0, 0, -(0.4 + ((seed >> 1) % 3) * 0.55));
+  rig.legL.rotation.set(0, 0, 0.12 + (seed % 4) * 0.08);
+  rig.legR.rotation.set(0, 0, -(0.08 + ((seed >> 2) % 4) * 0.09));
+}
 
 function animate(rig: Rig, dist: number): void {
+  if (rig.corpse) return;
   rig.speed += (dist - rig.speed) * 0.2;
   const moving = Math.min(1, rig.speed / 0.02);
   if (rig.zombie) {
@@ -288,6 +312,10 @@ export function createFigureManager(): FigureManager {
       let rig = rigs.get(e.id);
       if (!rig) {
         rig = buildRig(e.color, e.label, e.armed === true, e.silhouette, e.zombie === true, seedOf(e.id), e.scale ?? 1);
+        if (e.corpse) {
+          rig.corpse = true;
+          poseCorpse(rig, seedOf(e.id));
+        }
         rig.lastX = e.x;
         rig.lastZ = e.z;
         rigs.set(e.id, rig);

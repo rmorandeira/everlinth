@@ -199,6 +199,11 @@ setInterval(refreshTimeUi, 1000);
 const recentKills: number[] = [];
 let lastLaugh = -1e9;
 
+// Cadáveres de zombis (coordenadas globales de tile).
+const MAX_CORPSES = 350;
+const corpses: Array<{ id: number; gx: number; gy: number; giant: boolean; facing: number }> = [];
+let nextCorpse = 1;
+
 let lastLocalShot = 0;
 let tailPending = false;
 const STRIDE = 1.1; // tiles entre pisadas: ~7 pisadas/s a la velocidad del jugador (carrera)
@@ -299,6 +304,12 @@ function handleServerMessage(msg: ServerMessage): void {
     case "error":
       loginError.textContent = msg.message;
       break;
+    case "zombieDied": {
+      // El cadáver queda tirado donde cayó (los más antiguos desaparecen).
+      corpses.push({ id: nextCorpse++, gx: msg.gx, gy: msg.gy, giant: msg.giant, facing: Math.random() * Math.PI * 2 });
+      if (corpses.length > MAX_CORPSES) corpses.shift();
+      break;
+    }
     case "kill": {
       const t = performance.now();
       recentKills.push(t);
@@ -628,6 +639,11 @@ function frame(now: number): void {
     for (const m of currentScreen.monsters) {
       if (!m.alive) continue;
       entities.push({ id: m.id, x: m.x, z: m.y, color: MONSTER_COLORS[m.kind] ?? MONSTER_COLOR_DEFAULT, label: m.kind });
+    }
+    // cadáveres al final: si hay que recortar, se pierden antes que los vivos
+    for (const c of corpses) {
+      if (Math.abs(c.gx - zox - youDisplay.x) > 70 || Math.abs(c.gy - zoy - youDisplay.y) > 50) continue;
+      entities.push({ id: `c${c.id}`, x: c.gx - zox, z: c.gy - zoy, color: ZOMBIE_COLOR, zombie: true, corpse: true, facing: c.facing, scale: c.giant ? GIANT_SCALE : 1 });
     }
     scene3d.updateFigures(entities, time);
 

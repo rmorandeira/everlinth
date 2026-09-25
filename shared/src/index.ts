@@ -400,4 +400,90 @@ export type ServerMessage =
   // hit: qué detuvo la bala (un zombi, un obstáculo, o nada: fin del alcance).
   | { type: "shot"; from: { gx: number; gy: number }; to: { gx: number; gy: number }; hit: "zombie" | "wall" | "none" }
   // Al tirador, cada vez que mata un zombi.
-  | { type: "kill" };
+  | { type: "kill" }
+  // A los jugadores cercanos: un zombi ha muerto ahí (su cadáver queda en el suelo).
+  | { type: "zombieDied"; gx: number; gy: number; giant: boolean };
+
+// ---- Catálogo de assets (herramienta /admin/assets) ----
+// Un asset es cualquier cosa del juego con representación 3D: un modelo GLB (kits de
+// Kenney), un generador procedural (farola, semáforo…) o una composición de
+// primitivas (cajas, cilindros, tejados…) creada en la propia herramienta o por IA.
+// Se le asigna categoría y biomas, se le pueden aplicar texturas (con escala,
+// desplazamiento, rotación y repetición) y se le definen puntos de unión donde
+// encajar otros assets.
+
+/** Parámetros de una textura aplicada a un material o a una primitiva. */
+export interface TextureParams {
+  /** URL de la textura (p. ej. /textures/buildings/x.jpg) o null = material original. */
+  texture: string | null;
+  /** "uv": las UV del modelo; "box": proyección por caras (para fotos de fachada). */
+  mapping: "uv" | "box";
+  repeatX: number;
+  repeatY: number;
+  offsetX: number;
+  offsetY: number;
+  /** grados */
+  rotation: number;
+  /** "box": tamaño (unidades de render, 1 = 3 m) de una repetición de la textura. */
+  tile: number;
+}
+export const DEFAULT_TEXTURE_PARAMS: TextureParams = { texture: null, mapping: "uv", repeatX: 1, repeatY: 1, offsetX: 0, offsetY: 0, rotation: 0, tile: 3 };
+
+/** Punto de unión: donde encaja otro asset (posición/rotación locales al asset). */
+export interface AssetSocket {
+  id: string;
+  name: string;
+  type: string;
+  pos: [number, number, number];
+  /** grados */
+  rot: [number, number, number];
+}
+export const SOCKET_TYPES = ["tejado", "fachada", "puerta", "esquina", "suelo", "poste", "anclaje"];
+
+export type PrimitiveKind = "box" | "cylinder" | "cone" | "sphere" | "gable" | "pyramid";
+/** Pieza de un asset de primitivas (unidades de render; rotación en grados). */
+export interface PrimitivePart {
+  id: string;
+  kind: PrimitiveKind;
+  pos: [number, number, number];
+  rot: [number, number, number];
+  size: [number, number, number];
+  color: string;
+  texture?: TextureParams;
+}
+
+export type AssetSource =
+  | { type: "glb"; path: string } // p. ej. "commercial/building-a" → /models/commercial/building-a.glb
+  | { type: "procedural"; generator: string }
+  | { type: "primitives"; parts: PrimitivePart[] };
+
+export interface AssetDef {
+  id: string;
+  name: string;
+  source: AssetSource;
+  category: string;
+  biomes: BiomeId[];
+  /** Multiplicador de escala sobre la natural del asset. */
+  scale: number;
+  /** Texturas por ranura de material (nombre del material del modelo). */
+  textures: Record<string, TextureParams>;
+  sockets: AssetSocket[];
+  notes?: string;
+  updatedAt?: number;
+}
+
+export const ASSET_CATEGORIES = [
+  "edificio",
+  "rascacielos",
+  "casa",
+  "pieza de edificio",
+  "mobiliario",
+  "farola",
+  "semáforo",
+  "vegetación",
+  "vehículo",
+  "decoración",
+  "terreno",
+  "personaje",
+  "otro",
+];
