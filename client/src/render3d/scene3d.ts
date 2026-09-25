@@ -412,7 +412,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   function render(playerTileX: number, playerTileZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void {
     const playerX = playerTileX * T;
     const playerZ = playerTileZ * T;
-    iso.setViewSize(VIEW_HALF_HEIGHT, aspect);
+    iso.setViewSize(new URLSearchParams(location.search).has("cenital") ? Number(new URLSearchParams(location.search).get("cenital")) || 16 : VIEW_HALF_HEIGHT, aspect);
     // yaw objetivo por el camino más corto (el paso 3 → 0 no da la vuelta entera)
     let goal = BASE_YAW + camStep * (Math.PI / 2);
     while (goal - yaw > Math.PI) goal -= Math.PI * 2;

@@ -340,3 +340,83 @@ export function puddleTexture(): THREE.CanvasTexture {
   puddle.colorSpace = THREE.NoColorSpace; // se usa como mapa de alfa
   return puddle;
 }
+
+let tire: THREE.CanvasTexture | null = null;
+// Rodadura: banda oscura y "pulida" por donde pisan las ruedas, con vetas a lo largo
+// (u = a lo largo de la calle, se repite).
+export function tireTrackTexture(): THREE.CanvasTexture {
+  if (tire) return tire;
+  const W = 256;
+  const H = 64;
+  const [c, g] = canvas(W, H);
+  const r = rng(91);
+  for (let y = 0; y < H; y++) {
+    const edge = Math.sin((y / H) * Math.PI); // más intensa en el centro de la banda
+    for (let x = 0; x < W; x++) {
+      const a = edge * (0.55 + 0.45 * r()) * 0.9;
+      g.fillStyle = `rgba(12,12,14,${a * 0.5})`;
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+  // vetas longitudinales
+  for (let i = 0; i < 40; i++) {
+    const y = 8 + r() * (H - 16);
+    g.fillStyle = `rgba(0,0,0,${0.15 + r() * 0.2})`;
+    g.fillRect(0, y, W, 1);
+  }
+  tire = toTexture(c, true);
+  return tire;
+}
+
+let wornZone: THREE.CanvasTexture | null = null;
+// Zona desgastada: el betún se ha ido y asoma el árido claro (mancha clara difusa).
+export function wornZoneTexture(): THREE.CanvasTexture {
+  if (wornZone) return wornZone;
+  const S = 256;
+  const [c, g] = canvas(S, S);
+  const r = rng(57);
+  for (let i = 0; i < 16; i++) {
+    const x = S / 2 + (r() - 0.5) * S * 0.5;
+    const y = S / 2 + (r() - 0.5) * S * 0.4;
+    const rad = 30 + r() * 60;
+    const grd = g.createRadialGradient(x, y, 0, x, y, rad);
+    grd.addColorStop(0, `rgba(175,170,160,${0.25 + r() * 0.2})`);
+    grd.addColorStop(1, "rgba(175,170,160,0)");
+    g.fillStyle = grd;
+    g.fillRect(0, 0, S, S);
+  }
+  const img = g.getImageData(0, 0, S, S);
+  for (let i = 3; i < img.data.length; i += 4) img.data[i] = Math.min(255, img.data[i] * (0.6 + r() * 0.8));
+  g.putImageData(img, 0, 0);
+  wornZone = toTexture(c, false);
+  return wornZone;
+}
+
+let seal: THREE.CanvasTexture | null = null;
+// Grietas selladas con betún: líneas negras brillantes, quebradas y ramificadas.
+export function crackSealTexture(): THREE.CanvasTexture {
+  if (seal) return seal;
+  const S = 256;
+  const [c, g] = canvas(S, S);
+  const r = rng(63);
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  for (let i = 0; i < 5; i++) {
+    let x = r() * S;
+    let y = r() * S;
+    let ang = r() * Math.PI * 2;
+    g.strokeStyle = "rgba(8,8,10,0.85)";
+    g.lineWidth = 3 + r() * 3;
+    g.beginPath();
+    g.moveTo(x, y);
+    for (let k = 0; k < 14; k++) {
+      ang += (r() - 0.5) * 0.9;
+      x += Math.cos(ang) * (8 + r() * 12);
+      y += Math.sin(ang) * (8 + r() * 12);
+      g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  seal = toTexture(c, false);
+  return seal;
+}

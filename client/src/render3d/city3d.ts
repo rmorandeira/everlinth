@@ -16,7 +16,7 @@ import { TILE_SIZE, CITY_ROAD_HALF, type CityData, type CityRoad } from "@roi/sh
 import { buildPolygonBuilding } from "./buildings3d.js";
 import { nycStreetlight, nycTrafficSignal } from "./streetFurniture3d.js";
 import { cloneModel, modelSize, modelsReady, KIT_SCALE, BUILDING_SETS, type Kit } from "./models3d.js";
-import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture, wornPaintTexture, puddleTexture } from "./roadTextures.js";
+import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture, wornPaintTexture, puddleTexture, tireTrackTexture, wornZoneTexture, crackSealTexture } from "./roadTextures.js";
 
 // Asfalto texturizado (UV en coordenadas de mundo: se repite sin costuras entre
 // segmentos) y materiales de calcomanía para manchas, frenadas y rotulado.
@@ -313,6 +313,29 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
   const lineKeyOf = (sg: CityRoad): string => sg.id.slice(0, sg.id.lastIndexOf(":"));
   const toneOf = (sg: CityRoad): number => ASPHALT_TONES[Math.floor(hashStr(lineKeyOf(sg) + "t") * ASPHALT_TONES.length) % ASPHALT_TONES.length];
 
+  // Juntas internas de cada calle (un punto que comparten dos segmentos seguidos de la
+  // misma polilínea): solo ahí se rellena con un disco el hueco del quiebro. En los
+  // extremos (p. ej. donde una avenida termina contra otra calle) no: el disco
+  // sobresaldría como un bulbo redondo; el cruce lo forma el solape de las calzadas.
+  const jointCount = new Map<string, number>();
+  const jkey = (sg: CityRoad, x: number, y: number): string => `${sg.id.slice(0, sg.id.lastIndexOf(":"))}@${x.toFixed(2)},${y.toFixed(2)}`;
+  for (const sg of segs) {
+    for (const [x, y] of [
+      [sg.x0, sg.y0],
+      [sg.x1, sg.y1],
+    ]) {
+      const k = jkey(sg, x, y);
+      jointCount.set(k, (jointCount.get(k) ?? 0) + 1);
+    }
+  }
+  const tireMat = decalMaterial("tire", tireTrackTexture, 0.7);
+  const tireRepeat = (g: THREE.BufferGeometry, lenUnits: number): void => {
+    const uv = g.getAttribute("uv") as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (lenUnits / 1.5));
+  };
+  const sealMat = decalMaterial("seal", crackSealTexture, 0.8);
+  const wornMat = decalMaterial("wornZone", wornZoneTexture, 0.35);
+
   // ---- Calzada ----
   for (const s of segs) {
     const half = CITY_ROAD_HALF[s.kind];
@@ -350,8 +373,36 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
       [s.x0, s.y0],
       [s.x1, s.y1],
     ]) {
+      if ((jointCount.get(jkey(s, ex, ey)) ?? 0) < 2) continue;
       flatDisc(b, curbMat, L(ex), Lz(ey), (half + CURB_W) * T, Y_CURB);
       flatDisc(b, asphaltMat, L(ex), Lz(ey), half * T, Y_ASPHALT, ASPHALT_UV);
+    }
+    // Rodaduras: dos bandas por carril (por donde pisan las ruedas), a lo largo del tramo.
+    const nx0 = -uy0;
+    const ny0 = ux0;
+    const oneWayS = s.kind === 0 && hashStr(s.id.slice(0, s.id.lastIndexOf(":"))) < 0.5;
+    const lanes = oneWayS ? [0] : s.kind === 2 ? [-half * 0.75, -half * 0.25, half * 0.25, half * 0.75] : [-half * 0.5, half * 0.5];
+    for (const lc of lanes) {
+      for (const w of [-0.42, 0.42]) {
+        const off = lc + w;
+        const g = new THREE.PlaneGeometry(len * T, 0.3 * T).rotateX(-Math.PI / 2);
+        tireRepeat(g, len * T);
+        g.rotateY(-ang);
+        g.translate(L((s.x0 + s.x1) / 2 + nx0 * off), Y_DECAL - 0.001, Lz((s.y0 + s.y1) / 2 + ny0 * off));
+        b.add(tireMat, g);
+      }
+    }
+    // Zanjas reparadas (franja que cruza la calzada) y grietas selladas con betún.
+    for (let t = 6; t < len - 4; t += 13) {
+      const px = s.x0 + ux0 * t;
+      const py = s.y0 + uy0 * t;
+      const hz = hash2(Math.round(px * 1.7) - 11, Math.round(py * 1.7) + 4);
+      if (hz > 0.9) {
+        const tone = ASPHALT_TONES[(ASPHALT_TONES.indexOf(toneOf(s)) + 2) % ASPHALT_TONES.length];
+        flatQuad(b, asphaltMaterial(tone, true), L(px), Lz(py), (0.9 + hz * 0.6) * T, half * 2 * T * 0.98, ang + Math.PI / 2 + (hz - 0.95) * 0.3, Y_ASPHALT + 0.0015, ASPHALT_UV);
+      } else if (hz < 0.22) {
+        flatQuad(b, sealMat, L(px + nx0 * (hz - 0.11) * half * 6), Lz(py + ny0 * (hz - 0.11) * half * 6), 2.2 * T, 2.2 * T, ang + hz * 20, Y_DECAL);
+      }
     }
   }
 
@@ -548,6 +599,10 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
           b.addObject(nycTrafficSignal(L(qx), Lz(qy), hx, hy, laneCenters.map((lc) => (poleOff - lc) * T), axis));
         }
 
+        {
+          const [wx, wy] = at(other + 4.5, oneWay ? 0 : half * 0.5);
+          mark(wornMat, wx, wy, 5.5, oneWay ? half * 1.8 : half * 1.1, hang, Y_DECAL - 0.0005);
+        }
         if (higher || allWayStop) {
           const D = other + 2.35;
           const [sx, sy] = at(D, mid);

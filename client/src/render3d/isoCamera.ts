@@ -8,7 +8,9 @@ import * as THREE from "three";
 export const BASE_YAW = Math.PI / 4;
 // Algo más bajo que el dimétrico clásico (atan(0.5) ≈ 26,6°): vista más rasante,
 // se ven más las fachadas y menos las azoteas.
-const PITCH = THREE.MathUtils.degToRad(21);
+// Depuración: ?cenital=1 en la URL mira desde arriba (para revisar calles y cruces).
+const TOP_DOWN = typeof location !== "undefined" && new URLSearchParams(location.search).has("cenital");
+const PITCH = THREE.MathUtils.degToRad(TOP_DOWN ? 89 : 21);
 // Distancia fija cámara↔jugador: exportada porque THREE.Fog mide "cerca/lejos"
 // como distancia a la CÁMARA, no al jugador (ver lighting3d.ts) — sin este
 // desplazamiento, la niebla se calcularía centrada en 0 en vez de aquí.
