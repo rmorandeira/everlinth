@@ -8,8 +8,8 @@
 // está tapando esa área → se aclara. Así solo se tocan los trozos de edificio que
 // estorban de verdad; lo que está al lado o detrás del personaje queda intacto.
 //
-// Se inyecta en el shader (onBeforeCompile) con transparencia por tramado (Bayer
-// 4×4 + discard): el material sigue siendo opaco (escribe profundidad, sin problemas
+// Se inyecta en el shader (onBeforeCompile) con transparencia por tramado (ruido de
+// gradiente entrelazado + discard): el material sigue siendo opaco (escribe profundidad, sin problemas
 // de orden entre edificios) y las sombras no cambian.
 import * as THREE from "three";
 
@@ -36,13 +36,13 @@ const BODY = /* glsl */ `
     // punto del suelo que este fragmento tapa (siguiendo el rayo de visión)
     vec2 g = wp.xz - uCutViewDir.xz * (wp.y / uCutViewDir.y);
     float d = length(g - uCutChar);
-    float cut = 1.0 - smoothstep(uCutRadius * 0.65, uCutRadius, d);
+    float cut = 1.0 - smoothstep(uCutRadius * 0.45, uCutRadius, d);
     if (cut > 0.001) {
-      int bx = int(mod(gl_FragCoord.x, 4.0));
-      int by = int(mod(gl_FragCoord.y, 4.0));
-      float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+      // Ruido de gradiente entrelazado (Jimenez): tramado fino y uniforme, sin la
+      // cuadrícula visible del patrón Bayer.
+      float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
       float keep = mix(1.0, uCutKeep, cut);
-      if (keep < (bayer[bx + by * 4] + 0.5) / 16.0) discard;
+      if (keep < ign) discard;
     }
   }
 }

@@ -38,41 +38,136 @@ export const BUILDING_SETS = {
 };
 
 // ---- Ventanas iluminadas ----
-// Los modelos de Kenney pintan los cristales con un azul característico de su paleta.
-// En el shader se detecta ese color y, según una rejilla de "ventanas" en coordenadas
-// de mundo, se enciende una fracción al azar con luz cálida (o alguna fría, de
-// pantalla/fluorescente). La intensidad sigue al anochecer (uWinGlow, ver scene3d).
+// Cada ventana REAL del modelo se enciende entera o nada: al cargar el modelo se
+// buscan los triángulos cuyo color en la textura es el azul de los cristales de
+// Kenney y se agrupan en paneles (triángulos del mismo plano que comparten arista).
+// Cada panel recibe un número aleatorio en un atributo de vértice (aWin; 0 = no es
+// ventana). En el shader, ese número más un desplazamiento propio de cada edificio
+// (según su posición en el mundo) decide si el panel está encendido y de qué tono,
+// así dos edificios iguales no tienen las mismas ventanas encendidas.
 export const windowUniforms = {
   uWinGlow: { value: 0 }, // 0 de día → ~0,45 de noche
-  uWinLit: { value: 0.28 }, // fracción de ventanas encendidas
+  uWinLit: { value: 0.3 }, // fracción de ventanas encendidas
 };
+
 function addWindowLights(mat: THREE.MeshStandardMaterial): void {
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (shader, renderer) => {
     prev?.call(mat, shader, renderer);
     Object.assign(shader.uniforms, windowUniforms);
     shader.vertexShader = shader.vertexShader
-      .replace("void main() {", "varying vec3 vWinWorld;\nvoid main() {")
-      .replace("#include <project_vertex>", "#include <project_vertex>\n  vWinWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+      .replace("void main() {", "attribute float aWin;\nvarying float vWin;\nvoid main() {")
+      .replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
+  {
+    vec3 o = vec3(modelMatrix[3][0], modelMatrix[3][1], modelMatrix[3][2]);
+    float shift = fract(sin(dot(floor(o.xz * 4.0), vec2(12.9898, 78.233))) * 43758.5453);
+    vWin = aWin > 0.0 ? fract(aWin + shift) + 0.0001 : 0.0;
+  }`
+      );
     shader.fragmentShader = shader.fragmentShader
-      .replace("void main() {", "uniform float uWinGlow;\nuniform float uWinLit;\nvarying vec3 vWinWorld;\nvoid main() {")
+      .replace("void main() {", "uniform float uWinGlow;\nuniform float uWinLit;\nvarying float vWin;\nvoid main() {")
       .replace(
         "#include <emissivemap_fragment>",
         `#include <emissivemap_fragment>
-  {
-    float isWin = step(0.1, diffuseColor.b - diffuseColor.r) * step(0.42, diffuseColor.b);
-    if (isWin > 0.0 && uWinGlow > 0.001) {
-      vec3 cell = floor(vWinWorld * vec3(1.6, 1.0, 1.6));
-      float rnd = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-      float on = step(1.0 - uWinLit, rnd);
-      vec3 warm = mix(vec3(1.0, 0.74, 0.4), vec3(0.75, 0.85, 1.0), step(0.85, fract(rnd * 7.31)));
-      totalEmissiveRadiance += warm * on * uWinGlow;
-    }
+  if (vWin > 0.0 && uWinGlow > 0.001) {
+    float on = step(1.0 - uWinLit, vWin);
+    vec3 tone = mix(vec3(1.0, 0.74, 0.4), vec3(0.75, 0.85, 1.0), step(0.9, fract(vWin * 7.31)));
+    totalEmissiveRadiance += tone * on * uWinGlow * (0.75 + 0.25 * fract(vWin * 3.7));
   }`
       );
   };
   const prevKey = mat.customProgramCacheKey.bind(mat);
   mat.customProgramCacheKey = () => prevKey() + "|winlights";
+}
+
+// Píxeles de la textura (una vez por imagen) para saber el color bajo cada UV.
+const pixelCache = new WeakMap<object, { data: Uint8ClampedArray; w: number; h: number } | null>();
+function texturePixels(tex: THREE.Texture): { data: Uint8ClampedArray; w: number; h: number } | null {
+  const img = tex.image as (CanvasImageSource & { width: number; height: number }) | undefined;
+  if (!img || !img.width) return null;
+  if (pixelCache.has(img)) return pixelCache.get(img)!;
+  let out: { data: Uint8ClampedArray; w: number; h: number } | null = null;
+  try {
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext("2d")!;
+    g.drawImage(img, 0, 0);
+    out = { data: g.getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height };
+  } catch {
+    out = null;
+  }
+  pixelCache.set(img, out);
+  return out;
+}
+
+// Etiqueta los paneles de ventana de una malla (atributo aWin por vértice).
+function tagWindows(mesh: THREE.Mesh, mat: THREE.MeshStandardMaterial): void {
+  if (!mat.map) return;
+  const px = texturePixels(mat.map);
+  if (!px) return;
+  const geo0 = mesh.geometry;
+  if (!geo0.getAttribute("uv")) return;
+  const geo = geo0.index ? geo0.toNonIndexed() : geo0;
+  const pos = geo.getAttribute("position") as THREE.BufferAttribute;
+  const uv = geo.getAttribute("uv") as THREE.BufferAttribute;
+  const tri = pos.count / 3;
+  const isWin = new Uint8Array(tri);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), e = new THREE.Vector3();
+  const normals: THREE.Vector3[] = [];
+  for (let t = 0; t < tri; t++) {
+    const u = (uv.getX(t * 3) + uv.getX(t * 3 + 1) + uv.getX(t * 3 + 2)) / 3;
+    const v = (uv.getY(t * 3) + uv.getY(t * 3 + 1) + uv.getY(t * 3 + 2)) / 3;
+    // glTF: origen de las UV arriba a la izquierda (sin volteo)
+    const x = Math.min(px.w - 1, Math.max(0, Math.floor((u - Math.floor(u)) * px.w)));
+    const y = Math.min(px.h - 1, Math.max(0, Math.floor((v - Math.floor(v)) * px.h)));
+    const i = (y * px.w + x) * 4;
+    const r = px.data[i], bl = px.data[i + 2];
+    // solo el azul claro de los cristales (≈125-135, 165-175, 225-230), no los marcos gris azulados
+    isWin[t] = bl - r > 70 && bl > 190 ? 1 : 0;
+    a.fromBufferAttribute(pos, t * 3);
+    b.fromBufferAttribute(pos, t * 3 + 1);
+    c.fromBufferAttribute(pos, t * 3 + 2);
+    n.subVectors(b, a).cross(e.subVectors(c, a)).normalize();
+    normals.push(n.clone());
+  }
+  // Unión de triángulos de ventana que comparten arista y plano → un panel.
+  const parent = new Int32Array(tri).map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const key = (i: number): string => `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`;
+  const edges = new Map<string, number>();
+  for (let t = 0; t < tri; t++) {
+    if (!isWin[t]) continue;
+    for (let k = 0; k < 3; k++) {
+      const k1 = key(t * 3 + k);
+      const k2 = key(t * 3 + ((k + 1) % 3));
+      const ek = k1 < k2 ? k1 + "|" + k2 : k2 + "|" + k1;
+      const other = edges.get(ek);
+      if (other === undefined) edges.set(ek, t);
+      else if (normals[other].dot(normals[t]) > 0.98) parent[find(t)] = find(other);
+    }
+  }
+  const seeds = new Float32Array(pos.count);
+  let any = false;
+  for (let t = 0; t < tri; t++) {
+    if (!isWin[t]) continue;
+    const root = find(t);
+    const sd = (Math.sin(root * 12.9898 + 78.233) * 43758.5453) % 1;
+    const val = Math.abs(sd) * 0.999 + 0.0005;
+    seeds[t * 3] = seeds[t * 3 + 1] = seeds[t * 3 + 2] = val;
+    any = true;
+  }
+  if (!any) return;
+  geo.setAttribute("aWin", new THREE.BufferAttribute(seeds, 1));
+  mesh.geometry = geo;
 }
 
 function normalize(root: THREE.Object3D): ModelEntry {
@@ -96,6 +191,7 @@ function normalize(root: THREE.Object3D): ModelEntry {
         addWindowLights(std);
       }
     }
+    if (!Array.isArray(m.material) && (m.material as THREE.MeshStandardMaterial).isMeshStandardMaterial) tagWindows(m, m.material as THREE.MeshStandardMaterial);
   });
   return { object: g, size };
 }

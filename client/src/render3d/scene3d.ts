@@ -94,8 +94,8 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   const iso = createIsoCamera();
   // Área del personaje que se ve siempre sin obstrucciones (lo que la tapa se vuelve
-  // translúcido, ver cutaway3d.ts): radio en unidades de render (4 = 12 m).
-  const CHAR_AREA_RADIUS = 4;
+  // translúcido, ver cutaway3d.ts): radio en unidades de render (6 = 18 m).
+  const CHAR_AREA_RADIUS = 6;
   const gunFx = createGunFx(scene);
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
