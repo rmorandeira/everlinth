@@ -8,6 +8,7 @@
 // coordenadas GLOBALES para que la sala se vea igual desde cualquier vecina.
 // Geometría y materiales compartidos: nada que liberar.
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, TILE_SIZE, CITY_STREET_SIZE, CITY_ROAD_MIN, CITY_ROAD_MAX } from "@roi/shared";
 
 const T = TILE_SIZE;
@@ -91,6 +92,34 @@ function streetTree(g: THREE.Group, x: number, z: number, color: number): void {
   g.add(crown);
 }
 
+// Una sala tiene cientos de piezas sueltas (marcas, farolas, coches…): se fusionan por
+// material en unas pocas mallas para no gastar un draw call (y otro de sombra) por pieza.
+function mergeByMaterial(src: THREE.Group): THREE.Group {
+  src.updateMatrixWorld(true);
+  const lists = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  src.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const g = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+    g.applyMatrix4(mesh.matrixWorld);
+    const mat = mesh.material as THREE.Material;
+    let l = lists.get(mat);
+    if (!l) lists.set(mat, (l = []));
+    l.push(g);
+  });
+  const out = new THREE.Group();
+  for (const [mat, list] of lists) {
+    const merged = mergeGeometries(list, false);
+    for (const g of list) g.dispose();
+    if (merged) {
+      const m = new THREE.Mesh(merged, mat);
+      m.userData.ownGeometry = true; // único de esta sala: scene3d lo libera al cambiar de pantalla
+      out.add(m);
+    }
+  }
+  return out;
+}
+
 // tiles: rejilla de la sala; (offsetX, offsetZ): origen de la sala en tiles respecto
 // a la sala activa; (gx0, gz0): origen de la sala en tiles GLOBALES (para los hashes).
 export function buildCityProps(tiles: TileType[][], offsetX: number, offsetZ: number, gx0: number, gz0: number): THREE.Group | null {
@@ -99,7 +128,6 @@ export function buildCityProps(tiles: TileType[][], offsetX: number, offsetZ: nu
   if (!hasRoad) return null;
 
   const g = new THREE.Group();
-  g.position.set(offsetX * T, 0, offsetZ * T);
   const S = CITY_STREET_SIZE;
   const W = SCREEN_WIDTH;
   const H = SCREEN_HEIGHT;
@@ -169,5 +197,7 @@ export function buildCityProps(tiles: TileType[][], offsetX: number, offsetZ: nu
       lastZ = z;
     }
   }
-  return g;
+  const merged = mergeByMaterial(g);
+  merged.position.set(offsetX * T, 0, offsetZ * T);
+  return merged;
 }

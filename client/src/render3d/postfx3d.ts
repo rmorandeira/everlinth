@@ -45,12 +45,12 @@ const FxShader = {
       // Aberración: rojo hacia un lado, azul hacia el otro, verde centrado.
       float off = aberration * ${MAX_ABERRATION_PX.toFixed(1)} / resolution.x;
       // Tilt-shift: banda nítida en el centro; el desenfoque crece con la distancia vertical.
-      float blur = smoothstep(0.18, 0.5, abs(vUv.y - 0.5)) * tilt * 3.5;
+      float blur = smoothstep(0.18, 0.5, abs(vUv.y - 0.5)) * tilt * 6.0;
       vec2 px = blur / resolution;
       vec3 acc = vec3(0.0);
       float wsum = 0.0;
-      for (int i = -4; i <= 4; i++) {
-        float w = exp(-float(i * i) * 0.12);
+      for (int i = -2; i <= 2; i++) {
+        float w = exp(-float(i * i) * 0.3);
         vec2 o = vec2(float(i) * px.x, float(i) * px.y * 0.6);
         float r = texture2D(tDiffuse, uv + o + vec2(off, 0.0)).r;
         float g = texture2D(tDiffuse, uv + o).g;
@@ -85,7 +85,7 @@ export function createPostFx3D(renderer: THREE.WebGLRenderer): PostFx3D {
 
   function ensureComposer(scene: THREE.Scene, camera: THREE.Camera): EffectComposer {
     if (!composer) {
-      const target = new THREE.WebGLRenderTarget(width * pixelRatio, height * pixelRatio, { type: THREE.HalfFloatType, samples: 4 });
+      const target = new THREE.WebGLRenderTarget(width * pixelRatio, height * pixelRatio, { type: THREE.HalfFloatType, samples: 2 });
       composer = new EffectComposer(renderer, target);
       renderPass = new RenderPass(scene, camera);
       fxPass = new ShaderPass(FxShader);

@@ -5,9 +5,9 @@
 // compartido y opaco) cuando deja de tapar.
 import * as THREE from "three";
 
-const GHOST_OPACITY = 0.16;
+const GHOST_OPACITY = 0.06;
 const FADE_RATE = 9;
-const MARGIN = 0.25; // holgura lateral para que no "parpadee" en el borde de la sombra del edificio
+const MARGIN = 2.2; // holgura lateral (unidades): además de lo que tapa exactamente, se aclara lo cercano al rayo
 
 interface Entry {
   object: THREE.Object3D;

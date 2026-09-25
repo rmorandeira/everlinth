@@ -13,7 +13,7 @@ import { SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, TileType, type PlacedTree, type
 import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
-import { buildBuilding, disposeBuildings } from "./buildings3d.js";
+import { buildBuilding, disposeBuildings, initBuildingTextures, buildingTexturesReady } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { createOcclusion3D } from "./occlusion3d.js";
@@ -62,6 +62,8 @@ export interface Scene3D {
   addTracer(x0: number, z0: number, x1: number, z1: number): void;
   render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void;
   dispose(): void;
+  /** Depuración: nº de mallas en escena y de instancias. */
+  stats(): { meshes: number; instances: number; textured: number; owned: number };
 }
 
 export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
@@ -81,10 +83,14 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const figures = createFigureManager();
   scene.add(figures.group);
 
-  const tileGeo = new THREE.BoxGeometry(0.98 * TILE_SIZE, 0.1, 0.98 * TILE_SIZE);
+  // Suelo: un plano por tile (2 triángulos) en vez de una caja (12); solo las aceras, que
+  // van algo más altas (bordillo), usan caja para que se vea el canto.
+  const tileGeo = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE).rotateX(-Math.PI / 2).translate(0, 0.05, 0);
+  const curbGeo = new THREE.BoxGeometry(0.98 * TILE_SIZE, 0.1, 0.98 * TILE_SIZE);
   const tileMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
 
   let groundMesh: THREE.InstancedMesh | null = null;
+  let curbMesh: THREE.InstancedMesh | null = null;
   let obstacleGroup: THREE.Group | null = null;
   let treeGroup: THREE.Group | null = null;
   let waterInstances: number[] = []; // índices dentro de groundMesh que son agua, para el brillo animado
@@ -189,13 +195,23 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     }
   }
 
+  void initBuildingTextures();
+
   function updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void {
+    // Sin el manifest de texturas los edificios saldrían vacíos: se reintenta en el siguiente frame.
+    if (!buildingTexturesReady()) return;
     const key = `${screen.sx},${screen.sy}`;
     if (key === lastKey) return;
     lastKey = key;
 
     if (groundMesh) scene.remove(groundMesh);
-    if (obstacleGroup) scene.remove(obstacleGroup);
+    if (curbMesh) scene.remove(curbMesh);
+    if (obstacleGroup) {
+      scene.remove(obstacleGroup);
+      obstacleGroup.traverse((o) => {
+        if (o.userData.ownGeometry) (o as THREE.Mesh).geometry.dispose();
+      });
+    }
     if (treeGroup) scene.remove(treeGroup);
     disposeBuildings();
     occlusion.clear();
@@ -211,23 +227,36 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
       const offsetX = (n.sx - screen.sx) * SCREEN_WIDTH;
       const offsetZ = (n.sy - screen.sy) * SCREEN_HEIGHT;
       collectGrid(n.tiles, offsetX, offsetZ, n.sx, n.sy, positions, obstacles);
-      collectTrees(n.placedTrees, offsetX, offsetZ, treeDefs, trees, updaters);
+      // Los árboles procedurales son caros (cientos de mallas animadas): solo en la sala actual y las contiguas.
+      if (Math.abs(n.sx - screen.sx) <= 1 && Math.abs(n.sy - screen.sy) <= 1) {
+        collectTrees(n.placedTrees, offsetX, offsetZ, treeDefs, trees, updaters);
+      }
     }
 
-    const mesh = new THREE.InstancedMesh(tileGeo, tileMat, positions.length);
+    const curbs = positions.filter((p) => p.tile === TileType.Sidewalk);
+    const flats = positions.filter((p) => p.tile !== TileType.Sidewalk);
+    const mesh = new THREE.InstancedMesh(tileGeo, tileMat, flats.length);
+    const curb = new THREE.InstancedMesh(curbGeo, tileMat, curbs.length);
     const m = new THREE.Matrix4();
     const c = new THREE.Color();
     const newWaterInstances: number[] = [];
-    positions.forEach((p, i) => {
-      m.makeTranslation(p.x * T, p.tile === TileType.Sidewalk ? SIDEWALK_RAISE : 0, p.z * T);
+    flats.forEach((p, i) => {
+      m.makeTranslation(p.x * T, 0, p.z * T);
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, groundColor(p.tile, hash2(p.x, p.z), c));
       if (p.tile === TileType.Water) newWaterInstances.push(i);
     });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    curbs.forEach((p, i) => {
+      m.makeTranslation(p.x * T, SIDEWALK_RAISE, p.z * T);
+      curb.setMatrixAt(i, m);
+      curb.setColorAt(i, groundColor(p.tile, hash2(p.x, p.z), c));
+    });
+    for (const im of [mesh, curb]) {
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      im.receiveShadow = true;
+    }
 
-    mesh.receiveShadow = true;
     for (const grp of [obstacles, trees]) {
       grp.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) {
@@ -237,9 +266,11 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
       });
     }
     scene.add(mesh);
+    scene.add(curb);
     scene.add(obstacles);
     scene.add(trees);
     groundMesh = mesh;
+    curbMesh = curb;
     obstacleGroup = obstacles;
     treeGroup = trees;
     waterInstances = newWaterInstances;
@@ -333,10 +364,32 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
+  function stats(): { meshes: number; instances: number; textured: number; owned: number; treeMeshes: number } {
+    let treeMeshes = 0;
+    treeGroup?.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) treeMeshes++;
+    });
+    let meshes = 0;
+    let textured = 0;
+    let owned = 0;
+    let instances = 0;
+    scene.traverse((o) => {
+      const m = o as THREE.InstancedMesh;
+      if (m.isInstancedMesh) instances += m.count;
+      else if ((o as THREE.Mesh).isMesh) {
+        meshes++;
+        if (((o as THREE.Mesh).material as THREE.MeshLambertMaterial).map) textured++;
+        if (o.userData.ownGeometry) owned++;
+      }
+    });
+    return { meshes, instances, textured, owned, treeMeshes };
+  }
+
   function dispose(): void {
     tileGeo.dispose();
+    curbGeo.dispose();
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, cursorToGround, addTracer, render, dispose };
+  return { renderer, resize, updateGround, updateFigures, cursorToGround, addTracer, render, dispose, stats };
 }

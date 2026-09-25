@@ -45,6 +45,7 @@ const weather = new WeatherSystem();
 // Fase 0 de la migración a 3D (ver plan en .claude/plans): el canvas #scene,
 // que antes tenía un contexto 2D, ahora lo posee three.js por completo.
 const scene3d = createScene3D(sceneCanvas);
+(window as unknown as { __scene3d: unknown }).__scene3d = scene3d; // hook de depuración (renderer.info)
 
 // Ajustes de la niebla de visión: editables desde el backoffice, se piden una
 // vez al arrancar (si falla la petición, se queda con los valores por defecto).

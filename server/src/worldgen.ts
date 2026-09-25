@@ -407,7 +407,9 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   // bloquean movimiento. Solo se plantan si hay alguno guardado compatible con
   // este bioma — si el admin no ha creado ninguno todavía, no aparece nada.
   const placedTrees: PlacedTree[] = [];
-  const eligibleTrees = listTreeDefsForBiome(biome);
+  // En la ciudad no hay árboles procedurales: cientos de mallas por árbol por sala son demasiado
+  // caro (y los árboles de acera ya los pone el propio city3d).
+  const eligibleTrees = isCity ? [] : listTreeDefsForBiome(biome);
   if (eligibleTrees.length > 0) {
     const treeRoll = rng();
     const treeCount = treeRoll < 0.5 ? 0 : treeRoll < 0.85 ? 1 : 2;

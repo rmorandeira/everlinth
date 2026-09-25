@@ -1,17 +1,18 @@
-// Edificios a partir de primitivas (sin texturas, color plano): una pequeña
-// librería de piezas (bloque, tejado a dos aguas, tejado a cuatro aguas,
-// cilindro, cono, semicilindro, ventanas instanciadas) y unos cuantos
-// arquetipos que las combinan (casa, tienda, torre escalonada, nave, silo,
-// edificio en L). Sustituye al SkyscraperGenerator de three.js: sus mínimos
-// arquitectónicos (~6.7 unidades de base) obligaban a reescalarlo y no dejaban
-// variar el tamaño; con primitivas, cada arquetipo se adapta al hueco que
-// worldgen reservó (3-5 tiles de lado).
+// Edificios hechos SOLO de planos (quads): cuatro muros y una azotea por bloque,
+// con fotos de fachada de assets/buildings como textura (ver tools/textures/build.mjs,
+// que las reduce a 512 px y genera public/textures/buildings/manifest.json).
 //
-// Toda la geometría base es compartida (una unidad, se escala por malla): un
-// edificio son unas pocas mallas sobre buffers ya existentes. Lo único que se
-// crea por edificio son las ventanas (un InstancedMesh, un solo draw call),
-// que hay que liberar al cambiar de pantalla — ver disposeBuildings().
+// - Base de cada torre: una franja de planta baja (escaparate/persiana/nave).
+// - Muros: una textura "tower" (rejilla de ventanas de varias plantas) repetida en
+//   vertical tantas veces como plantas tenga el bloque; el manifest dice cuántas
+//   plantas enseña cada foto, así una ventana mide siempre ≈ una planta (3 m).
+// - Los rascacielos se escalonan en bloques cada vez más estrechos.
+// - Naves y casas bajas usan una fachada "lowrise" entera, sin repetir en vertical.
+//
+// Todos los planos de un edificio se fusionan por material: un edificio son 3-6
+// mallas, no cientos. Los materiales (y sus texturas) se comparten entre edificios.
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { TILE_SIZE } from "@roi/shared";
 
 function hash2(x: number, z: number): number {
@@ -19,332 +20,223 @@ function hash2(x: number, z: number): number {
   return h - Math.floor(h);
 }
 
-// ---- Geometría base compartida (tamaño unidad, apoyada en y=0) ----
-
-const boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-const cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 20).translate(0, 0.5, 0);
-const coneGeo = new THREE.ConeGeometry(0.5, 1, 20).translate(0, 0.5, 0);
-// Pirámide de base cuadrada de lado 1 (tejado a cuatro aguas).
-const hipGeo = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4).rotateY(Math.PI / 4).translate(0, 0.5, 0);
-// Cilindro con el eje a lo largo de Z, centrado en el origen: su mitad
-// inferior queda dentro del bloque sobre el que se apoya (tejado curvo de nave).
-const barrelGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 20).rotateX(Math.PI / 2);
-
-// Prisma triangular (tejado a dos aguas): base de ancho 1 en X, cumbrera a lo
-// largo de Z, altura 1. No indexado para que computeVertexNormals dé normales planas.
-function makeGableGeo(): THREE.BufferGeometry {
-  const A = [-0.5, 0, 0.5], B = [0.5, 0, 0.5], C = [0, 1, 0.5];
-  const D = [-0.5, 0, -0.5], E = [0.5, 0, -0.5], F = [0, 1, -0.5];
-  const tris = [A, B, C, E, D, F, A, C, D, C, F, D, B, E, C, C, E, F, A, D, B, B, D, E];
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(tris.flat(), 3));
-  g.computeVertexNormals();
-  return g;
-}
-const gableGeo = makeGableGeo();
-
-// ---- Materiales por color (compartidos) ----
-
-const materialCache = new Map<number, THREE.MeshLambertMaterial>();
-function mat(color: number): THREE.MeshLambertMaterial {
-  let m = materialCache.get(color);
-  if (!m) {
-    m = new THREE.MeshLambertMaterial({ color, flatShading: true });
-    materialCache.set(color, m);
-  }
-  return m;
-}
-
-const WALLS = [0xb5654a, 0xe8dcc0, 0xd4a85a, 0xa9a9a4, 0x8ea0b3, 0xc98f6b];
-const ROOFS = [0xa8412f, 0x4a5560, 0xc9673a, 0x4f7a5a, 0x6b4a3a];
-const TRIM = 0xd9d2c0;
-const WINDOW_COLOR = 0x26323f;
-const AWNINGS = [0xc0392b, 0x2f6d9a, 0x3a8a4f];
-
 function pick<T>(arr: T[], n: number): T {
   return arr[Math.floor(n * arr.length) % arr.length];
 }
 
-// ---- Primitivas ----
+// ---- Catálogo de texturas ----
 
-// Bloque centrado en (x,z), con la base en y.
-function block(parent: THREE.Group, w: number, h: number, d: number, x: number, y: number, z: number, color: number): THREE.Mesh {
-  const m = new THREE.Mesh(boxGeo, mat(color));
-  m.scale.set(w, h, d);
-  m.position.set(x, y, z);
-  parent.add(m);
+interface TexMeta {
+  id: string;
+  cat: "tower" | "lowrise" | "ground";
+  floors: number; // plantas que enseña la foto (ground: 1)
+  w: number; // tamaño original, solo para la proporción
+  h: number;
+}
+
+const TEX_DIR = "/textures/buildings";
+const byCat: Record<TexMeta["cat"], TexMeta[]> = { tower: [], lowrise: [], ground: [] };
+let ready = false;
+let loading: Promise<void> | null = null;
+
+export function initBuildingTextures(): Promise<void> {
+  if (!loading) {
+    loading = fetch(`${TEX_DIR}/manifest.json`)
+      .then((r) => r.json() as Promise<TexMeta[]>)
+      .then((list) => {
+        for (const t of list) byCat[t.cat].push(t);
+        ready = true;
+      })
+      .catch((e) => {
+        console.warn("No se pudieron cargar las texturas de edificios:", e);
+        loading = null;
+      });
+  }
+  return loading;
+}
+
+export function buildingTexturesReady(): boolean {
+  return ready;
+}
+
+const loader = new THREE.TextureLoader();
+const materialCache = new Map<string, THREE.MeshLambertMaterial>();
+function texMaterial(id: string): THREE.MeshLambertMaterial {
+  let m = materialCache.get(id);
+  if (!m) {
+    const map = loader.load(`${TEX_DIR}/${id}.jpg`);
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.wrapS = map.wrapT = THREE.RepeatWrapping;
+    map.anisotropy = 4;
+    m = new THREE.MeshLambertMaterial({ map });
+    m.shadowSide = THREE.DoubleSide; // muros de un solo lado: la sombra debe cerrar el volumen
+    materialCache.set(id, m);
+  }
   return m;
 }
 
-// Tejado a dos aguas sobre un rectángulo w×d; ridgeAlongX decide hacia dónde corre la cumbrera.
-function gableRoof(parent: THREE.Group, w: number, d: number, h: number, x: number, y: number, z: number, color: number, ridgeAlongX: boolean): void {
-  const m = new THREE.Mesh(gableGeo, mat(color));
-  if (ridgeAlongX) {
-    m.rotation.y = Math.PI / 2;
-    m.scale.set(d, h, w);
-  } else {
-    m.scale.set(w, h, d);
+const ROOF_COLORS = [0x5d6168, 0x6b6f73, 0x54585f, 0x746c64];
+function roofMaterial(color: number): THREE.MeshLambertMaterial {
+  const key = `roof${color}`;
+  let m = materialCache.get(key);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ color });
+    m.shadowSide = THREE.DoubleSide;
+    materialCache.set(key, m);
   }
-  m.position.set(x, y, z);
-  parent.add(m);
+  return m;
 }
 
-function hipRoof(parent: THREE.Group, w: number, d: number, h: number, x: number, y: number, z: number, color: number): void {
-  const m = new THREE.Mesh(hipGeo, mat(color));
-  m.scale.set(w, h, d);
-  m.position.set(x, y, z);
-  parent.add(m);
-}
+// ---- Constructor de planos ----
 
-function cylinder(parent: THREE.Group, r: number, h: number, x: number, y: number, z: number, color: number): void {
-  const m = new THREE.Mesh(cylGeo, mat(color));
-  m.scale.set(r * 2, h, r * 2);
-  m.position.set(x, y, z);
-  parent.add(m);
-}
+const FLOOR_H = 1.0; // una planta ≈ 3 m ≈ 1 unidad de render
+const GROUND_H = 1.3; // planta baja algo más alta
 
-function cone(parent: THREE.Group, r: number, h: number, x: number, y: number, z: number, color: number): void {
-  const m = new THREE.Mesh(coneGeo, mat(color));
-  m.scale.set(r * 2, h, r * 2);
-  m.position.set(x, y, z);
-  parent.add(m);
-}
+const activeGeometries: THREE.BufferGeometry[] = [];
 
-// Parapeto: marco fino alrededor de una azotea plana.
-function parapet(parent: THREE.Group, w: number, d: number, x: number, y: number, z: number, color: number): void {
-  const t = 0.06;
-  const h = 0.14;
-  block(parent, w, h, t, x, y, z + d / 2 - t / 2, color);
-  block(parent, w, h, t, x, y, z - d / 2 + t / 2, color);
-  block(parent, t, h, d - 2 * t, x + w / 2 - t / 2, y, z, color);
-  block(parent, t, h, d - 2 * t, x - w / 2 + t / 2, y, z, color);
-}
+class PlaneBatch {
+  private lists = new Map<THREE.Material, THREE.BufferGeometry[]>();
 
-// ---- Ventanas: un único InstancedMesh por edificio ----
+  private add(mat: THREE.Material, g: THREE.BufferGeometry): void {
+    let l = this.lists.get(mat);
+    if (!l) this.lists.set(mat, (l = []));
+    l.push(g);
+  }
 
-const windowMat = new THREE.MeshLambertMaterial({ color: WINDOW_COLOR });
-const FLOOR_H = 1.0; // ~3 m con 1 tile ≈ 3 m
-const activeWindows: THREE.InstancedMesh[] = [];
+  // Muro vertical de alto h, con la textura repetida (nx × ny) veces.
+  // face: 0 = +Z, 1 = +X, 2 = -Z, 3 = -X. hw/hd: semianchura/semifondo del bloque;
+  // y0: base del muro.
+  wall(mat: THREE.Material, face: number, hw: number, hd: number, y0: number, h: number, nx: number, ny: number): void {
+    const w = face % 2 === 0 ? hw * 2 : hd * 2;
+    const g = new THREE.PlaneGeometry(w, h);
+    const uv = g.getAttribute("uv") as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * nx, uv.getY(i) * ny);
+    const m = new THREE.Matrix4();
+    m.makeRotationY([0, Math.PI / 2, Math.PI, -Math.PI / 2][face]);
+    m.setPosition([0, hw, 0, -hw][face], y0 + h / 2, [hd, 0, -hd, 0][face]);
+    g.applyMatrix4(m);
+    this.add(mat, g);
+  }
 
-interface Facade {
-  w: number; // ancho del bloque en X
-  d: number; // fondo del bloque en Z
-  x: number;
-  z: number;
-  baseY: number;
-  floors: number;
-  skipGround?: boolean; // deja la planta baja libre (p. ej. tienda con su propio escaparate)
-}
+  roof(mat: THREE.Material, hw: number, hd: number, y: number): void {
+    const g = new THREE.PlaneGeometry(hw * 2, hd * 2);
+    g.rotateX(-Math.PI / 2);
+    g.translate(0, y, 0);
+    this.add(mat, g);
+  }
 
-function addWindows(parent: THREE.Group, f: Facade): void {
-  const ww = 0.3;
-  const wh = 0.42;
-  const wd = 0.04;
-  const mats: THREE.Matrix4[] = [];
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const s = new THREE.Vector3(ww, wh, wd);
-  const p = new THREE.Vector3();
-  const facades: Array<{ len: number; cx: number; cz: number; rotY: number }> = [
-    { len: f.w, cx: f.x, cz: f.z + f.d / 2, rotY: 0 },
-    { len: f.w, cx: f.x, cz: f.z - f.d / 2, rotY: Math.PI },
-    { len: f.d, cx: f.x + f.w / 2, cz: f.z, rotY: Math.PI / 2 },
-    { len: f.d, cx: f.x - f.w / 2, cz: f.z, rotY: -Math.PI / 2 },
-  ];
-  for (const fc of facades) {
-    const cols = Math.max(2, Math.floor(fc.len / 0.75));
-    const step = fc.len / cols;
-    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), fc.rotY);
-    const along = new THREE.Vector3(Math.cos(fc.rotY), 0, -Math.sin(fc.rotY)); // eje local X de la fachada, en mundo
-    const out = new THREE.Vector3(Math.sin(fc.rotY), 0, Math.cos(fc.rotY)); // normal exterior
-    for (let fl = f.skipGround ? 1 : 0; fl < f.floors; fl++) {
-      const y = f.baseY + fl * FLOOR_H + FLOOR_H * 0.5 - wh / 2;
-      for (let c = 0; c < cols; c++) {
-        const off = -fc.len / 2 + step * (c + 0.5);
-        p.set(fc.cx + along.x * off + out.x * 0.01, y, fc.cz + along.z * off + out.z * 0.01);
-        m.compose(p, q, s);
-        mats.push(m.clone());
-      }
+  build(group: THREE.Group): void {
+    for (const [mat, list] of this.lists) {
+      const merged = mergeGeometries(list, false);
+      for (const g of list) g.dispose();
+      if (!merged) continue;
+      activeGeometries.push(merged);
+      group.add(new THREE.Mesh(merged, mat));
     }
+    this.lists.clear();
   }
-  if (mats.length === 0) return;
-  const inst = new THREE.InstancedMesh(boxGeo, windowMat, mats.length);
-  mats.forEach((mm, i) => inst.setMatrixAt(i, mm));
-  inst.instanceMatrix.needsUpdate = true;
-  parent.add(inst);
-  activeWindows.push(inst);
 }
 
-// ---- Arquetipos (todos centrados en el origen, base en y=0) ----
-// `s` es el lado disponible en unidades de mundo (tiles reservados × 0.86).
-
-function house(g: THREE.Group, s: number, n: number): void {
-  const w = s * 0.8;
-  const d = s * 0.7;
-  const wall = pick(WALLS, n);
-  const floors = 2;
-  block(g, w, floors * FLOOR_H, d, 0, 0, 0, wall);
-  addWindows(g, { w, d, x: 0, z: 0, baseY: 0, floors });
-  gableRoof(g, w * 1.08, d * 1.08, 1.0, 0, floors * FLOOR_H, 0, pick(ROOFS, n * 7.3), n > 0.5);
-  block(g, 0.25, 0.7, 0.25, w * 0.25, floors * FLOOR_H + 0.2, 0, 0x7a5a4a); // chimenea
-  block(g, 0.4, 0.75, 0.05, 0, 0, d / 2 + 0.01, 0x5a3a2a); // puerta
+// Repeticiones de una textura sobre un muro de ancho W: si cabe más de 1,5 veces se
+// redondea (un pelín de estiramiento, sin cortes de ventana); si no, se recorta.
+function repeatsAcross(W: number, tileW: number): number {
+  const r = W / tileW;
+  return r >= 1.5 ? Math.round(r) : r;
 }
 
-function shop(g: THREE.Group, s: number, n: number): void {
-  const w = s * 0.92;
-  const d = s * 0.78;
-  const floors = 2 + (n > 0.6 ? 1 : 0);
-  const wall = pick(WALLS, n);
-  block(g, w, floors * FLOOR_H, d, 0, 0, 0, wall);
-  block(g, w * 1.02, 0.08, d * 1.02, 0, floors * FLOOR_H, 0, TRIM); // cornisa
-  parapet(g, w, d, 0, floors * FLOOR_H + 0.08, 0, wall);
-  addWindows(g, { w, d, x: 0, z: 0, baseY: 0, floors, skipGround: true });
-  block(g, w * 0.8, 0.6, 0.03, 0, 0.15, d / 2 + 0.01, WINDOW_COLOR); // escaparate
-  block(g, w * 0.9, 0.06, 0.4, 0, 0.85, d / 2 + 0.2, pick(AWNINGS, n * 3.1)); // toldo
+function wallWidth(face: number, hw: number, hd: number): number {
+  return face % 2 === 0 ? hw * 2 : hd * 2;
 }
 
-function tower(g: THREE.Group, s: number, n: number): void {
-  const wall = pick(WALLS, n);
-  const tiers = [
-    { k: 0.88, floors: 4 },
-    { k: 0.68, floors: 3 },
-    { k: 0.46, floors: 2 },
-  ];
-  let y = 0;
-  for (const t of tiers) {
-    const w = s * t.k;
-    const h = t.floors * FLOOR_H;
-    block(g, w, h, w, 0, y, 0, wall);
-    addWindows(g, { w, d: w, x: 0, z: 0, baseY: y, floors: t.floors });
-    block(g, w * 1.05, 0.07, w * 1.05, 0, y + h, 0, TRIM);
-    y += h + 0.07;
-  }
-  cylinder(g, 0.04, 1.4, 0, y, 0, 0x444444); // antena
+// Franja de planta baja: GROUND_H de alto con una foto de escaparate/nave.
+function groundWall(b: PlaneBatch, tex: TexMeta, face: number, hw: number, hd: number): void {
+  const tileW = GROUND_H * (tex.w / tex.h);
+  b.wall(texMaterial(tex.id), face, hw, hd, 0, GROUND_H, repeatsAcross(wallWidth(face, hw, hd), tileW), 1);
 }
 
-function warehouse(g: THREE.Group, s: number, n: number): void {
-  const w = s * 0.95;
-  const d = s * 0.75;
-  const h = 2.0;
-  block(g, w, h, d, 0, 0, 0, pick(WALLS, n));
-  const roof = new THREE.Mesh(barrelGeo, mat(pick(ROOFS, n * 5.7)));
-  roof.scale.set(w, 1.2 * 2, d);
-  roof.position.set(0, h, 0);
-  g.add(roof);
-  block(g, w * 0.4, 1.3, 0.05, 0, 0, d / 2 + 0.01, 0x3a3f45); // portón
+// Muro alto con una textura "tower": `floors` plantas de alto a partir de y0.
+function towerWall(b: PlaneBatch, tex: TexMeta, face: number, hw: number, hd: number, y0: number, floors: number): void {
+  const tileH = tex.floors * FLOOR_H;
+  const tileW = tileH * (tex.w / tex.h);
+  b.wall(texMaterial(tex.id), face, hw, hd, y0, floors * FLOOR_H, repeatsAcross(wallWidth(face, hw, hd), tileW), floors / tex.floors);
 }
 
-function silo(g: THREE.Group, s: number, n: number): void {
-  const r = s * 0.36;
-  const h = 3.5;
-  cylinder(g, r, h, 0, 0, 0, pick(WALLS, n));
-  cone(g, r * 1.15, 1.3, 0, h, 0, pick(ROOFS, n * 3.3));
-  cylinder(g, r * 1.05, 0.08, 0, h * 0.5, 0, TRIM); // aro
+// Fachada completa (naves, casas): la foto entera, sin repetir en vertical.
+function lowriseWall(b: PlaneBatch, tex: TexMeta, face: number, hw: number, hd: number): void {
+  const tileH = tex.floors * FLOOR_H;
+  const tileW = tileH * (tex.w / tex.h);
+  b.wall(texMaterial(tex.id), face, hw, hd, 0, tileH, repeatsAcross(wallWidth(face, hw, hd), tileW), 1);
 }
 
-function lShape(g: THREE.Group, s: number, n: number): void {
-  const wall = pick(WALLS, n);
-  const roof = pick(ROOFS, n * 4.9);
-  const a = s * 0.9;
-  const t = s * 0.42;
-  // Ala larga a lo largo de X y ala corta a lo largo de Z formando una L.
-  const floors = 2;
-  const h = floors * FLOOR_H;
-  block(g, a, h, t, 0, 0, s * 0.24, wall);
-  addWindows(g, { w: a, d: t, x: 0, z: s * 0.24, baseY: 0, floors });
-  gableRoof(g, a * 1.05, t * 1.1, 0.9, 0, h, s * 0.24, roof, true);
-  const armLen = s * 0.55;
-  const ax = -a / 2 + t / 2;
-  const az = s * 0.24 - t / 2 - armLen / 2;
-  block(g, t, h, armLen, ax, 0, az, wall);
-  addWindows(g, { w: t, d: armLen, x: ax, z: az, baseY: 0, floors });
-  gableRoof(g, t * 1.1, armLen * 1.02, 0.9, ax, h, az, roof, false);
-}
-
-// ---- Arquetipos urbanos (rectángulo w×d, base y=0, centrados) ----
-
-const SKY_WALLS = [0x8fa3b5, 0x9aa7a0, 0xc8bfae, 0x6f7f92, 0xb9a58a, 0x7e8c96, 0xa8a8a2];
-const PODIUM = 0x8a8577;
-
-// Rascacielos escalonado: podio de 2 plantas, fuste, retranqueo, corona y aguja.
-function skyscraper(g: THREE.Group, w: number, d: number, n: number, floors: number): void {
-  const wall = pick(SKY_WALLS, n);
-  let y = 0;
-  const tier = (k: number, count: number, trim = true): void => {
-    if (count < 1) return;
-    const tw = w * k;
-    const td = d * k;
-    const h = count * FLOOR_H;
-    block(g, tw, h, td, 0, y, 0, wall);
-    addWindows(g, { w: tw, d: td, x: 0, z: 0, baseY: y, floors: count });
-    y += h;
-    if (trim) {
-      block(g, tw * 1.03, 0.1, td * 1.03, 0, y, 0, TRIM);
-      y += 0.1;
-    }
-  };
-  // Podio comercial (planta baja acristalada oscura).
-  block(g, w, 2 * FLOOR_H, d, 0, 0, 0, PODIUM);
-  addWindows(g, { w, d, x: 0, z: 0, baseY: 0, floors: 2, skipGround: true });
-  block(g, w * 1.002, 0.6, d * 1.002, 0, 0.1, 0, WINDOW_COLOR);
-  block(g, w * 1.04, 0.1, d * 1.04, 0, 2 * FLOOR_H, 0, TRIM);
-  y = 2 * FLOOR_H + 0.1;
-  const rest = Math.max(1, floors - 2);
-  if (floors < 12) {
-    tier(0.86, rest);
-  } else {
-    tier(0.86, Math.round(rest * 0.55));
-    tier(0.68, Math.round(rest * 0.3));
-    tier(0.44, Math.max(1, rest - Math.round(rest * 0.55) - Math.round(rest * 0.3)), false);
-  }
-  block(g, w * 0.16, 0.5, d * 0.16, w * 0.05, y, d * 0.05, 0x55595e); // casetón de máquinas
-  if (floors >= 16) cylinder(g, 0.04, 2.2, 0, y, 0, 0x444444); // aguja
-}
-
-// Edificio de oficinas/viviendas de altura media: prisma con cornisa, parapeto y depósito.
-function midrise(g: THREE.Group, w: number, d: number, n: number, floors: number): void {
-  const wall = pick(WALLS, n);
-  block(g, w, floors * FLOOR_H, d, 0, 0, 0, wall);
-  addWindows(g, { w, d, x: 0, z: 0, baseY: 0, floors, skipGround: true });
-  block(g, w * 0.98, 0.7, d * 0.98, 0, 0.1, 0, WINDOW_COLOR);
-  block(g, w * 1.03, 0.1, d * 1.03, 0, floors * FLOOR_H, 0, TRIM);
-  parapet(g, w, d, 0, floors * FLOOR_H + 0.1, 0, wall);
-  cylinder(g, 0.28, 0.6, -w * 0.25, floors * FLOOR_H + 0.1, d * 0.2, 0x7a5a4a); // depósito de agua
-  block(g, 0.5, 0.35, 0.5, w * 0.25, floors * FLOOR_H + 0.1, -d * 0.2, 0x55595e);
-}
-
-function chooseArchetype(size: number, n: number): (g: THREE.Group, s: number, n: number) => void {
-  if (size <= 3) return pick([house, shop, silo, house], n);
-  if (size === 4) return pick([shop, house, tower, warehouse, lShape], n);
-  return pick([tower, warehouse, lShape, shop, tower, silo], n);
+// Textura "tower" adecuada a un bloque de `floors` plantas: prefiere las que enseñan
+// como mucho esas plantas (para no recortar la foto por arriba).
+function chooseTower(floors: number, n: number): TexMeta {
+  const fit = byCat.tower.filter((t) => t.floors <= floors + 1);
+  return pick(fit.length > 0 ? fit : byCat.tower, n);
 }
 
 // globalX/globalZ: esquina superior-izquierda del edificio en tiles GLOBALES del
 // mundo (así el mismo edificio sale idéntico visto desde su sala o desde una
-// vecina). wTiles×dTiles: huella en tiles. urban: sala de ciudad (edificios
-// rectangulares altos, sin rotar para respetar la cuadrícula de calles).
-// Devuelve un Group centrado en el origen con la base en y=0.
+// vecina). wTiles×dTiles: huella en tiles. urban: sala de ciudad (edificios altos
+// alineados con las calles). Devuelve un Group centrado en el origen, base en y=0.
 export function buildBuilding(globalX: number, globalZ: number, wTiles: number, dTiles: number, urban: boolean): THREE.Group {
+  const group = new THREE.Group();
+  if (!ready) return group;
   const n = hash2(globalX + 0.33, globalZ + 0.77);
   const n2 = hash2(globalX + 9.1, globalZ + 4.7);
-  const g = new THREE.Group();
-  if (urban) {
-    const w = wTiles * TILE_SIZE * 0.96;
-    const d = dTiles * TILE_SIZE * 0.96;
-    const area = wTiles * dTiles;
-    if (area >= 110 && n2 > 0.12) skyscraper(g, w, d, n, 8 + Math.floor(Math.pow(n2, 1.5) * 18));
-    else if (n2 < 0.12) warehouse(g, Math.min(w, d) / 0.95, n);
-    else midrise(g, w, d, n, 4 + Math.floor(n2 * 7));
-    return g;
+  const n3 = hash2(globalX + 3.9, globalZ + 7.3);
+  const batch = new PlaneBatch();
+
+  const W = wTiles * TILE_SIZE * 0.96;
+  const D = dTiles * TILE_SIZE * 0.96;
+  const area = wTiles * dTiles;
+  const roof = roofMaterial(pick(ROOF_COLORS, n3));
+
+  // Nave / casa baja: una sola fachada entera en los cuatro lados.
+  if (!urban || n2 < 0.12) {
+    const size = Math.min(W, D);
+    const hw = (urban ? W : size) / 2;
+    const hd = (urban ? D : size) / 2;
+    const tex = pick(byCat.lowrise, n);
+    for (let face = 0; face < 4; face++) lowriseWall(batch, tex, face, hw, hd);
+    batch.roof(roof, hw, hd, tex.floors * FLOOR_H);
+    batch.build(group);
+    return group;
   }
-  const size = Math.min(wTiles, dTiles);
-  const s = size * TILE_SIZE * 0.86;
-  chooseArchetype(Math.round(size * TILE_SIZE), n)(g, s, n2);
-  g.rotation.y = (Math.floor(n * 4) * Math.PI) / 2;
-  return g;
+
+  // Torre: bloques escalonados. Los muy anchos suben más.
+  const floors = area >= 110 ? 8 + Math.floor(Math.pow(n2, 1.5) * 18) : 4 + Math.floor(n2 * 7);
+  const tiers: Array<{ k: number; floors: number }> = [];
+  if (floors < 12) {
+    tiers.push({ k: 1, floors });
+  } else {
+    const f0 = Math.round(floors * 0.55);
+    const f1 = Math.round(floors * 0.3);
+    tiers.push({ k: 1, floors: f0 }, { k: 0.72, floors: f1 }, { k: 0.46, floors: Math.max(2, floors - f0 - f1) });
+  }
+  const tex = chooseTower(Math.min(...tiers.map((t) => t.floors)), n);
+
+  let y = 0;
+  tiers.forEach((t, i) => {
+    const hw = (W * t.k) / 2;
+    const hd = (D * t.k) / 2;
+    if (i === 0) {
+      for (let face = 0; face < 4; face++) {
+        groundWall(batch, pick(byCat.ground, hash2(globalX + face * 1.7, globalZ + 0.5)), face, hw, hd);
+        towerWall(batch, tex, face, hw, hd, GROUND_H, t.floors - 1);
+      }
+      y = GROUND_H + (t.floors - 1) * FLOOR_H;
+    } else {
+      for (let face = 0; face < 4; face++) towerWall(batch, tex, face, hw, hd, y, t.floors);
+      y += t.floors * FLOOR_H;
+    }
+    batch.roof(roof, hw, hd, y);
+  });
+  batch.build(group);
+  return group;
 }
 
 export function disposeBuildings(): void {
-  for (const w of activeWindows) w.dispose();
-  activeWindows.length = 0;
+  for (const g of activeGeometries) g.dispose();
+  activeGeometries.length = 0;
 }
