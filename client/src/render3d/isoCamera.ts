@@ -1,18 +1,18 @@
 // Cámara ortográfica en proyección DIMÉTRICA clásica (no isométrica "de
 // manual"): yaw de 45° + pitch de arctan(0.5) ≈ 26.565°, el ángulo que da el
 // ratio 2:1 (ancho:alto) de los juegos isométricos de toda la vida — el mismo
-// ratio que ya usaba TILE_W/TILE_H (64/32) en el renderer 2D. El ángulo nunca
-// cambia; lo único que varía con el tiempo es el tamaño del frustum (zoom).
+// ratio que ya usaba TILE_W/TILE_H (64/32) en el renderer 2D. El pitch nunca
+// cambia; el yaw puede girar en pasos de 90° (setYaw) para mirar tras los edificios.
 import * as THREE from "three";
 
-const YAW = Math.PI / 4;
+export const BASE_YAW = Math.PI / 4;
 const PITCH = Math.atan(0.5);
 // Distancia fija cámara↔jugador: exportada porque THREE.Fog mide "cerca/lejos"
 // como distancia a la CÁMARA, no al jugador (ver lighting3d.ts) — sin este
 // desplazamiento, la niebla se calcularía centrada en 0 en vez de aquí.
 export const ISO_CAMERA_DIST = 50;
 
-const DIR = new THREE.Vector3(Math.cos(PITCH) * Math.cos(YAW), Math.sin(PITCH), Math.cos(PITCH) * Math.sin(YAW));
+const DIR = new THREE.Vector3(Math.cos(PITCH) * Math.cos(BASE_YAW), Math.sin(PITCH), Math.cos(PITCH) * Math.sin(BASE_YAW));
 
 // Ejes propios de la imagen de esta cámara (a qué dirección de mundo
 // corresponden "derecha" y "arriba" en pantalla): como el ángulo nunca
@@ -32,6 +32,8 @@ export interface IsoCamera {
   setViewSize(halfHeight: number, aspect: number): void;
   /** Centra la cámara sobre un punto del suelo (x = columna, z = fila, y = altura opcional). */
   setTarget(x: number, z: number, y?: number): void;
+  /** Yaw de la cámara (radianes; BASE_YAW = vista por defecto). */
+  setYaw(yaw: number): void;
 }
 
 export function createIsoCamera(): IsoCamera {
@@ -47,12 +49,17 @@ export function createIsoCamera(): IsoCamera {
     camera.updateProjectionMatrix();
   }
 
+  const dir = DIR.clone();
+  function setYaw(yaw: number): void {
+    dir.set(Math.cos(PITCH) * Math.cos(yaw), Math.sin(PITCH), Math.cos(PITCH) * Math.sin(yaw));
+  }
+
   const target = new THREE.Vector3();
   function setTarget(x: number, z: number, y = 0): void {
     target.set(x, y, z);
-    camera.position.copy(target).addScaledVector(DIR, ISO_CAMERA_DIST);
+    camera.position.copy(target).addScaledVector(dir, ISO_CAMERA_DIST);
     camera.lookAt(target);
   }
 
-  return { camera, setViewSize, setTarget };
+  return { camera, setViewSize, setTarget, setYaw };
 }

@@ -14,6 +14,25 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { TILE_SIZE, CITY_ROAD_HALF, type CityData, type CityRoad } from "@roi/shared";
 import { buildPolygonBuilding } from "./buildings3d.js";
+import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture } from "./roadTextures.js";
+
+// Asfalto texturizado (UV en coordenadas de mundo: se repite sin costuras entre
+// segmentos) y materiales de calcomanía para manchas, frenadas y rotulado.
+let asphaltMatCache: THREE.MeshLambertMaterial | null = null;
+function asphaltMaterial(): THREE.MeshLambertMaterial {
+  if (!asphaltMatCache) asphaltMatCache = new THREE.MeshLambertMaterial({ map: asphaltTexture() });
+  return asphaltMatCache;
+}
+const decalCache = new Map<string, THREE.MeshLambertMaterial>();
+function decalMaterial(key: string, tex: () => THREE.Texture, opacity = 1): THREE.MeshLambertMaterial {
+  let m = decalCache.get(key);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ map: tex(), transparent: true, opacity, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    decalCache.set(key, m);
+  }
+  return m;
+}
+const ASPHALT_UV = 4; // unidades de render por repetición de la textura de asfalto
 
 const T = TILE_SIZE;
 const boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
@@ -41,6 +60,7 @@ const CROWNS = [0x4f8a3a, 0x6aa04a, 0x3f7a4a, 0x86a94a];
 // Alturas de las capas del suelo de la calle (el suelo de tiles está en y=0.05).
 const Y_CURB = 0.056;
 const Y_ASPHALT = 0.062;
+const Y_DECAL = 0.065; // manchas y frenadas: sobre el asfalto, bajo la pintura
 const Y_PAINT = 0.068;
 const CURB_W = 0.22; // tiles de bordillo a cada lado del asfalto
 
@@ -94,15 +114,23 @@ class Batch {
 
 // Rectángulo plano (en unidades de render) centrado en (x,z), largo `len` en la
 // dirección `ang` (radianes, en el plano XZ) y ancho `w`, a altura y.
-function flatQuad(b: Batch, mat: THREE.Material, x: number, z: number, len: number, w: number, ang: number, y: number): void {
+// uvWorld: si se da, las UV salen de la posición en el mundo (texturas que se repiten).
+function worldUV(g: THREE.BufferGeometry, scale: number): void {
+  const p = g.getAttribute("position") as THREE.BufferAttribute;
+  const uv = g.getAttribute("uv") as THREE.BufferAttribute;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / scale, p.getZ(i) / scale);
+}
+function flatQuad(b: Batch, mat: THREE.Material, x: number, z: number, len: number, w: number, ang: number, y: number, uvWorld?: number): void {
   const g = new THREE.PlaneGeometry(len, w).rotateX(-Math.PI / 2);
   g.rotateY(-ang);
   g.translate(x, y, z);
+  if (uvWorld) worldUV(g, uvWorld);
   b.add(mat, g);
 }
-function flatDisc(b: Batch, mat: THREE.Material, x: number, z: number, r: number, y: number): void {
+function flatDisc(b: Batch, mat: THREE.Material, x: number, z: number, r: number, y: number, uvWorld?: number): void {
   const g = new THREE.CircleGeometry(r, 14).rotateX(-Math.PI / 2);
   g.translate(x, y, z);
+  if (uvWorld) worldUV(g, uvWorld);
   b.add(mat, g);
 }
 
@@ -209,7 +237,8 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
 
   const b = new Batch();
   const curbMat = lambert(CURB);
-  const asphaltMat = lambert(ASPHALT);
+  const asphaltMat = asphaltMaterial();
+  void ASPHALT;
   const white = lambert(PAINT_WHITE);
   const yellow = lambert(PAINT_YELLOW);
 
@@ -224,17 +253,37 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
     const mx = L((s.x0 + s.x1) / 2);
     const mz = Lz((s.y0 + s.y1) / 2);
     flatQuad(b, curbMat, mx, mz, len * T, (half + CURB_W) * 2 * T, ang, Y_CURB);
-    flatQuad(b, asphaltMat, mx, mz, len * T, half * 2 * T, ang, Y_ASPHALT);
+    flatQuad(b, asphaltMat, mx, mz, len * T, half * 2 * T, ang, Y_ASPHALT, ASPHALT_UV);
     for (const [ex, ey] of [
       [s.x0, s.y0],
       [s.x1, s.y1],
     ]) {
       flatDisc(b, curbMat, L(ex), Lz(ey), (half + CURB_W) * T, Y_CURB);
-      flatDisc(b, asphaltMat, L(ex), Lz(ey), half * T, Y_ASPHALT);
+      flatDisc(b, asphaltMat, L(ex), Lz(ey), half * T, Y_ASPHALT, ASPHALT_UV);
     }
   }
 
+  const oilMat = decalMaterial("oil", oilTexture, 0.85);
+  const skidMat = decalMaterial("skid", skidTexture, 0.8);
+  const stopMat = decalMaterial("stop", stopTexture);
+  const arrowStraightMat = decalMaterial("arrowS", arrowStraightTexture);
+  const arrowLeftMat = decalMaterial("arrowL", arrowLeftTexture);
+  // Calcomanía / pintura en coordenadas de tile: len a lo largo de ang, w a través.
+  // (Las texturas de rotulado tienen "arriba" hacia la izquierda de ang: con
+  // ang = sentido + 90°, se leen de frente desde el coche que llega.)
+  const mark = (mat: THREE.Material, gx: number, gy: number, len: number, w: number, ang: number, y = Y_PAINT): void =>
+    flatQuad(b, mat, L(gx), Lz(gy), len * T, w * T, ang, y);
+  const lineInfo = (sg: CityRoad): { oneWay: boolean; dir: number } => {
+    const key = sg.id.slice(0, sg.id.lastIndexOf(":"));
+    return { oneWay: sg.kind === 0 && hashStr(key) < 0.5, dir: hashStr(key + "d") < 0.5 ? 1 : -1 };
+  };
+
   // ---- Marcas y mobiliario a lo largo de cada segmento ----
+  // Convenciones (circulación por la derecha): doble sentido → línea central
+  // amarilla (discontinua; doble continua en avenidas); avenidas con dos carriles
+  // por sentido separados por discontinua blanca; sentido único → sin línea
+  // central, con flechas de sentido. Cerca de los cruces las líneas pasan a ser
+  // continuas (no se cambia de carril) — ver los brazos de cruce más abajo.
   for (const s of segs) {
     const half = CITY_ROAD_HALF[s.kind];
     const dx = s.x1 - s.x0;
@@ -246,9 +295,7 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
     const nx = -uy; // normal a la izquierda
     const ny = ux;
     const ang = Math.atan2(dy, dx);
-    const lineKey = s.id.slice(0, s.id.lastIndexOf(":"));
-    const oneWay = s.kind === 0 && hashStr(lineKey) < 0.5;
-    const dir = hashStr(lineKey + "d") < 0.5 ? 1 : -1;
+    const { oneWay, dir } = lineInfo(s);
 
     // Posiciones a lo largo en coordenada "a" global (proyección sobre la dirección),
     // para que los discontinuos casen entre segmentos consecutivos.
@@ -258,35 +305,30 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
     for (let t = start; t < len; t += DASH) {
       const px = s.x0 + ux * t;
       const py = s.y0 + uy * t;
-      if (nearCross(px, py, 1.2)) continue;
+      if (nearCross(px, py, 1.0)) continue;
       if (!oneWay) {
-        flatQuad(b, s.kind === 0 ? white : yellow, L(px), Lz(py), 1.2 * T, 0.14 * T, ang, Y_PAINT);
-      }
-      if (s.kind === 2) {
-        for (const side of [-1, 1]) {
-          const qx = px + nx * side * half * 0.5;
-          const qy = py + ny * side * half * 0.5;
-          flatQuad(b, white, L(qx), Lz(qy), 1.0 * T, 0.1 * T, ang, Y_PAINT);
+        if (s.kind === 2) {
+          for (const side of [-1, 1]) mark(yellow, px + nx * side * 0.14, py + ny * side * 0.14, DASH, 0.12, ang);
+        } else {
+          mark(yellow, px, py, 1.2, 0.13, ang);
         }
+      }
+      if (s.kind === 2 && !nearCross(px, py, 9)) {
+        for (const side of [-1, 1]) mark(white, px + nx * side * half * 0.5, py + ny * side * half * 0.5, 1.0, 0.1, ang);
       }
     }
     if (oneWay) {
       for (let t = 7; t < len - 3; t += 14) {
         const px = s.x0 + ux * t;
         const py = s.y0 + uy * t;
-        if (nearCross(px, py, 2)) continue;
-        const aang = dir > 0 ? ang : ang + Math.PI;
-        const fx = Math.cos(aang);
-        const fy = Math.sin(aang);
-        flatQuad(b, white, L(px), Lz(py), 1.4 * T, 0.2 * T, aang, Y_PAINT);
-        for (const w of [-1, 1]) {
-          const wa = aang + w * 2.5;
-          flatQuad(b, white, L(px + fx * 0.55 + Math.cos(wa) * 0.3), Lz(py + fy * 0.55 + Math.sin(wa) * 0.3), 0.7 * T, 0.18 * T, wa, Y_PAINT);
-        }
+        if (nearCross(px, py, 5)) continue;
+        const heading = dir > 0 ? ang : ang + Math.PI;
+        mark(arrowStraightMat, px, py, 0.8, 2.2, heading + Math.PI / 2);
       }
     }
 
-    // Farolas y árboles en la acera, alternando lados; coches junto al bordillo.
+    // Farolas y árboles en la acera, alternando lados; coches junto al bordillo; alguna
+    // mancha de aceite en mitad del carril (donde gotean los coches al pasar).
     for (let t = 5; t < len - 2; t += 6) {
       const px = s.x0 + ux * t;
       const py = s.y0 + uy * t;
@@ -298,32 +340,105 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
       const sy = py + ny * side * (half + 0.8);
       if (k % 3 === 0) b.addObject(streetlight(L(sx), Lz(sy), -nx * side, -ny * side));
       else if (h > 0.45) b.addObject(tree(L(sx), Lz(sy), CROWNS[Math.floor(h * 97) % CROWNS.length]));
-      if (hash2(Math.round(px * 5) + 1, Math.round(py * 5)) > 0.55) {
-        const cside = -side;
-        const cx = px + nx * cside * (half - 0.65);
-        const cy = py + ny * cside * (half - 0.65);
+      const hc = hash2(Math.round(px * 5) + 1, Math.round(py * 5));
+      const cside = -side;
+      const cx = px + nx * cside * (half - 0.65);
+      const cy = py + ny * cside * (half - 0.65);
+      if (hc > 0.55) {
         b.addObject(car(L(cx), Lz(cy), ang, CAR_COLORS[Math.floor(h * 131) % CAR_COLORS.length]));
+      } else if (hc < 0.14) {
+        // hueco de aparcamiento vacío: mancha de aceite donde suele pararse el coche
+        mark(oilMat, cx, cy, 1.4, 1.0, ang + h * 2, Y_DECAL);
+      }
+      const ho = hash2(Math.round(px * 7) + 3, Math.round(py * 7) + 1);
+      if (ho > 0.9) {
+        const lane = oneWay ? 0 : (ho > 0.95 ? 1 : -1) * half * 0.5;
+        mark(oilMat, px + nx * lane, py + ny * lane, 1.1, 0.8, ang + ho * 5, Y_DECAL);
       }
     }
   }
 
-  // ---- Pasos de cebra en cada brazo de cada cruce ----
+  // ---- Brazos de cada cruce ----
+  // Paso de cebra en todos. Si la calle desemboca en otra de rango mayor (o en
+  // algunos cruces de calles menores: "stop en todas las direcciones"): línea de
+  // detención sobre el carril que llega, "STOP" pintado y manchas de aceite donde
+  // esperan los coches. Avenidas: flechas de giro por carril y líneas continuas
+  // antes del cruce. En algunos brazos, frenadas que acaban en el paso de cebra.
   for (const c of crosses) {
     if (c.through.length < 2) continue;
+    const ckey = `${c.x.toFixed(1)},${c.y.toFixed(1)}`;
+    const allMinor = c.through.every((o) => o.seg.kind === 0);
+    const allWayStop = allMinor && hashStr(ckey) < 0.45;
     for (const th of c.through) {
       const half = CITY_ROAD_HALF[th.seg.kind];
       let other = 0;
-      for (const o of c.through) if (Math.abs(o.ux * th.ux + o.uy * th.uy) < 0.9) other = Math.max(other, CITY_ROAD_HALF[o.seg.kind]);
+      let higher = false;
+      for (const o of c.through) {
+        if (Math.abs(o.ux * th.ux + o.uy * th.uy) >= 0.9) continue;
+        other = Math.max(other, CITY_ROAD_HALF[o.seg.kind]);
+        if (o.seg.kind > th.seg.kind) higher = true;
+      }
       if (other === 0) continue;
       const nx = -th.uy;
       const ny = th.ux;
       const ang = Math.atan2(th.uy, th.ux);
+      const { oneWay, dir } = lineInfo(th.seg);
       for (const sgn of [-1, 1]) {
-        const cx = c.x + th.ux * sgn * (other + 1.3);
-        const cy = c.y + th.uy * sgn * (other + 1.3);
-        if (segDist(th.seg, cx, cy) > 0.5) continue; // el brazo no sigue por ese lado
-        for (let w = -half + 0.4; w <= half - 0.3; w += 0.75) {
-          flatQuad(b, white, L(cx + nx * w), Lz(cy + ny * w), 1.1 * T, 0.38 * T, ang, Y_PAINT);
+        const cwx = c.x + th.ux * sgn * (other + 1.3);
+        const cwy = c.y + th.uy * sgn * (other + 1.3);
+        if (segDist(th.seg, cwx, cwy) > 0.5) continue; // el brazo no sigue por ese lado
+        for (let w = -half + 0.4; w <= half - 0.3; w += 0.75) mark(white, cwx + nx * w, cwy + ny * w, 1.1, 0.38, ang);
+
+        // Sentido de llegada al cruce (h) y su derecha (r).
+        const hx = -th.ux * sgn;
+        const hy = -th.uy * sgn;
+        const rx = -hy;
+        const ry = hx;
+        const hang = Math.atan2(hy, hx);
+        const approaching = !oneWay || dir * sgn < 0;
+        if (!approaching) continue;
+        // Franja de carriles que llegan: la mitad derecha (doble sentido) o toda la calzada.
+        const lo = oneWay ? -half : 0.15;
+        const hi = half;
+        const mid = (lo + hi) / 2;
+        const bandW = hi - lo;
+        const at = (dist: number, off: number): [number, number] => [c.x - hx * dist + rx * off, c.y - hy * dist + ry * off];
+        const rnd = hashStr(ckey + sgn + th.seg.id);
+
+        if (higher || allWayStop) {
+          const D = other + 2.35;
+          const [sx, sy] = at(D, mid);
+          mark(white, sx, sy, bandW - 0.1, 0.4, hang + Math.PI / 2);
+          const [tx, ty] = at(D + 2.3, mid);
+          mark(stopMat, tx, ty, Math.min(bandW * 0.85, 2.2), 2.8, hang + Math.PI / 2);
+          if (!oneWay) {
+            // línea central continua antes del stop: prohibido adelantar
+            const [lx, ly] = at(D + 3.5, 0);
+            mark(yellow, lx, ly, 7, 0.13, ang);
+          }
+          if (rnd < 0.7) {
+            const [ox, oy] = at(D + 1.9, mid + (rnd - 0.35) * 0.8);
+            mark(oilMat, ox, oy, 1.5, 1.1, hang + rnd * 3, Y_DECAL);
+          }
+        }
+        if (th.seg.kind === 2) {
+          const D = other + 2.0;
+          // líneas de carril continuas en los últimos metros (a ambos lados de la avenida)
+          for (const off of [half * 0.5, -half * 0.5]) {
+            const [lx, ly] = at(D + 4.5, off);
+            mark(white, lx, ly, 9, 0.12, ang);
+          }
+          const [ix, iy] = at(D + 4, half * 0.25);
+          mark(arrowLeftMat, ix, iy, 0.95, 2.4, hang + Math.PI / 2);
+          const [ox2, oy2] = at(D + 4, half * 0.75);
+          mark(arrowStraightMat, ox2, oy2, 0.95, 2.4, hang + Math.PI / 2);
+        }
+        if (rnd > 0.72) {
+          // frenada: acaba justo antes del paso de cebra
+          const L2 = 3 + (rnd - 0.72) * 14;
+          const lane = oneWay ? (rnd - 0.86) * half : half * 0.5;
+          const [kx, ky] = at(other + 2.2 + L2 / 2, lane);
+          mark(skidMat, kx, ky, L2, 1.1, hang + (rnd - 0.86) * 0.25, Y_DECAL);
         }
       }
     }

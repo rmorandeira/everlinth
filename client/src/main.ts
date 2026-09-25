@@ -22,6 +22,7 @@ import { setupGamepad, GAMEPAD_BUTTON_LABELS, START_BUTTON } from "./gamepad.js"
 import { WeatherSystem, pickWeather } from "./render/weather.js";
 import { drawCursorDot } from "./render/cursor.js";
 import { createScene3D } from "./render3d/scene3d.js";
+import { createMinimap, type MinimapDot } from "./render/minimap.js";
 import { MONSTER_COLORS, MONSTER_COLOR_DEFAULT, type FigureEntity } from "./render3d/figures3d.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
@@ -45,6 +46,7 @@ const weather = new WeatherSystem();
 // Fase 0 de la migración a 3D (ver plan en .claude/plans): el canvas #scene,
 // que antes tenía un contexto 2D, ahora lo posee three.js por completo.
 const scene3d = createScene3D(sceneCanvas);
+const minimap = createMinimap(document.getElementById("minimap") as HTMLCanvasElement);
 (window as unknown as { __scene3d: unknown }).__scene3d = scene3d; // hook de depuración (renderer.info)
 
 // Ajustes de la niebla de visión: editables desde el backoffice, se piden una
@@ -95,6 +97,16 @@ gameEl.addEventListener("mousemove", (ev) => {
 let flashlightOn = false;
 window.addEventListener("keydown", (ev) => {
   if (ev.key === "l" || ev.key === "L") flashlightOn = !flashlightOn;
+  // Q/R: girar la cámara 90° (se reenvía el input para que las teclas pulsadas
+  // sigan significando "arriba/abajo/izq/dcha" de la pantalla nueva).
+  if (ev.key === "q" || ev.key === "Q") {
+    scene3d.rotateCamera(-1);
+    sendDirs(lastDirs);
+  }
+  if (ev.key === "r" || ev.key === "R") {
+    scene3d.rotateCamera(1);
+    sendDirs(lastDirs);
+  }
 });
 
 let you: PlayerPrivateState | null = null;
@@ -243,6 +255,22 @@ let gamepadConnected = false;
 let keySelRow = 0;
 let keySelCol = 0;
 let prevGamepadDirs: InputState = { N: false, S: false, E: false, W: false };
+
+// Las direcciones del jugador son relativas a la PANTALLA; el servidor las traduce a
+// diagonales del mundo suponiendo la vista base. Con la cámara girada k cuartos de
+// vuelta, "arriba en pantalla" es la dirección de servidor k pasos más allá en el
+// ciclo N → E → S → W (cada una es la anterior girada 90°).
+const DIR_CYCLE: Array<keyof InputState> = ["N", "E", "S", "W"];
+let lastDirs: InputState = { N: false, S: false, E: false, W: false };
+function sendDirs(dirs: InputState): void {
+  lastDirs = dirs;
+  const k = scene3d.cameraStep();
+  const out: InputState = { N: false, S: false, E: false, W: false };
+  DIR_CYCLE.forEach((d, i) => {
+    if (dirs[d]) out[DIR_CYCLE[(i + k) % 4]] = true;
+  });
+  conn?.send({ type: "input", dirs: out });
+}
 const submitBtnBaseText = submitBtn.textContent ?? "Entrar";
 
 function updateKeyboardSelection(): void {
@@ -320,7 +348,7 @@ function handleGamepadDirs(dirs: InputState): void {
     return;
   }
   prevGamepadDirs = dirs;
-  conn?.send({ type: "input", dirs });
+  sendDirs(dirs);
 }
 
 // Un pequeño acercamiento de cámara al atacar/recoger (ver Fase 5 del plan
@@ -412,7 +440,7 @@ loginForm.addEventListener("submit", async (ev) => {
 });
 
 setupInput(
-  (dirs: InputState) => conn?.send({ type: "input", dirs }),
+  (dirs: InputState) => sendDirs(dirs),
   sendAttack,
   sendPickup
 );
@@ -439,6 +467,7 @@ function frame(now: number): void {
     // niebla/linterna reales en 3D (ver plan). scene.y del juego (fila) es
     // la Z de mundo en three.js.
     scene3d.updateGround(currentScreen, currentNeighbors, treeDefs);
+    minimap.update(currentScreen, currentNeighbors);
 
     const entities: FigureEntity[] = [
       { id: you.username, x: youDisplay.x, z: youDisplay.y, color: 0xf0f0f0, label: you.username, armed: true, facing: aimAngle },
@@ -474,6 +503,15 @@ function frame(now: number): void {
     if (firing && now - lastShotAt >= 90) {
       lastShotAt = now;
       fireGun();
+    }
+    {
+      const ox = currentScreen.sx * SCREEN_WIDTH;
+      const oy = currentScreen.sy * SCREEN_HEIGHT;
+      const dots: MinimapDot[] = [];
+      for (const m of currentScreen.monsters) if (m.alive) dots.push({ gx: ox + m.x, gy: oy + m.y, color: "#e0a030", r: 1.3 });
+      for (const d of zombieDisplay.values()) dots.push({ gx: d.gx, gy: d.gy, color: "#e03a3a", r: 1.3 });
+      for (const d of otherDisplay.values()) dots.push({ gx: ox + d.x, gy: oy + d.y, color: "#3ba0e0", r: 1.6 });
+      minimap.draw(ox + youDisplay.x, oy + youDisplay.y, aimAngle, dots, scene3d.cameraYaw());
     }
     scene3d.render(youDisplay.x, youDisplay.y, time, dt, visionSettings, { enabled: flashlightOn, cursorNdcX, cursorNdcY }, weather.getType() === "heat" ? 1 : 0);
   }

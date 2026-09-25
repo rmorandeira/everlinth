@@ -9,8 +9,8 @@
 // — columna de tile = X de mundo, fila de tile = Z de mundo, altura = Y. El
 // aspecto de rombo isométrico sale solo del ángulo de la cámara (isoCamera.ts).
 import * as THREE from "three";
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type CityData, type TreeDef, type VisionFogSettings } from "@roi/shared";
-import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, GUN_RANGE, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type CityData, type TreeDef, type VisionFogSettings } from "@roi/shared";
+import { createIsoCamera, BASE_YAW, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
 import { buildBuilding, disposeBuildings, initBuildingTextures, buildingTexturesReady } from "./buildings3d.js";
@@ -55,6 +55,12 @@ export interface Scene3D {
   resize(width: number, height: number): void;
   updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
   updateFigures(entities: FigureEntity[], time: number): void;
+  /** Gira la cámara 90° (+1 / -1). */
+  rotateCamera(step: number): void;
+  /** Paso de giro actual (0..3): cuántos cuartos de vuelta respecto a la vista base. */
+  cameraStep(): number;
+  /** Yaw actual (animado) de la cámara, para el minimapa. */
+  cameraYaw(): number;
   /** Punto del suelo (plano y=0) bajo el cursor, en coordenadas de mundo. */
   cursorToGround(ndcX: number, ndcY: number): { x: number; z: number } | null;
   /** Trazador de bala efímero entre dos puntos del suelo. */
@@ -62,7 +68,7 @@ export interface Scene3D {
   render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void;
   dispose(): void;
   /** Depuración: nº de mallas en escena y de instancias. */
-  stats(): { meshes: number; instances: number; textured: number; owned: number };
+  stats(): Record<string, number>;
 }
 
 export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
@@ -335,13 +341,53 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     }
   }
 
+  // Cámara: giro en pasos de 90° animado, y adelanto hacia donde apunta el jugador
+  // (la cámara se desplaza parte del camino hacia el cursor, así se ve más de la zona
+  // a la que se dispara y menos de la que queda a la espalda).
+  let camStep = 0;
+  let yaw = BASE_YAW;
+  const lookAhead = new THREE.Vector2();
+  const LOOK_AHEAD_FACTOR = 0.35;
+  const LOOK_AHEAD_MAX = 4.5; // unidades de render
+  function rotateCamera(step: number): void {
+    camStep = (((camStep + step) % 4) + 4) % 4;
+  }
+  function cameraStep(): number {
+    return camStep;
+  }
+  function cameraYaw(): number {
+    return yaw;
+  }
+
   const towardCamera = new THREE.Vector3();
   const playerVec = new THREE.Vector3();
   function render(playerTileX: number, playerTileZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void {
     const playerX = playerTileX * T;
     const playerZ = playerTileZ * T;
     iso.setViewSize(VIEW_HALF_HEIGHT, aspect);
-    iso.setTarget(playerX, playerZ);
+    // yaw objetivo por el camino más corto (el paso 3 → 0 no da la vuelta entera)
+    let goal = BASE_YAW + camStep * (Math.PI / 2);
+    while (goal - yaw > Math.PI) goal -= Math.PI * 2;
+    while (goal - yaw < -Math.PI) goal += Math.PI * 2;
+    yaw += (goal - yaw) * (1 - Math.exp(-8 * dt));
+    iso.setYaw(yaw);
+    // Adelanto: punto del suelo bajo el cursor con la cámara de este frame.
+    iso.setTarget(playerX + lookAhead.x, playerZ + lookAhead.y);
+    iso.camera.updateMatrixWorld();
+    groundRaycaster.setFromCamera(ndcTmp.set(flashlight.cursorNdcX, flashlight.cursorNdcY), iso.camera);
+    if (groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) {
+      let ox = (groundHit.x - playerX) * LOOK_AHEAD_FACTOR;
+      let oz = (groundHit.z - playerZ) * LOOK_AHEAD_FACTOR;
+      const l = Math.hypot(ox, oz);
+      if (l > LOOK_AHEAD_MAX) {
+        ox *= LOOK_AHEAD_MAX / l;
+        oz *= LOOK_AHEAD_MAX / l;
+      }
+      const k = 1 - Math.exp(-3 * dt);
+      lookAhead.x += (ox - lookAhead.x) * k;
+      lookAhead.y += (oz - lookAhead.y) * k;
+    }
+    iso.setTarget(playerX + lookAhead.x, playerZ + lookAhead.y);
     // El raycast de la linterna (dentro de lighting.update) necesita la
     // matriz de mundo YA actualizada (normalmente lo hace renderer.render(),
     // pero eso ocurre después).
@@ -352,11 +398,25 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
     playerVec.set(playerX, 0, playerZ);
     towardCamera.copy(iso.camera.position).sub(playerVec).normalize();
-    occlusion.update(playerVec, towardCamera, dt);
+    // Vista despejada: el jugador (con holgura amplia) y la línea hasta donde apunta
+    // (hasta el alcance del arma) no pueden quedar tapados por ningún edificio.
+    const sight: Array<{ p: THREE.Vector3; margin: number }> = [{ p: playerVec.clone(), margin: 2.2 }];
+    groundRaycaster.setFromCamera(ndcTmp.set(flashlight.cursorNdcX, flashlight.cursorNdcY), iso.camera);
+    if (groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) {
+      const dx = groundHit.x - playerX;
+      const dz = groundHit.z - playerZ;
+      const len = Math.min(Math.hypot(dx, dz), GUN_RANGE * T);
+      if (len > 0.5) {
+        const ux = dx / Math.hypot(dx, dz);
+        const uz = dz / Math.hypot(dx, dz);
+        for (let d = 1.2; d <= len; d += 1.2) sight.push({ p: new THREE.Vector3(playerX + ux * d, 0, playerZ + uz * d), margin: 0.9 });
+      }
+    }
+    occlusion.update(sight, towardCamera, dt);
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
-  function stats(): { meshes: number; instances: number; textured: number; owned: number; treeMeshes: number } {
+  function stats(): Record<string, number> {
     let treeMeshes = 0;
     treeGroup?.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) treeMeshes++;
@@ -374,7 +434,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
         if (o.userData.ownGeometry) owned++;
       }
     });
-    return { meshes, instances, textured, owned, treeMeshes };
+    return { meshes, instances, textured, owned, treeMeshes, ...occlusion.debug() };
   }
 
   function dispose(): void {
@@ -382,5 +442,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, cursorToGround, addTracer, render, dispose, stats };
+  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, render, dispose, stats };
 }

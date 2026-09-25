@@ -7,7 +7,6 @@ import * as THREE from "three";
 
 const GHOST_OPACITY = 0.06;
 const FADE_RATE = 9;
-const MARGIN = 2.2; // holgura lateral (unidades): además de lo que tapa exactamente, se aclara lo cercano al rayo
 
 interface Entry {
   object: THREE.Object3D;
@@ -21,8 +20,14 @@ interface Entry {
 export interface Occlusion3D {
   register(object: THREE.Object3D): void;
   clear(): void;
-  /** playerPos en unidades de render; towardCamera: dirección unitaria desde el jugador hacia la cámara. */
-  update(playerPos: THREE.Vector3, towardCamera: THREE.Vector3, dt: number): void;
+  /** Depuración: registrados / translúcidos. */
+  debug(): { total: number; ghosted: number };
+  /**
+   * Puntos del suelo que deben verse (en unidades de render: el jugador y la línea
+   * hacia donde apunta), cada uno con su holgura lateral; towardCamera: dirección
+   * unitaria hacia la cámara (ortográfica: la misma para todos los puntos).
+   */
+  update(points: Array<{ p: THREE.Vector3; margin: number }>, towardCamera: THREE.Vector3, dt: number): void;
 }
 
 export function createOcclusion3D(): Occlusion3D {
@@ -70,15 +75,21 @@ export function createOcclusion3D(): Occlusion3D {
     entries = [];
   }
 
-  function update(playerPos: THREE.Vector3, towardCamera: THREE.Vector3, dt: number): void {
-    // El rayo sale del pecho del jugador, no de los pies.
-    ray.origin.copy(playerPos);
-    ray.origin.y += 0.3;
+  function update(points: Array<{ p: THREE.Vector3; margin: number }>, towardCamera: THREE.Vector3, dt: number): void {
     ray.direction.copy(towardCamera);
+    const blocksAny = (e: Entry): boolean => {
+      for (const pt of points) {
+        // El rayo sale a la altura del pecho, no del suelo.
+        ray.origin.copy(pt.p);
+        ray.origin.y += 0.3;
+        expanded.copy(e.box).expandByScalar(pt.margin);
+        if (ray.intersectBox(expanded, hit) !== null) return true;
+      }
+      return false;
+    };
     const k = 1 - Math.exp(-FADE_RATE * dt);
     for (const e of entries) {
-      expanded.copy(e.box).expandByScalar(MARGIN);
-      const blocks = ray.intersectBox(expanded, hit) !== null;
+      const blocks = blocksAny(e);
       const target = blocks ? GHOST_OPACITY : 1;
       if (e.fade === 1 && target === 1) continue;
       e.fade += (target - e.fade) * k;
@@ -91,5 +102,9 @@ export function createOcclusion3D(): Occlusion3D {
     }
   }
 
-  return { register, clear, update };
+  function debug(): { total: number; ghosted: number } {
+    return { total: entries.length, ghosted: entries.filter((e) => e.ghosted).length };
+  }
+
+  return { register, clear, update, debug };
 }

@@ -72,7 +72,9 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
   scene.add(sun);
   scene.add(sun.target);
 
-  const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+  // Luz de relleno de cielo (azulada desde arriba, cálida rebotada desde el suelo):
+  // las zonas en sombra no se quedan planas ni negras.
+  const ambient = new THREE.HemisphereLight(0xdfe9ff, 0x9a8a74, 0.9);
   scene.add(ambient);
 
   const bgColor = DAY_SKY.clone();
@@ -104,7 +106,8 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     camera: THREE.Camera
   ): void {
     const dn = getDayNight();
-    sun.position.set(playerX - 7, 11, playerZ + 9);
+    // Sol alto (~70°): en una ciudad de rascacielos un sol bajo deja casi todo en sombra.
+    sun.position.set(playerX - 5, 24, playerZ + 7);
     sun.target.position.set(playerX, 0, playerZ);
     sun.target.updateMatrixWorld();
 
@@ -113,7 +116,7 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     bgColor.copy(skyMix);
     fog.color.copy(skyMix);
 
-    ambient.intensity = THREE.MathUtils.lerp(0.38, 0.16, dn.darkness);
+    ambient.intensity = THREE.MathUtils.lerp(1.05, 0.2, dn.darkness);
     ambient.color.copy(WHITE).lerp(NIGHT_AMBIENT, dn.darkness);
     sun.intensity = THREE.MathUtils.lerp(1.9, 0.25, dn.darkness);
     sun.color.copy(WHITE).lerp(GLOW_SUN, dn.glow);
