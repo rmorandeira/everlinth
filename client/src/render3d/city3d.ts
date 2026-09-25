@@ -14,6 +14,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { TILE_SIZE, CITY_ROAD_HALF, type CityData, type CityRoad } from "@roi/shared";
 import { buildPolygonBuilding } from "./buildings3d.js";
+import type { CarSpec } from "./cars3d.js";
 import { nycStreetlight, nycTrafficSignal } from "./streetFurniture3d.js";
 import { cloneModel, modelSize, modelsReady, KIT_SCALE, BUILDING_SETS, type Kit } from "./models3d.js";
 import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture, wornPaintTexture, puddleTexture, tireTrackTexture, wornZoneTexture, crackSealTexture } from "./roadTextures.js";
@@ -256,6 +257,8 @@ function tree(x: number, z: number, color: number): THREE.Object3D {
 export interface CityLayer {
   group: THREE.Group;
   buildings: THREE.Group[];
+  /** Coches aparcados (los dibuja y destruye cars3d). */
+  cars: CarSpec[];
 }
 
 // datas: CityData de la sala actual y sus vecinas. originGX/originGZ: tile global que
@@ -306,6 +309,10 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
   };
 
   const b = new Batch();
+  const carSpecs: CarSpec[] = [];
+  const addCar = (px: number, pz: number, ang: number, color: number): void => {
+    carSpecs.push({ key: `${(px / T + originGX).toFixed(1)},${(pz / T + originGZ).toFixed(1)}`, x: px, z: pz, ang, color });
+  };
   const curbMat = lambert(CURB);
   void ASPHALT;
   const white = paintMaterial(PAINT_WHITE);
@@ -514,9 +521,10 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
       const cy = py + ny * cside * (half - 0.65);
       if (hc > 0.95) {
         const tr = kitProp("retro", ["truck-grey", "truck-green", "truck-flat"][Math.floor(h * 3) % 3], L(cx), Lz(cy), ux, uy, 0.62);
-        b.addObject(tr ?? car(L(cx), Lz(cy), ang, CAR_COLORS[Math.floor(h * 131) % CAR_COLORS.length]));
+        if (tr) b.addObject(tr);
+        else addCar(L(cx), Lz(cy), ang, CAR_COLORS[Math.floor(h * 131) % CAR_COLORS.length]);
       } else if (hc > 0.55) {
-        b.addObject(car(L(cx), Lz(cy), ang, CAR_COLORS[Math.floor(h * 131) % CAR_COLORS.length]));
+        addCar(L(cx), Lz(cy), ang, CAR_COLORS[Math.floor(h * 131) % CAR_COLORS.length]);
       } else if (hc < 0.14) {
         // hueco de aparcamiento vacío: mancha de aceite donde suele pararse el coche
         mark(oilMat, cx, cy, 1.4, 1.0, ang + h * 2, Y_DECAL);
@@ -651,7 +659,7 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
     buildings.push(g);
     group.add(g);
   }
-  return { group, buildings };
+  return { group, buildings, cars: carSpecs };
 }
 
 // ---- Edificios de Kenney ajustados a una parcela poligonal ----

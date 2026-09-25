@@ -337,6 +337,7 @@ function handleServerMessage(msg: ServerMessage): void {
         const oy = currentScreen.sy * SCREEN_HEIGHT;
         scene3d.addTracer(msg.from.gx - ox, msg.from.gy - oy, msg.to.gx - ox, msg.to.gy - oy);
         scene3d.gunImpact(msg.to.gx - ox, msg.to.gy - oy);
+        scene3d.bulletCars(msg.from.gx - ox, msg.from.gy - oy, msg.to.gx - ox, msg.to.gy - oy);
         // De vez en cuando una trazadora rebota en lo que ha golpeado (no en zombis).
         if (msg.hit === "wall" && Math.random() < 0.18) {
           const shotLen = Math.hypot(msg.to.gx - msg.from.gx, msg.to.gy - msg.from.gy);

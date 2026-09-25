@@ -18,6 +18,7 @@ import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { applyCutaway, applyCutawayToMaterial, updateCutaway } from "./cutaway3d.js";
 import { createGunFx } from "./gunfx3d.js";
+import { createCarManager } from "./cars3d.js";
 import { updateSignals } from "./streetFurniture3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityLayer } from "./city3d.js";
@@ -76,6 +77,8 @@ export interface Scene3D {
    * far = el impacto fue lejos del tirador (sale en parábola) o cerca (rebota).
    */
   gunRicochet(tileX: number, tileZ: number, dx: number, dz: number, far: boolean): void;
+  /** Bala de un punto a otro (tiles locales): daña el primer coche que atraviese. */
+  bulletCars(tx0: number, tz0: number, tx1: number, tz1: number): void;
   /** Trazador de bala efímero entre dos puntos del suelo. */
   addTracer(x0: number, z0: number, x1: number, z1: number): void;
   render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void;
@@ -98,6 +101,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const CHAR_AREA_WIDTH = 0.7; // fracción del ancho de pantalla
   const cutBuf = new THREE.Vector2();
   const gunFx = createGunFx(scene);
+  const carMgr = createCarManager(scene);
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
   let aspect = 1;
@@ -258,6 +262,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     if (cityLayer) {
       obstacles.add(cityLayer.group);
       for (const bg of cityLayer.buildings) applyCutaway(bg);
+      carMgr.setCars(cityLayer.cars);
       // Mobiliario alto de los kits de Kenney (farolas, semáforos, árboles, camiones):
       // sus materiales vienen marcados en models3d. El suelo y las marcas no se recortan.
       cityLayer.group.traverse((o) => {
@@ -393,6 +398,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   function gunImpact(tileX: number, tileZ: number): void {
     gunFx.impact(tileX * T, tileZ * T);
   }
+  function bulletCars(tx0: number, tz0: number, tx1: number, tz1: number): void {
+    carMgr.hit(tx0 * T, tz0 * T, tx1 * T, tz1 * T);
+  }
   function gunRicochet(tileX: number, tileZ: number, dx: number, dz: number, far: boolean): void {
     const l = Math.hypot(dx, dz);
     if (l < 1e-6) return;
@@ -433,6 +441,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     animateWater(time);
     updateTracers(dt);
     gunFx.update(dt);
+    carMgr.update(dt, time);
     updateSignals(time);
     // Ventanas encendidas: aparecen al atardecer y a pleno de noche.
     const dn = getDayNight();
@@ -471,5 +480,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, gunFire, gunImpact, gunRicochet, render, dispose, stats };
+  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, gunFire, gunImpact, gunRicochet, bulletCars, render, dispose, stats };
 }
