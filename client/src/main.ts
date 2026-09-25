@@ -2,6 +2,7 @@ import "./style.css";
 import {
   DEFAULT_VISION_SETTINGS,
   GIANT_SCALE,
+  GUN_FIRE_MS,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
   type Direction,
@@ -659,7 +660,7 @@ function frame(now: number): void {
       tailPending = false;
       playGunTail(0.8);
     }
-    if ((firing || padFiring) && now - lastShotAt >= 90) {
+    if ((firing || padFiring) && now - lastShotAt >= GUN_FIRE_MS) {
       lastShotAt = now;
       fireGun();
     }

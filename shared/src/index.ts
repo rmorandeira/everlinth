@@ -370,7 +370,7 @@ export const GIANT_HP = 40;
 export const ZOMBIE_MAX_HP = 3;
 export const ZOMBIE_VIEW_RANGE = 60;
 export const GUN_RANGE = 36;
-export const GUN_FIRE_MS = 90;
+export const GUN_FIRE_MS = 60;
 
 // ---- Mensajes cliente -> servidor ----
 export type ClientMessage =
