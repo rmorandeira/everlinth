@@ -381,8 +381,8 @@ export class GameServer {
     if (len < 1e-6) return;
     conn.lastShot = now;
     // Dispersión del arma: cada bala se desvía un poco de donde se apunta (normal con
-    // σ ≈ 2,3°, aproximada sumando uniformes), así las ráfagas abren un pequeño cono.
-    const spread = (Math.random() + Math.random() + Math.random() - 1.5) * 0.08;
+    // σ ≈ 0,7°, aproximada sumando uniformes), así las ráfagas abren un pequeño cono.
+    const spread = (Math.random() + Math.random() + Math.random() - 1.5) * 0.025;
     const cs = Math.cos(spread);
     const sn = Math.sin(spread);
     const ax = dxRaw / len;

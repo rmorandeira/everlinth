@@ -1,30 +1,28 @@
-// Área del personaje sin obstrucciones, sin dejar de ver los edificios: todo lo que
-// se interpone entre la cámara (el punto de vista del jugador) y el suelo alrededor
-// del personaje (un radio en metros reales) se vuelve TRANSLÚCIDO, no se borra.
-//
-// Para cada fragmento de un material afectado se calcula dónde toca el suelo el
-// rayo de visión que pasa por él (cámara ortográfica: todos los rayos van en la
-// misma dirección). Si ese punto cae dentro del área del personaje, el fragmento
-// está tapando esa área → se aclara. Así solo se tocan los trozos de edificio que
-// estorban de verdad; lo que está al lado o detrás del personaje queda intacto.
+// Área del personaje sin obstrucciones, sin dejar de ver los edificios: en pantalla,
+// la franja que va desde la línea horizontal del personaje hacia abajo y ocupa el 70 %
+// del ancho (centrada). Todo lo que está por encima del suelo dentro de esa franja
+// (edificios, farolas, árboles…) se vuelve TRANSLÚCIDO, no se borra: se ve la calle
+// del personaje y lo que tiene delante, y la ciudad sigue ahí. Bordes suaves.
 //
 // Se inyecta en el shader (onBeforeCompile) con transparencia por tramado (ruido de
-// gradiente entrelazado + discard): el material sigue siendo opaco (escribe profundidad, sin problemas
-// de orden entre edificios) y las sombras no cambian.
+// gradiente entrelazado + discard): el material sigue siendo opaco (escribe
+// profundidad, sin problemas de orden entre edificios) y las sombras no cambian.
 import * as THREE from "three";
 
 const uniforms = {
-  uCutChar: { value: new THREE.Vector2(0, 0) }, // personaje en el suelo (x, z) en unidades de render
-  uCutRadius: { value: 4 }, // radio del área (unidades de render; 1 = 3 m)
-  uCutViewDir: { value: new THREE.Vector3(0, -1, 0) }, // dirección de visión (cámara → escena)
-  uCutCamWorld: { value: new THREE.Matrix4() }, // matriz de mundo de la cámara (vista → mundo)
-  uCutKeep: { value: 0.3 }, // opacidad que conserva lo que tapa el área
+  uCutTop: { value: 0 }, // línea horizontal del personaje (px del búfer, origen abajo)
+  uCutCenterX: { value: 0 }, // centro horizontal de la franja (px)
+  uCutHalfW: { value: 100 }, // semiancho de la franja (px)
+  uCutFeather: { value: 30 }, // ancho de la transición en los bordes (px)
+  uCutCamWorld: { value: new THREE.Matrix4() }, // vista → mundo (para no tocar el suelo)
+  uCutKeep: { value: 0.3 }, // opacidad que conserva lo que tapa la franja
 };
 
 const DECL = /* glsl */ `
-uniform vec2 uCutChar;
-uniform float uCutRadius;
-uniform vec3 uCutViewDir;
+uniform float uCutTop;
+uniform float uCutCenterX;
+uniform float uCutHalfW;
+uniform float uCutFeather;
 uniform mat4 uCutCamWorld;
 uniform float uCutKeep;
 `;
@@ -33,10 +31,9 @@ const BODY = /* glsl */ `
 {
   vec3 wp = (uCutCamWorld * vec4(-vViewPosition, 1.0)).xyz;
   if (wp.y > 0.12) {
-    // punto del suelo que este fragmento tapa (siguiendo el rayo de visión)
-    vec2 g = wp.xz - uCutViewDir.xz * (wp.y / uCutViewDir.y);
-    float d = length(g - uCutChar);
-    float cut = 1.0 - smoothstep(uCutRadius * 0.45, uCutRadius, d);
+    float inY = 1.0 - smoothstep(uCutTop - uCutFeather, uCutTop + uCutFeather * 0.5, gl_FragCoord.y);
+    float inX = 1.0 - smoothstep(uCutHalfW - uCutFeather, uCutHalfW + uCutFeather, abs(gl_FragCoord.x - uCutCenterX));
+    float cut = inY * inX;
     if (cut > 0.001) {
       // Ruido de gradiente entrelazado (Jimenez): tramado fino y uniforme, sin la
       // cuadrícula visible del patrón Bayer.
@@ -82,10 +79,14 @@ export function applyCutawayToMaterial(m: THREE.Material): void {
   patch(m);
 }
 
-// Cada frame: posición del personaje, radio del área (unidades de render) y cámara.
-export function updateCutaway(camera: THREE.Camera, charX: number, charZ: number, radius: number): void {
-  uniforms.uCutChar.value.set(charX, charZ);
-  uniforms.uCutRadius.value = radius;
-  camera.getWorldDirection(uniforms.uCutViewDir.value);
+// Cada frame: la línea del personaje (por encima de su cabeza, para incluirle) y
+// el tamaño del búfer de dibujo.
+const tmp = new THREE.Vector3();
+export function updateCutaway(camera: THREE.Camera, charX: number, charZ: number, bufferW: number, bufferH: number, widthFrac = 0.7): void {
+  tmp.set(charX, 0.75, charZ).project(camera);
+  uniforms.uCutTop.value = (tmp.y * 0.5 + 0.5) * bufferH;
+  uniforms.uCutCenterX.value = bufferW / 2;
+  uniforms.uCutHalfW.value = (bufferW * widthFrac) / 2;
+  uniforms.uCutFeather.value = bufferH * 0.05;
   uniforms.uCutCamWorld.value.copy(camera.matrixWorld);
 }

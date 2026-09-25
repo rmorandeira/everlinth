@@ -94,8 +94,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   const iso = createIsoCamera();
   // Área del personaje que se ve siempre sin obstrucciones (lo que la tapa se vuelve
-  // translúcido, ver cutaway3d.ts): radio en unidades de render (6 = 18 m).
-  const CHAR_AREA_RADIUS = 6;
+  // translúcido, ver cutaway3d.ts): franja desde su línea horizontal hacia abajo.
+  const CHAR_AREA_WIDTH = 0.7; // fracción del ancho de pantalla
+  const cutBuf = new THREE.Vector2();
   const gunFx = createGunFx(scene);
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
@@ -359,7 +360,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     scene.add(mesh);
     const ux = (x1 - x0) / len;
     const uz = (z1 - z0) / len;
-    tracers.push({ mesh, x0, z0, ux, uz, len, d: 0.35, streak: 0.9 + Math.random() * 0.5 });
+    tracers.push({ mesh, x0, z0, ux, uz, len, d: 0.35, streak: 0.45 + Math.random() * 0.3 });
   }
   function updateTracers(dt: number): void {
     for (let i = tracers.length - 1; i >= 0; i--) {
@@ -439,7 +440,8 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
     // Área del personaje sin obstrucciones (ver cutaway3d.ts).
-    updateCutaway(iso.camera, playerX, playerZ, CHAR_AREA_RADIUS);
+    renderer.getDrawingBufferSize(cutBuf);
+    updateCutaway(iso.camera, playerX, playerZ, cutBuf.x, cutBuf.y, CHAR_AREA_WIDTH);
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
