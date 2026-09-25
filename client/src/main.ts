@@ -151,7 +151,6 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     case "screen":
       if (currentScreen && (currentScreen.sx !== msg.screen.sx || currentScreen.sy !== msg.screen.sy)) {
-        scene3d.setCameraMood("action", 0.5); // empuje sutil de zoom al cruzar de pantalla
         // El mundo se re-basa en la sala nueva (offset 0): desplazar la posición
         // suavizada la misma cantidad mantiene al jugador y a la cámara donde
         // estaban, en vez de deslizarlos por toda la sala nueva.
@@ -198,7 +197,6 @@ function handleServerMessage(msg: ServerMessage): void {
     }
     case "discovery":
       showDiscovery(msg.tier, msg.xp);
-      scene3d.setCameraMood("action", 1.2);
       break;
     case "died":
       alert("Has muerto. Tu personaje se ha perdido para siempre.");
@@ -330,7 +328,6 @@ function handleGamepadDirs(dirs: InputState): void {
 function sendAttack(): void {
   conn?.send({ type: "attack" });
   fireGun();
-  scene3d.setCameraMood("action", 0.6);
 }
 
 // Ametralladora: dispara hacia el punto del suelo bajo el cursor (botón izquierdo
@@ -356,7 +353,6 @@ window.addEventListener("blur", () => {
 
 function sendPickup(): void {
   conn?.send({ type: "pickup" });
-  scene3d.setCameraMood("action", 0.6);
 }
 
 function handleGamepadAttack(): void {

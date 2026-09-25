@@ -1,8 +1,10 @@
 // Dimensiones de una pantalla: rejilla plana en proporción 16:9, la cámara isométrica
 // es solo una transformación de render, no cambia la forma lógica del mundo.
-export const SCREEN_WIDTH = 16;
-export const SCREEN_HEIGHT = 9;
-export const TILE_SIZE = 32; // px lógicos, la proyección isométrica se calcula a partir de esto en el cliente
+// 1 tile ≈ 1,5 m. Una sala son 48×27 tiles (72×40 m). TILE_SIZE = unidades de
+// render (1 unidad = 3 m) que mide un tile: solo lo usa el cliente para pintar.
+export const SCREEN_WIDTH = 48;
+export const SCREEN_HEIGHT = 27;
+export const TILE_SIZE = 0.5;
 
 // Tamaño actual del mundo (nº de estancias por lado). Es un límite provisional
 // pensado para crecer más adelante hacia un mundo persistente mucho mayor, no un
@@ -42,9 +44,9 @@ export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
 
 // Movimiento continuo (no por casillas): el servidor simula a este tick fijo.
 export const TICK_MS = 50;
-export const PLAYER_SPEED = 4.2; // tiles/segundo
-export const ATTACK_RANGE = 0.9; // tiles
-export const PICKUP_RANGE = 0.75; // tiles
+export const PLAYER_SPEED = 7; // tiles/segundo
+export const ATTACK_RANGE = 1.8; // tiles
+export const PICKUP_RANGE = 1.5; // tiles
 
 export interface InputState {
   N: boolean;
@@ -100,16 +102,19 @@ export const TILE_DEFS: Record<TileType, TileDef> = {
 };
 
 // ---- Ciudad ----
-// Escala realista: 1 tile ≈ 3 m. Cada sala (SCREEN_WIDTH×SCREEN_HEIGHT) es
-// exactamente una manzana: las filas 0-3 y las columnas 0-3 son las calles que
-// la rodean por el norte y el oeste (acera, dos carriles, acera) y el resto son
-// parcelas. Al estar alineado con la sala, las calles continúan sin costuras
-// entre salas contiguas y cliente y servidor comparten esta única definición.
-export const CITY_STREET_SIZE = 4;
+// 1 tile ≈ 1,5 m. Cada sala es una manzana estilo Manhattan: las 10 primeras
+// filas/columnas son las calles que la rodean por el norte y el oeste (acera de
+// 2 tiles, calzada de 6, acera de 2) y el resto es la parcela donde worldgen
+// levanta los edificios. Al estar alineado con la sala, las calles continúan
+// sin costuras entre salas contiguas y cliente y servidor comparten esta
+// única definición.
+export const CITY_STREET_SIZE = 10;
+export const CITY_ROAD_MIN = 2;
+export const CITY_ROAD_MAX = 7;
 export type CityCell = "lot" | "sidewalk" | "road";
 export function cityCell(col: number, row: number): CityCell {
   if (col >= CITY_STREET_SIZE && row >= CITY_STREET_SIZE) return "lot";
-  if ((col >= 1 && col <= 2) || (row >= 1 && row <= 2)) return "road";
+  if ((col >= CITY_ROAD_MIN && col <= CITY_ROAD_MAX) || (row >= CITY_ROAD_MIN && row <= CITY_ROAD_MAX)) return "road";
   return "sidewalk";
 }
 
@@ -345,8 +350,8 @@ export interface ZombieState {
   hp: number;
 }
 export const ZOMBIE_MAX_HP = 3;
-export const ZOMBIE_VIEW_RANGE = 30;
-export const GUN_RANGE = 18;
+export const ZOMBIE_VIEW_RANGE = 60;
+export const GUN_RANGE = 36;
 export const GUN_FIRE_MS = 90;
 
 // ---- Mensajes cliente -> servidor ----

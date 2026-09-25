@@ -13,6 +13,7 @@ import { getPaintRange } from "./db.js";
 // continuo antes de interpolar. Cuanto mayor, más extensas las zonas naturales
 // de un mismo bioma procedural (sin pintar).
 const NOISE_REGION = 24;
+const DEFAULT_CITY = true;
 
 function latticeValue(gx: number, gy: number, salt: number): number {
   return makeRng(seedFromCoords(gx * 2 + salt, gy * 2 + salt))() * 2 - 1; // -1..1
@@ -45,6 +46,8 @@ function smoothNoise(sx: number, sy: number, salt: number): number {
 // Bioma "natural" de una estancia si nadie la ha pintado: dos ejes de ruido
 // (temperatura, artificialidad) y el bioma del catálogo más cercano a ese punto.
 export function proceduralBiome(sx: number, sy: number): BiomeId {
+  // El bioma por defecto del mundo es la ciudad; el resto solo existe donde se pinte.
+  if (DEFAULT_CITY) return "city";
   const temp = smoothNoise(sx, sy, 1);
   const tech = smoothNoise(sx, sy, 2);
   let best: BiomeId = BIOME_IDS[0];

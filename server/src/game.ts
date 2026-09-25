@@ -137,8 +137,8 @@ export class GameServer {
         username,
         sx: 0,
         sy: 0,
-        x: SCREEN_WIDTH / 2,
-        y: SCREEN_HEIGHT / 2,
+        x: 4.5, // centro del cruce de la sala (0,0)
+        y: 4.5,
         hp: 20,
         maxHp: 20,
         level: 1,
@@ -147,6 +147,14 @@ export class GameServer {
         inventory: [],
       };
       savePlayer(player);
+    }
+
+    // Posición guardada inválida (mundo de otro tamaño o dentro de un edificio): al cruce de su sala.
+    player.x = Math.min(Math.max(player.x, 0.5), SCREEN_WIDTH - 0.5);
+    player.y = Math.min(Math.max(player.y, 0.5), SCREEN_HEIGHT - 0.5);
+    if (this.isBlockedAt(player.sx, player.sy, player.x, player.y)) {
+      player.x = 4.5;
+      player.y = 4.5;
     }
 
     conn.username = username;
@@ -164,7 +172,8 @@ export class GameServer {
     if (cached) return { screen: cached, discoveryXp: null };
 
     const existing = getScreen(sx, sy);
-    if (existing) {
+    // Salas guardadas con otro tamaño (versión anterior del mundo): se regeneran.
+    if (existing && existing.tiles.length === SCREEN_HEIGHT && existing.tiles[0].length === SCREEN_WIDTH) {
       this.screenCache.set(key, existing);
       return { screen: existing, discoveryXp: null };
     }
@@ -181,8 +190,8 @@ export class GameServer {
   // Más radio en Y que en X porque cada fila de tiles cubre menos alto de pantalla
   // que una columna de ancho (proyección 2:1): hace falta más alcance vertical para
   // cubrir el mismo margen visible.
-  private static readonly NEIGHBOR_RADIUS_X = 1;
-  private static readonly NEIGHBOR_RADIUS_Y = 2;
+  private static readonly NEIGHBOR_RADIUS_X = 2;
+  private static readonly NEIGHBOR_RADIUS_Y = 3;
 
   private neighborTiles(sx: number, sy: number): NeighborTiles[] {
     const neighbors: NeighborTiles[] = [];
@@ -354,7 +363,7 @@ export class GameServer {
         break;
       }
     }
-    // Primer zombi alcanzado a lo largo del rayo (radio de impacto 0.45).
+    // Primer zombi alcanzado a lo largo del rayo (radio de impacto 0.7 tiles ≈ 1 m).
     let hit: (typeof this.zombies)[number] | null = null;
     let hitT = wall;
     for (const z of this.zombies) {
@@ -362,7 +371,7 @@ export class GameServer {
       const ry = z.gy - oy;
       const t = rx * dx + ry * dz;
       if (t < 0 || t > hitT) continue;
-      if (Math.abs(rx * dz - ry * dx) < 0.45) {
+      if (Math.abs(rx * dz - ry * dx) < 0.7) {
         hit = z;
         hitT = t;
       }
@@ -398,17 +407,21 @@ export class GameServer {
       return;
     }
 
+    if (process.env.NO_ZOMBIES) {
+      this.zombies = [];
+      return;
+    }
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.zombies.length < GameServer.HORDE_SIZE * targets.length) {
       this.spawnTimer = 0.5;
       const t = targets[Math.floor(Math.random() * targets.length)];
       for (let attempt = 0; attempt < 6; attempt++) {
         const ang = Math.random() * Math.PI * 2;
-        const r = 15 + Math.random() * 5;
+        const r = 30 + Math.random() * 10;
         const gx = t.gx + Math.cos(ang) * r;
         const gy = t.gy + Math.sin(ang) * r;
         if (this.isBlockedAt(0, 0, gx, gy)) continue;
-        this.zombies.push({ id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 1.1 + Math.random() * 0.8, hitCooldown: 0 });
+        this.zombies.push({ id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 2.2 + Math.random() * 1.6, hitCooldown: 0 });
         break;
       }
     }
@@ -426,7 +439,7 @@ export class GameServer {
       }
       if (nd > ZOMBIE_VIEW_RANGE * 1.6) return false;
       z.hitCooldown -= dt;
-      if (nd < 0.55) {
+      if (nd < 0.9) {
         if (z.hitCooldown <= 0 && !dead.has(near.conn)) {
           z.hitCooldown = 1;
           near.player.hp -= 2;

@@ -12,6 +12,7 @@
 // crea por edificio son las ventanas (un InstancedMesh, un solo draw call),
 // que hay que liberar al cambiar de pantalla — ver disposeBuildings().
 import * as THREE from "three";
+import { TILE_SIZE } from "@roi/shared";
 
 function hash2(x: number, z: number): number {
   const h = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
@@ -260,21 +261,85 @@ function lShape(g: THREE.Group, s: number, n: number): void {
   gableRoof(g, t * 1.1, armLen * 1.02, 0.9, ax, h, az, roof, false);
 }
 
+// ---- Arquetipos urbanos (rectángulo w×d, base y=0, centrados) ----
+
+const SKY_WALLS = [0x8fa3b5, 0x9aa7a0, 0xc8bfae, 0x6f7f92, 0xb9a58a, 0x7e8c96, 0xa8a8a2];
+const PODIUM = 0x8a8577;
+
+// Rascacielos escalonado: podio de 2 plantas, fuste, retranqueo, corona y aguja.
+function skyscraper(g: THREE.Group, w: number, d: number, n: number, floors: number): void {
+  const wall = pick(SKY_WALLS, n);
+  let y = 0;
+  const tier = (k: number, count: number, trim = true): void => {
+    if (count < 1) return;
+    const tw = w * k;
+    const td = d * k;
+    const h = count * FLOOR_H;
+    block(g, tw, h, td, 0, y, 0, wall);
+    addWindows(g, { w: tw, d: td, x: 0, z: 0, baseY: y, floors: count });
+    y += h;
+    if (trim) {
+      block(g, tw * 1.03, 0.1, td * 1.03, 0, y, 0, TRIM);
+      y += 0.1;
+    }
+  };
+  // Podio comercial (planta baja acristalada oscura).
+  block(g, w, 2 * FLOOR_H, d, 0, 0, 0, PODIUM);
+  addWindows(g, { w, d, x: 0, z: 0, baseY: 0, floors: 2, skipGround: true });
+  block(g, w * 1.002, 0.6, d * 1.002, 0, 0.1, 0, WINDOW_COLOR);
+  block(g, w * 1.04, 0.1, d * 1.04, 0, 2 * FLOOR_H, 0, TRIM);
+  y = 2 * FLOOR_H + 0.1;
+  const rest = Math.max(1, floors - 2);
+  if (floors < 12) {
+    tier(0.86, rest);
+  } else {
+    tier(0.86, Math.round(rest * 0.55));
+    tier(0.68, Math.round(rest * 0.3));
+    tier(0.44, Math.max(1, rest - Math.round(rest * 0.55) - Math.round(rest * 0.3)), false);
+  }
+  block(g, w * 0.16, 0.5, d * 0.16, w * 0.05, y, d * 0.05, 0x55595e); // casetón de máquinas
+  if (floors >= 16) cylinder(g, 0.04, 2.2, 0, y, 0, 0x444444); // aguja
+}
+
+// Edificio de oficinas/viviendas de altura media: prisma con cornisa, parapeto y depósito.
+function midrise(g: THREE.Group, w: number, d: number, n: number, floors: number): void {
+  const wall = pick(WALLS, n);
+  block(g, w, floors * FLOOR_H, d, 0, 0, 0, wall);
+  addWindows(g, { w, d, x: 0, z: 0, baseY: 0, floors, skipGround: true });
+  block(g, w * 0.98, 0.7, d * 0.98, 0, 0.1, 0, WINDOW_COLOR);
+  block(g, w * 1.03, 0.1, d * 1.03, 0, floors * FLOOR_H, 0, TRIM);
+  parapet(g, w, d, 0, floors * FLOOR_H + 0.1, 0, wall);
+  cylinder(g, 0.28, 0.6, -w * 0.25, floors * FLOOR_H + 0.1, d * 0.2, 0x7a5a4a); // depósito de agua
+  block(g, 0.5, 0.35, 0.5, w * 0.25, floors * FLOOR_H + 0.1, -d * 0.2, 0x55595e);
+}
+
 function chooseArchetype(size: number, n: number): (g: THREE.Group, s: number, n: number) => void {
   if (size <= 3) return pick([house, shop, silo, house], n);
   if (size === 4) return pick([shop, house, tower, warehouse, lShape], n);
   return pick([tower, warehouse, lShape, shop, tower, silo], n);
 }
 
-// anchorX/anchorZ: esquina superior-izquierda del hueco reservado (mundo).
-// footprintTiles: lado del hueco en tiles. Devuelve un Group centrado en el
-// origen con la base en y=0; scene3d.ts lo coloca en el centro del hueco.
-export function buildBuilding(anchorX: number, anchorZ: number, footprintTiles: number): THREE.Object3D {
-  const n = hash2(anchorX + 0.33, anchorZ + 0.77);
+// globalX/globalZ: esquina superior-izquierda del edificio en tiles GLOBALES del
+// mundo (así el mismo edificio sale idéntico visto desde su sala o desde una
+// vecina). wTiles×dTiles: huella en tiles. urban: sala de ciudad (edificios
+// rectangulares altos, sin rotar para respetar la cuadrícula de calles).
+// Devuelve un Group centrado en el origen con la base en y=0.
+export function buildBuilding(globalX: number, globalZ: number, wTiles: number, dTiles: number, urban: boolean): THREE.Group {
+  const n = hash2(globalX + 0.33, globalZ + 0.77);
+  const n2 = hash2(globalX + 9.1, globalZ + 4.7);
   const g = new THREE.Group();
-  const s = footprintTiles * 0.86;
-  chooseArchetype(footprintTiles, n)(g, s, hash2(anchorX + 9.1, anchorZ + 4.7));
-  // Orientación variada en pasos de 90° para que no miren todos igual.
+  if (urban) {
+    const w = wTiles * TILE_SIZE * 0.96;
+    const d = dTiles * TILE_SIZE * 0.96;
+    const area = wTiles * dTiles;
+    if (area >= 110 && n2 > 0.12) skyscraper(g, w, d, n, 8 + Math.floor(Math.pow(n2, 1.5) * 18));
+    else if (n2 < 0.12) warehouse(g, Math.min(w, d) / 0.95, n);
+    else midrise(g, w, d, n, 4 + Math.floor(n2 * 7));
+    return g;
+  }
+  const size = Math.min(wTiles, dTiles);
+  const s = size * TILE_SIZE * 0.86;
+  chooseArchetype(Math.round(size * TILE_SIZE), n)(g, s, n2);
   g.rotation.y = (Math.floor(n * 4) * Math.PI) / 2;
   return g;
 }

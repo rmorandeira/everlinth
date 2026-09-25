@@ -4,6 +4,7 @@ import {
   TileType,
   TILE_DEFS,
   cityCell,
+  CITY_STREET_SIZE,
   BLOCKING_TILES,
   type ScreenData,
   type MonsterState,
@@ -163,24 +164,30 @@ const GROUND_ONLY_BIOMES = new Set<BiomeId>(["badlands"]);
 // buildings3d.ts reescala la malla ya construida al tamaño de este hueco en
 // vez de pedirle al generador un footprint menor (sus mínimos no bajan de
 // ahí por mucho que se le pida).
-const BUILDING_FOOTPRINT = 5;
+const BUILDING_FOOTPRINT = 10;
 
-// Ciudad: dos parcelas por manzana (ver cityCell en shared) donde, con cierta
-// probabilidad, se levanta un edificio de 3 o 4 tiles de lado (9-12 m). Un
-// hueco vacío queda como solar de hierba. Los edificios son siempre cuadrados
-// de celdas Building contiguas, separados por al menos una columna de hierba
-// para que el cliente los distinga como edificios independientes.
+// Ciudad estilo Manhattan: la parcela de la sala (tras las calles) se reparte en
+// 1-3 edificios rectangulares separados por callejones de 2 tiles, con un tile
+// de retranqueo respecto a las aceras. Cada edificio son celdas Building
+// contiguas (el cliente mide el rectángulo); a veces queda un solar vacío.
 function placeCityBuildings(tiles: TileType[][], rng: () => number, present: Set<TileType>): void {
-  const slots = [
-    { col: 5, maxSize: 3 },
-    { col: 10, maxSize: 4 },
-  ];
-  for (const slot of slots) {
-    if (rng() > 0.85) continue;
-    const size = slot.maxSize === 4 && rng() < 0.4 ? 4 : 3;
-    const row = size === 4 ? 4 : 5;
-    for (let dy = 0; dy < size; dy++) {
-      for (let dx = 0; dx < size; dx++) tiles[row + dy][slot.col + dx] = TileType.Building;
+  const x0 = CITY_STREET_SIZE + 1;
+  const x1 = SCREEN_WIDTH - 2; // inclusive
+  const y0 = CITY_STREET_SIZE + 1;
+  const y1 = SCREEN_HEIGHT - 2;
+  const gap = 2;
+  const totalW = x1 - x0 + 1;
+  const roll = rng();
+  const n = roll < 0.3 ? 1 : roll < 0.75 ? 2 : 3;
+  const slotW = Math.floor((totalW - gap * (n - 1)) / n);
+  for (let i = 0; i < n; i++) {
+    if (rng() < 0.1) continue; // solar vacío
+    const w = Math.max(8, slotW - Math.floor(rng() * 4));
+    const d = 9 + Math.floor(rng() * (y1 - y0 + 1 - 9 + 1));
+    const bx = x0 + i * (slotW + gap) + Math.floor(rng() * (slotW - w + 1));
+    const by = y0 + Math.floor(rng() * (y1 - y0 + 1 - d + 1));
+    for (let dy = 0; dy < d; dy++) {
+      for (let dx = 0; dx < w; dx++) tiles[by + dy][bx + dx] = TileType.Building;
     }
     present.add(TileType.Building);
   }
@@ -221,7 +228,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     for (let i = 0; i < seeds; i++) {
       const cx = 1 + Math.floor(rng() * (SCREEN_WIDTH - 2));
       const cy = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
-      const radius = 1 + Math.floor(rng() * 2);
+      const radius = 2 + Math.floor(rng() * 4);
       for (let y = Math.max(0, cy - radius); y <= Math.min(SCREEN_HEIGHT - 1, cy + radius); y++) {
         for (let x = Math.max(0, cx - radius); x <= Math.min(SCREEN_WIDTH - 1, cx + radius); x++) {
           if (isOnCross(x, y)) continue;
@@ -320,7 +327,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
     if (groundOnly && NON_GROUND_TILES.has(t)) continue;
     if (rng() >= (def.chance ?? 0)) continue;
     const horizontal = rng() < 0.5;
-    const length = 2 + Math.floor(rng() * 3);
+    const length = 4 + Math.floor(rng() * 6);
     const startX = 1 + Math.floor(rng() * Math.max(1, SCREEN_WIDTH - 2 - length));
     const startY = 1 + Math.floor(rng() * (SCREEN_HEIGHT - 2));
     for (let i = 0; i < length; i++) {
@@ -337,7 +344,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
 
   // Analiza la sala ya generada y reconecta cualquier borde que haya quedado
   // encerrado por los obstáculos, trazando el camino más corto posible.
-  ensureConnectivity(tiles);
+  if (!isCity) ensureConnectivity(tiles);
 
   const walkableSpots: Array<{ x: number; y: number }> = [];
   for (let y = 0; y < SCREEN_HEIGHT; y++) {

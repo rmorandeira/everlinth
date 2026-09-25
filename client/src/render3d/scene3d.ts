@@ -9,54 +9,21 @@
 // — columna de tile = X de mundo, fila de tile = Z de mundo, altura = Y. El
 // aspecto de rombo isométrico sale solo del ángulo de la cámara (isoCamera.ts).
 import * as THREE from "three";
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type TreeDef, type VisionFogSettings } from "@roi/shared";
-import { createIsoCamera, CAMERA_RIGHT, CAMERA_UP, type IsoCamera } from "./isoCamera.js";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, TileType, type PlacedTree, type ScreenData, type NeighborTiles, type TreeDef, type VisionFogSettings } from "@roi/shared";
+import { createIsoCamera, type IsoCamera } from "./isoCamera.js";
 import { buildObstacle } from "./obstacles3d.js";
 import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeResources } from "./proceduralTree3d.js";
 import { buildBuilding, disposeBuildings } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
-import { createCameraRig, type CameraMood } from "./cameraRig.js";
+import { createOcclusion3D } from "./occlusion3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityProps } from "./city3d.js";
 
-// Cuánto de más se acerca la cámara respecto al ajuste exacto de la sala —
-// igual que el "overscan" de computeLayout() en el scene.ts 2D: recorta un
-// pelín el margen decorativo para que nunca se vea una franja vacía, sin
-// llegar a cortar la rejilla jugable.
-const OVERSCAN = 1.1;
-
-// Equivalente 3D de computeLayout() (scene.ts 2D): calcula cuánto hay que
-// alejar la cámara (half-height del frustum ortográfico) para que la sala
-// SCREEN_WIDTH×SCREEN_HEIGHT entera quepa en la ventana, sea cual sea su
-// proporción — proyectando las 4 esquinas de la rejilla sobre los ejes
-// propios de la cámara (CAMERA_RIGHT/CAMERA_UP), igual que 2D usaba toScreen()
-// para las mismas 4 esquinas. Se recalcula solo cuando cambia el aspecto de
-// la ventana (ver resize()), no cada frame.
-const GRID_CORNERS = [
-  [0, 0],
-  [SCREEN_WIDTH - 1, 0],
-  [0, SCREEN_HEIGHT - 1],
-  [SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1],
-].map(([x, z]) => new THREE.Vector3(x, 0, z));
-
-function fitHalfHeightToGrid(aspect: number): number {
-  let minU = Infinity;
-  let maxU = -Infinity;
-  let minV = Infinity;
-  let maxV = -Infinity;
-  for (const corner of GRID_CORNERS) {
-    const u = corner.dot(CAMERA_RIGHT);
-    const v = corner.dot(CAMERA_UP);
-    if (u < minU) minU = u;
-    if (u > maxU) maxU = u;
-    if (v < minV) minV = v;
-    if (v > maxV) maxV = v;
-  }
-  const gridW = maxU - minU + 1; // +1 tile de margen total, como el TILE_W/2 a cada lado del 2D
-  const gridH = maxV - minV + 1;
-  return Math.max(gridH / 2, gridW / (2 * aspect)) / OVERSCAN;
-}
+// Zoom FIJO: mitad de alto del frustum ortográfico, en unidades de render
+// (1 unidad = 3 m). Con 14, una persona de 1,8 m ocupa ~16 px a 720p: la escena
+// se ve como una maqueta y el jugador es pequeño.
+const VIEW_HALF_HEIGHT = 14;
 
 // Ruido determinista barato por celda (mismo criterio que hash2 en scene.ts 2D):
 // decide la variante de color del suelo y la rotación/variante de un obstáculo.
@@ -89,7 +56,6 @@ export interface Scene3D {
   resize(width: number, height: number): void;
   updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
   updateFigures(entities: FigureEntity[], time: number): void;
-  setCameraMood(mood: CameraMood, holdSeconds: number): void;
   /** Punto del suelo (plano y=0) bajo el cursor, en coordenadas de mundo. */
   cursorToGround(ndcX: number, ndcY: number): { x: number; z: number } | null;
   /** Trazador de bala efímero entre dos puntos del suelo. */
@@ -107,15 +73,15 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const lighting = createLighting3D(scene);
 
   const iso = createIsoCamera();
-  const cameraRig = createCameraRig();
+  const occlusion = createOcclusion3D();
+  const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
   let aspect = 1;
-  let restHalfHeight = fitHalfHeightToGrid(aspect);
 
   const figures = createFigureManager();
   scene.add(figures.group);
 
-  const tileGeo = new THREE.BoxGeometry(0.98, 0.1, 0.98);
+  const tileGeo = new THREE.BoxGeometry(0.98 * TILE_SIZE, 0.1, 0.98 * TILE_SIZE);
   const tileMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
 
   let groundMesh: THREE.InstancedMesh | null = null;
@@ -139,29 +105,38 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     return r;
   }
 
-  // Un edificio ocupa varias celdas Building contiguas (ver BUILDING_FOOTPRINT
-  // en worldgen.ts): solo se planta la torre una vez, en la esquina superior-
-  // izquierda del grupo, para no clonarla en cada una de sus celdas.
+  // Un edificio son celdas Building contiguas formando un rectángulo (ver worldgen.ts):
+  // solo se levanta una vez, en la esquina superior-izquierda del grupo; el ancho
+  // y el fondo se miden contando celdas contiguas hacia la derecha y hacia abajo.
   function isBuildingAnchor(tiles: TileType[][], row: number, col: number): boolean {
     if (col > 0 && tiles[row][col - 1] === TileType.Building) return false;
     if (row > 0 && tiles[row - 1][col] === TileType.Building) return false;
     return true;
   }
-  function buildingFootprint(tiles: TileType[][], row: number, col: number): number {
-    let size = 0;
-    while (col + size < tiles[row].length && tiles[row][col + size] === TileType.Building) size++;
-    return size;
+  function buildingSize(tiles: TileType[][], row: number, col: number): { w: number; d: number } {
+    let w = 0;
+    while (col + w < tiles[row].length && tiles[row][col + w] === TileType.Building) w++;
+    let d = 0;
+    while (row + d < tiles.length && tiles[row + d][col] === TileType.Building) d++;
+    return { w, d };
   }
 
+  // roomX/roomY: coordenadas de la sala; los hashes usan tiles GLOBALES para que
+  // cada edificio/obstáculo salga idéntico visto desde su sala o desde una vecina.
   function collectGrid(
     tiles: TileType[][],
     offsetX: number,
     offsetZ: number,
+    roomX: number,
+    roomY: number,
     positions: Array<{ x: number; z: number; tile: TileType }>,
     obstacles: THREE.Group
   ): void {
-    const cityProps = buildCityProps(tiles, offsetX, offsetZ);
+    const gx0 = roomX * SCREEN_WIDTH;
+    const gz0 = roomY * SCREEN_HEIGHT;
+    const cityProps = buildCityProps(tiles, offsetX, offsetZ, gx0, gz0);
     if (cityProps) obstacles.add(cityProps);
+    const urban = cityProps !== null;
     for (let row = 0; row < tiles.length; row++) {
       for (let col = 0; col < tiles[row].length; col++) {
         const tile = tiles[row][col];
@@ -171,17 +146,19 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
         if (tile === TileType.Building) {
           if (isBuildingAnchor(tiles, row, col)) {
-            const size = buildingFootprint(tiles, row, col);
-            const building = buildBuilding(x, z, size);
-            building.position.set(x + (size - 1) / 2, 0, z + (size - 1) / 2);
+            const { w, d } = buildingSize(tiles, row, col);
+            const building = buildBuilding(gx0 + col, gz0 + row, w, d, urban);
+            building.position.set((x + (w - 1) / 2) * T, 0, (z + (d - 1) / 2) * T);
             obstacles.add(building);
+            occlusion.register(building);
           }
           continue;
         }
 
-        const obstacle = buildObstacle(tile, hash2(x + 0.5, z + 0.5));
+        const obstacle = buildObstacle(tile, hash2(gx0 + col + 0.5, gz0 + row + 0.5));
         if (obstacle) {
-          obstacle.position.set(x, 0, z);
+          obstacle.position.set(x * T, 0, z * T);
+          obstacle.scale.multiplyScalar(T);
           obstacles.add(obstacle);
         }
       }
@@ -205,7 +182,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
       for (const inst of resolveTreeInstances(def)) {
         const resources = treeResourcesFor(def.id, inst.index, inst.instanceDef);
         const handle = instantiateTree(resources);
-        handle.root.position.set(pt.x + offsetX + inst.offsetX, 0, pt.y + offsetZ + inst.offsetZ);
+        handle.root.position.set((pt.x + offsetX + inst.offsetX) * T, 0, (pt.y + offsetZ + inst.offsetZ) * T);
         group.add(handle.root);
         updaters.push({ update: handle.update, def: inst.instanceDef });
       }
@@ -221,18 +198,19 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     if (obstacleGroup) scene.remove(obstacleGroup);
     if (treeGroup) scene.remove(treeGroup);
     disposeBuildings();
+    occlusion.clear();
 
     const positions: Array<{ x: number; z: number; tile: TileType }> = [];
     const obstacles = new THREE.Group();
     const trees = new THREE.Group();
     const updaters: Array<{ update: (time: number, def: TreeDef) => void; def: TreeDef }> = [];
 
-    collectGrid(screen.tiles, 0, 0, positions, obstacles);
+    collectGrid(screen.tiles, 0, 0, screen.sx, screen.sy, positions, obstacles);
     collectTrees(screen.placedTrees, 0, 0, treeDefs, trees, updaters);
     for (const n of neighbors) {
       const offsetX = (n.sx - screen.sx) * SCREEN_WIDTH;
       const offsetZ = (n.sy - screen.sy) * SCREEN_HEIGHT;
-      collectGrid(n.tiles, offsetX, offsetZ, positions, obstacles);
+      collectGrid(n.tiles, offsetX, offsetZ, n.sx, n.sy, positions, obstacles);
       collectTrees(n.placedTrees, offsetX, offsetZ, treeDefs, trees, updaters);
     }
 
@@ -241,7 +219,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     const c = new THREE.Color();
     const newWaterInstances: number[] = [];
     positions.forEach((p, i) => {
-      m.makeTranslation(p.x, p.tile === TileType.Sidewalk ? SIDEWALK_RAISE : 0, p.z);
+      m.makeTranslation(p.x * T, p.tile === TileType.Sidewalk ? SIDEWALK_RAISE : 0, p.z * T);
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, groundColor(p.tile, hash2(p.x, p.z), c));
       if (p.tile === TileType.Water) newWaterInstances.push(i);
@@ -286,11 +264,13 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     renderer.setSize(width, height, false);
     postfx.resize(width, height, renderer.getPixelRatio());
     aspect = width / height;
-    restHalfHeight = fitHalfHeightToGrid(aspect);
   }
 
   function updateFigures(entities: FigureEntity[], time: number): void {
-    figures.update(entities, time);
+    figures.update(
+      entities.map((e) => ({ ...e, x: e.x * T, z: e.z * T })),
+      time
+    );
   }
 
   const groundRaycaster = new THREE.Raycaster();
@@ -301,13 +281,14 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     iso.camera.updateMatrixWorld();
     groundRaycaster.setFromCamera(ndcTmp.set(ndcX, ndcY), iso.camera);
     if (!groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) return null;
-    return { x: groundHit.x, z: groundHit.z };
+    return { x: groundHit.x / T, z: groundHit.z / T };
   }
 
   const tracerGeo = new THREE.BoxGeometry(1, 0.035, 0.035);
   const tracers: Array<{ mesh: THREE.Mesh; life: number }> = [];
   const TRACER_LIFE = 0.11;
-  function addTracer(x0: number, z0: number, x1: number, z1: number): void {
+  function addTracer(tx0: number, tz0: number, tx1: number, tz1: number): void {
+    const x0 = tx0 * T, z0 = tz0 * T, x1 = tx1 * T, z1 = tz1 * T;
     const len = Math.hypot(x1 - x0, z1 - z0);
     if (len < 0.05) return;
     const mesh = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, fog: false }));
@@ -331,24 +312,24 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     }
   }
 
-  function setCameraMood(mood: CameraMood, holdSeconds: number): void {
-    cameraRig.pulse(mood, holdSeconds);
-  }
-
-  function render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void {
-    const halfHeight = cameraRig.update(restHalfHeight, dt);
-    iso.setViewSize(halfHeight, aspect);
+  const towardCamera = new THREE.Vector3();
+  const playerVec = new THREE.Vector3();
+  function render(playerTileX: number, playerTileZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void {
+    const playerX = playerTileX * T;
+    const playerZ = playerTileZ * T;
+    iso.setViewSize(VIEW_HALF_HEIGHT, aspect);
     iso.setTarget(playerX, playerZ);
     // El raycast de la linterna (dentro de lighting.update) necesita la
-    // matriz de mundo YA actualizada — normalmente eso lo hace
-    // renderer.render() al recorrer la escena, pero eso ocurre DESPUÉS, así
-    // que sin esto el rayo se calcularía con la posición de cámara del frame
-    // anterior (o ninguna, en el primer frame).
+    // matriz de mundo YA actualizada (normalmente lo hace renderer.render(),
+    // pero eso ocurre después).
     iso.camera.updateMatrixWorld();
     animateWater(time);
     updateTracers(dt);
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
+    playerVec.set(playerX, 0, playerZ);
+    towardCamera.copy(iso.camera.position).sub(playerVec).normalize();
+    occlusion.update(playerVec, towardCamera, dt);
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
@@ -357,5 +338,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, setCameraMood, cursorToGround, addTracer, render, dispose };
+  return { renderer, resize, updateGround, updateFigures, cursorToGround, addTracer, render, dispose };
 }
