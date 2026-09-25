@@ -3,8 +3,7 @@ import {
   SCREEN_HEIGHT,
   TileType,
   TILE_DEFS,
-  cityCell,
-  CITY_STREET_SIZE,
+  cityAt,
   BLOCKING_TILES,
   type ScreenData,
   type MonsterState,
@@ -166,30 +165,40 @@ const GROUND_ONLY_BIOMES = new Set<BiomeId>(["badlands"]);
 // ahí por mucho que se le pida).
 const BUILDING_FOOTPRINT = 10;
 
-// Ciudad estilo Manhattan: la parcela de la sala (tras las calles) se reparte en
-// 1-3 edificios rectangulares separados por callejones de 2 tiles, con un tile
-// de retranqueo respecto a las aceras. Cada edificio son celdas Building
-// contiguas (el cliente mide el rectángulo); a veces queda un solar vacío.
-function placeCityBuildings(tiles: TileType[][], rng: () => number, present: Set<TileType>): void {
-  const x0 = CITY_STREET_SIZE + 1;
-  const x1 = SCREEN_WIDTH - 2; // inclusive
-  const y0 = CITY_STREET_SIZE + 1;
-  const y1 = SCREEN_HEIGHT - 2;
-  const gap = 2;
-  const totalW = x1 - x0 + 1;
-  const roll = rng();
-  const n = roll < 0.3 ? 1 : roll < 0.75 ? 2 : 3;
-  const slotW = Math.floor((totalW - gap * (n - 1)) / n);
-  for (let i = 0; i < n; i++) {
-    if (rng() < 0.1) continue; // solar vacío
-    const w = Math.max(8, slotW - Math.floor(rng() * 4));
-    const d = 9 + Math.floor(rng() * (y1 - y0 + 1 - 9 + 1));
-    const bx = x0 + i * (slotW + gap) + Math.floor(rng() * (slotW - w + 1));
-    const by = y0 + Math.floor(rng() * (y1 - y0 + 1 - d + 1));
-    for (let dy = 0; dy < d; dy++) {
-      for (let dx = 0; dx < w; dx++) tiles[by + dy][bx + dx] = TileType.Building;
+// Ciudad densa: las parcelas (celdas "lot" de cityAt, ver shared) se rellenan con
+// edificios rectangulares empaquetados casi pegados (un tile de callejón entre
+// ellos). Barrido fila a fila: en cada celda libre se intenta el rectángulo más
+// grande posible (7-16 × 6-14 tiles); lo que no cabe queda como solar. Las
+// manzanas-parque no llevan edificios. Cada edificio son celdas Building
+// contiguas dentro de UNA sala (el cliente mide el rectángulo).
+function placeCityBuildings(tiles: TileType[][], rng: () => number, free: boolean[][], present: Set<TileType>): void {
+  for (let y = 0; y < SCREEN_HEIGHT; y++) {
+    for (let x = 0; x < SCREEN_WIDTH; x++) {
+      if (!free[y][x]) continue;
+      if (rng() < 0.03) continue; // algún solar suelto
+      const maxW = 7 + Math.floor(rng() * 10);
+      const maxD = 6 + Math.floor(rng() * 9);
+      let w = 0;
+      while (w < maxW && x + w < SCREEN_WIDTH && free[y][x + w]) w++;
+      if (w < 5) continue;
+      let d = 1;
+      const rowFree = (yy: number): boolean => {
+        for (let xx = x; xx < x + w; xx++) if (!free[yy][xx]) return false;
+        return true;
+      };
+      while (d < maxD && y + d < SCREEN_HEIGHT && rowFree(y + d)) d++;
+      if (d < 5) continue;
+      for (let dy = 0; dy < d; dy++) {
+        for (let dx = 0; dx < w; dx++) {
+          tiles[y + dy][x + dx] = TileType.Building;
+          free[y + dy][x + dx] = false;
+        }
+      }
+      // callejón de un tile a derecha y abajo
+      for (let dy = 0; dy <= d; dy++) if (y + dy < SCREEN_HEIGHT && x + w < SCREEN_WIDTH) free[y + dy][x + w] = false;
+      if (y + d < SCREEN_HEIGHT) for (let dx = -1; dx <= w; dx++) if (x + dx >= 0 && x + dx < SCREEN_WIDTH) free[y + d][x + dx] = false;
+      present.add(TileType.Building);
     }
-    present.add(TileType.Building);
   }
 }
 
@@ -211,13 +220,20 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   const present = new Set<TileType>();
 
   if (isCity) {
+    const free: boolean[][] = Array.from({ length: SCREEN_HEIGHT }, () => new Array(SCREEN_WIDTH).fill(false));
     for (let y = 0; y < SCREEN_HEIGHT; y++) {
       for (let x = 0; x < SCREEN_WIDTH; x++) {
-        const c = cityCell(x, y);
-        tiles[y][x] = c === "road" ? TileType.Road : c === "sidewalk" ? TileType.Sidewalk : TileType.Grass;
+        const c = cityAt(sx * SCREEN_WIDTH + x, sy * SCREEN_HEIGHT + y);
+        if (c.kind === "road") tiles[y][x] = TileType.Road;
+        else if (c.kind === "sidewalk") tiles[y][x] = TileType.Sidewalk;
+        else if (c.park) tiles[y][x] = TileType.Grass;
+        else {
+          tiles[y][x] = TileType.Path; // solar/callejón: tierra
+          free[y][x] = true;
+        }
       }
     }
-    placeCityBuildings(tiles, rng, present);
+    placeCityBuildings(tiles, rng, free, present);
   }
 
   // --- "blob": manchas orgánicas (agua) ---

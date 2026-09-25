@@ -120,6 +120,25 @@ export class GameServer {
     else if (msg.type === "shoot") this.handleShoot(conn, player, msg.dx, msg.dz);
   }
 
+  // Punto transitable más cercano al centro de la sala, preferiblemente calzada.
+  private findSpawn(sx: number, sy: number): { x: number; y: number } {
+    const cx = SCREEN_WIDTH / 2;
+    const cy = SCREEN_HEIGHT / 2;
+    let best = { x: cx, y: cy };
+    let bestD = Infinity;
+    for (let y = 0; y < SCREEN_HEIGHT; y++) {
+      for (let x = 0; x < SCREEN_WIDTH; x++) {
+        if (this.isBlockedAt(sx, sy, x + 0.5, y + 0.5)) continue;
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        if (d < bestD) {
+          bestD = d;
+          best = { x: x + 0.5, y: y + 0.5 };
+        }
+      }
+    }
+    return best;
+  }
+
   private handleJoin(conn: Connection, usernameRaw: string): void {
     const username = usernameRaw.trim().slice(0, 20);
     if (!username) {
@@ -137,8 +156,8 @@ export class GameServer {
         username,
         sx: 0,
         sy: 0,
-        x: 4.5, // centro del cruce de la sala (0,0)
-        y: 4.5,
+        x: -1, // centinela: se recoloca en un punto transitable al entrar
+        y: -1,
         hp: 20,
         maxHp: 20,
         level: 1,
@@ -150,11 +169,10 @@ export class GameServer {
     }
 
     // Posición guardada inválida (mundo de otro tamaño o dentro de un edificio): al cruce de su sala.
-    player.x = Math.min(Math.max(player.x, 0.5), SCREEN_WIDTH - 0.5);
-    player.y = Math.min(Math.max(player.y, 0.5), SCREEN_HEIGHT - 0.5);
-    if (this.isBlockedAt(player.sx, player.sy, player.x, player.y)) {
-      player.x = 4.5;
-      player.y = 4.5;
+    if (player.x < 0 || player.y < 0 || player.x >= SCREEN_WIDTH || player.y >= SCREEN_HEIGHT || this.isBlockedAt(player.sx, player.sy, player.x, player.y)) {
+      const spot = this.findSpawn(player.sx, player.sy);
+      player.x = spot.x;
+      player.y = spot.y;
     }
 
     conn.username = username;
@@ -190,8 +208,8 @@ export class GameServer {
   // Más radio en Y que en X porque cada fila de tiles cubre menos alto de pantalla
   // que una columna de ancho (proyección 2:1): hace falta más alcance vertical para
   // cubrir el mismo margen visible.
-  private static readonly NEIGHBOR_RADIUS_X = 2;
-  private static readonly NEIGHBOR_RADIUS_Y = 3;
+  private static readonly NEIGHBOR_RADIUS_X = 1;
+  private static readonly NEIGHBOR_RADIUS_Y = 2;
 
   private neighborTiles(sx: number, sy: number): NeighborTiles[] {
     const neighbors: NeighborTiles[] = [];

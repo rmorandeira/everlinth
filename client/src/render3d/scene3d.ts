@@ -21,9 +21,9 @@ import { createPostFx3D } from "./postfx3d.js";
 import { buildCityProps } from "./city3d.js";
 
 // Zoom FIJO: mitad de alto del frustum ortográfico, en unidades de render
-// (1 unidad = 3 m). Con 14, una persona de 1,8 m ocupa ~16 px a 720p: la escena
+// (1 unidad = 3 m). Con 7, una persona de 1,8 m ocupa ~32 px a 720p: la escena
 // se ve como una maqueta y el jugador es pequeño.
-const VIEW_HALF_HEIGHT = 14;
+const VIEW_HALF_HEIGHT = 7;
 
 // Ruido determinista barato por celda (mismo criterio que hash2 en scene.ts 2D):
 // decide la variante de color del suelo y la rotación/variante de un obstáculo.

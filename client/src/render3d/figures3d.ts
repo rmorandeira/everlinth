@@ -56,7 +56,7 @@ function labelMaterialFor(text: string): THREE.SpriteMaterial {
 
 // Escala realista (1 tile ≈ 3 m): una persona de ~1.8 m mide ~0.6 tiles. El rig
 // está dibujado con ~1.05 de alto, así que se reduce de una vez en el grupo raíz.
-const FIGURE_SCALE = 0.58;
+const FIGURE_SCALE = 0.62;
 const HIP_Y = 0.4; // pies en y=0, cadera a esta altura
 const SHOULDER_Y = HIP_Y + 0.36;
 const HEAD_Y = SHOULDER_Y + 0.17;

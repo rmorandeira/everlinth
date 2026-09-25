@@ -60,10 +60,10 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   const sc = sun.shadow.camera;
-  sc.left = -28;
-  sc.right = 28;
-  sc.top = 28;
-  sc.bottom = -28;
+  sc.left = -20;
+  sc.right = 20;
+  sc.top = 20;
+  sc.bottom = -20;
   sc.near = 1;
   sc.far = 60;
   sc.updateProjectionMatrix();
@@ -126,8 +126,8 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     // con la misma onda orgánica que usaba edgeblur.ts.
     const radius = FOG_RADIUS * vision.ellipseScale;
     const jitter = organicJitter(time, 0.9, 2.6, 0.4) * vision.vibration;
-    const near = ISO_CAMERA_DIST - radius * (1 + jitter * 0.06);
-    const far = ISO_CAMERA_DIST + radius * (0.4 + vision.sharpFraction) * Math.max(0.3, vision.blurStrength) * (1 + jitter * 0.1);
+    const near = ISO_CAMERA_DIST + radius * 0.15 * (1 + jitter * 0.06);
+    const far = ISO_CAMERA_DIST + radius * (0.7 + vision.sharpFraction) * Math.max(0.3, vision.blurStrength) * (1 + jitter * 0.1);
     fog.near = near;
     fog.far = far;
 

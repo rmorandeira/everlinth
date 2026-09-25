@@ -1,15 +1,15 @@
 // Mobiliario urbano del bioma "city" (1 tile ≈ 1,5 m; 1 unidad de render = 3 m,
-// ver TILE_SIZE). El suelo (asfalto / acera / parcela) ya viene en los tiles
-// Road/Sidewalk que genera el servidor a partir de cityCell (shared); aquí solo
-// se añade lo que va encima: línea central discontinua, pasos de cebra en el
-// cruce, farolas, árboles de acera y coches aparcados. Todo se deduce de la
-// posición local (col,row): cada sala es exactamente una manzana (ver cityCell),
-// así que no hace falta ningún dato extra del servidor. Los hashes usan
-// coordenadas GLOBALES para que la sala se vea igual desde cualquier vecina.
-// Geometría y materiales compartidos: nada que liberar.
+// ver TILE_SIZE). El suelo (asfalto / acera / solar) ya viene en los tiles
+// Road/Sidewalk/Path que genera el servidor a partir de cityAt (shared); aquí solo
+// se añade lo que va encima, celda a celda según cityAt: línea central de las
+// calles de doble sentido, flechas en las de sentido único, pasos de cebra junto a
+// los cruces, farolas, árboles de acera, coches aparcados y árboles de parque.
+// Todo se deduce de coordenadas GLOBALES de tile, así que una sala se ve igual
+// desde cualquier vecina. Las piezas se fusionan por material (unas pocas mallas
+// por sala).
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, TILE_SIZE, CITY_STREET_SIZE, CITY_ROAD_MIN, CITY_ROAD_MAX } from "@roi/shared";
+import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, TILE_SIZE, cityAt, type CityCellInfo } from "@roi/shared";
 
 const T = TILE_SIZE;
 const boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
@@ -38,10 +38,12 @@ function hash2(x: number, y: number): number {
   const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
   return h - Math.floor(h);
 }
+function mod(a: number, n: number): number {
+  return ((a % n) + n) % n;
+}
 
-// Todas las posiciones/tamaños de estas funciones van en TILES (coordenadas de
-// sala); se convierten a unidades de render al crear la malla.
-function box(g: THREE.Group, w: number, h: number, d: number, x: number, y: number, z: number, color: number, basic = false): THREE.Mesh {
+// Piezas en unidades de render (ya convertidas a partir de tiles).
+function box(g: THREE.Object3D, w: number, h: number, d: number, x: number, y: number, z: number, color: number, basic = false): THREE.Mesh {
   const m = new THREE.Mesh(boxGeo, basic ? lampMat : lambert(color));
   m.scale.set(w, h, d);
   m.position.set(x, y, z);
@@ -52,6 +54,19 @@ function box(g: THREE.Group, w: number, h: number, d: number, x: number, y: numb
 // Marca de pintura sobre el asfalto (w a lo largo de X, d a lo largo de Z; en tiles).
 function paint(g: THREE.Group, w: number, d: number, x: number, z: number, color: number): void {
   box(g, w * T, 0.008, d * T, x * T, MARK_Y, z * T, color);
+}
+
+// Flecha de sentido único: vástago + dos alas, apuntando a +X (horiz) o ±Z.
+function arrow(g: THREE.Group, x: number, z: number, horiz: boolean, dir: number): void {
+  const a = new THREE.Group();
+  a.position.set(x * T, 0, z * T);
+  a.rotation.y = horiz ? (dir > 0 ? 0 : Math.PI) : dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+  box(a, 1.4 * T, 0.008, 0.2 * T, 0, MARK_Y, 0, PAINT_WHITE);
+  for (const s of [-1, 1]) {
+    const wing = box(a, 0.8 * T, 0.008, 0.18 * T, 0.5 * T, MARK_Y, s * 0.18 * T, PAINT_WHITE);
+    wing.rotation.y = s * 0.7;
+  }
+  g.add(a);
 }
 
 // Coche de ~4.5×1.9 m → 1.5×0.62 unidades. alongX: circula a lo largo de X.
@@ -78,22 +93,21 @@ function streetlight(g: THREE.Group, x: number, z: number, dirX: number, dirZ: n
   box(g, 0.2, 0.06, 0.2, px + dirX * 0.6, 1.96, pz + dirZ * 0.6, 0, true);
 }
 
-// Árbol de acera: tronco fino y copa de poliedro.
-function streetTree(g: THREE.Group, x: number, z: number, color: number): void {
+function tree(g: THREE.Group, x: number, z: number, color: number, scale: number): void {
   const px = x * T;
   const pz = z * T;
   const trunk = new THREE.Mesh(cylGeo, lambert(0x5a4030));
-  trunk.scale.set(0.1, 0.6, 0.1);
+  trunk.scale.set(0.1 * scale, 0.6 * scale, 0.1 * scale);
   trunk.position.set(px, 0.05, pz);
   g.add(trunk);
   const crown = new THREE.Mesh(crownGeo, lambert(color));
-  crown.scale.set(0.7, 0.75, 0.7);
-  crown.position.set(px, 0.95, pz);
+  crown.scale.set(0.7 * scale, 0.75 * scale, 0.7 * scale);
+  crown.position.set(px, 0.95 * scale, pz);
   g.add(crown);
 }
 
-// Una sala tiene cientos de piezas sueltas (marcas, farolas, coches…): se fusionan por
-// material en unas pocas mallas para no gastar un draw call (y otro de sombra) por pieza.
+// Una sala tiene cientos de piezas sueltas: se fusionan por material en unas pocas
+// mallas para no gastar un draw call (y otro de sombra) por pieza.
 function mergeByMaterial(src: THREE.Group): THREE.Group {
   src.updateMatrixWorld(true);
   const lists = new Map<THREE.Material, THREE.BufferGeometry[]>();
@@ -120,83 +134,97 @@ function mergeByMaterial(src: THREE.Group): THREE.Group {
   return out;
 }
 
+const NEIGHBORS: Array<[number, number]> = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
 // tiles: rejilla de la sala; (offsetX, offsetZ): origen de la sala en tiles respecto
-// a la sala activa; (gx0, gz0): origen de la sala en tiles GLOBALES (para los hashes).
+// a la sala activa; (gx0, gz0): origen de la sala en tiles GLOBALES.
 export function buildCityProps(tiles: TileType[][], offsetX: number, offsetZ: number, gx0: number, gz0: number): THREE.Group | null {
   let hasRoad = false;
   for (const row of tiles) if (row.includes(TileType.Road)) hasRoad = true;
   if (!hasRoad) return null;
 
-  const g = new THREE.Group();
-  const S = CITY_STREET_SIZE;
   const W = SCREEN_WIDTH;
   const H = SCREEN_HEIGHT;
-  const roadLo = CITY_ROAD_MIN - 0.5; // borde de la calzada en coordenadas de tile
-  const roadHi = CITY_ROAD_MAX + 0.5;
-  const mid = (roadLo + roadHi) / 2;
-  const roadW = roadHi - roadLo;
+  // Celdas con 2 tiles de borde para consultar vecinos (cruces junto a la sala).
+  const B = 2;
+  const stride = W + 2 * B;
+  const infos: CityCellInfo[] = new Array(stride * (H + 2 * B));
+  for (let r = -B; r < H + B; r++) for (let c = -B; c < W + B; c++) infos[(r + B) * stride + c + B] = cityAt(gx0 + c, gz0 + r);
+  const at = (c: number, r: number): CityCellInfo => infos[(r + B) * stride + c + B];
 
-  // Línea central discontinua de cada calle, salvo dentro del cruce.
-  for (let x = roadHi + 1; x < W; x += 2.5) paint(g, 1.2, 0.14, x, mid, PAINT_YELLOW);
-  for (let z = roadHi + 1; z < H; z += 2.5) paint(g, 0.14, 1.2, mid, z, PAINT_YELLOW);
-  for (let x = 0.5; x < roadLo - 0.5; x += 2.5) paint(g, 1.2, 0.14, x, mid, PAINT_YELLOW);
-  for (let z = 0.5; z < roadLo - 0.5; z += 2.5) paint(g, 0.14, 1.2, mid, z, PAINT_YELLOW);
+  const g = new THREE.Group();
+  for (let row = 0; row < H; row++) {
+    for (let col = 0; col < W; col++) {
+      const c = at(col, row);
+      const gx = gx0 + col;
+      const gy = gz0 + row;
 
-  // Pasos de cebra en los cuatro brazos del cruce.
-  const stripes = Math.floor(roadW / 0.75);
-  for (const cx of [1, 8]) {
-    for (let i = 0; i < stripes; i++) paint(g, 1.2, 0.38, cx, roadLo + 0.375 + i * 0.75, PAINT_WHITE);
-  }
-  for (const cz of [1, 8]) {
-    for (let i = 0; i < stripes; i++) paint(g, 0.38, 1.2, roadLo + 0.375 + i * 0.75, cz, PAINT_WHITE);
-  }
+      if (c.kind === "road" && (c.axis === "h" || c.axis === "v")) {
+        const horiz = c.axis === "h";
+        const a = horiz ? gx : gy; // coordenada a lo largo de la calle
+        const q = horiz ? gy : gx; // coordenada a través
+        const dq = q - c.lineCenter;
 
-  // Farolas alternadas a ambos lados de cada calle, con el brazo hacia la calzada.
-  for (let x = S + 4; x < W - 3; x += 12) streetlight(g, x, 8.6, 0, -1); // acera sur de la calle E-O
-  for (let x = S + 10; x < W - 3; x += 12) streetlight(g, x, 0.4, 0, 1); // acera norte
-  for (let z = S + 4; z < H - 2; z += 10) streetlight(g, 8.6, z, -1, 0); // acera este de la calle N-S
-  for (let z = S + 9; z < H - 2; z += 10) streetlight(g, 0.4, z, 1, 0); // acera oeste
-  streetlight(g, 8.6, 8.6, -1, 0);
-  streetlight(g, 0.4, 0.4, 1, 0);
+        if (dq === 0) {
+          if (!c.oneWay) {
+            if (mod(a, 4) < 2) {
+              if (horiz) paint(g, 1, 0.14, col, row, PAINT_YELLOW);
+              else paint(g, 0.14, 1, col, row, PAINT_YELLOW);
+            }
+          } else if (mod(a, 14) === 7) {
+            arrow(g, col, row, horiz, c.dir);
+          }
+        } else if (c.lineHalf >= 4 && Math.abs(dq) === 2 && mod(a, 4) < 2) {
+          // separación de carriles en las avenidas anchas
+          if (horiz) paint(g, 1, 0.1, col, row, PAINT_WHITE);
+          else paint(g, 0.1, 1, col, row, PAINT_WHITE);
+        }
 
-  // Árboles de acera intercalados con las farolas.
-  for (let x = S + 1; x < W - 1; x += 6) {
-    const h = hash2(gx0 + x, gz0 + 1.7);
-    if (h > 0.25) streetTree(g, x, 9.1, CROWNS[Math.floor(h * 97) % CROWNS.length]);
-  }
-  for (let z = S + 1; z < H - 1; z += 6) {
-    const h = hash2(gx0 + 2.3, gz0 + z);
-    if (h > 0.25) streetTree(g, 9.1, z, CROWNS[Math.floor(h * 89) % CROWNS.length]);
-  }
-
-  // Coches aparcados junto a los bordillos de las dos calles.
-  let lastX = -99;
-  for (let x = S + 2; x < W - 3; x += 1) {
-    if (x - lastX < 5) continue;
-    const h = hash2(gx0 + x, gz0 + 1.3);
-    if (h > 0.5) {
-      car(g, x, roadHi - 1.2, true, CAR_COLORS[Math.floor(h * 97) % CAR_COLORS.length]);
-      lastX = x;
+        // Paso de cebra en las dos celdas contiguas a un cruce.
+        let nearX = false;
+        for (const s of [-2, -1, 1, 2]) {
+          const n = horiz ? at(col + s, row) : at(col, row + s);
+          if (n.axis === "x") nearX = true;
+        }
+        if (nearX) {
+          if (mod(q - (c.lineCenter - c.lineHalf), 2) === 0) {
+            if (horiz) paint(g, 1, 0.55, col, row, PAINT_WHITE);
+            else paint(g, 0.55, 1, col, row, PAINT_WHITE);
+          }
+        } else if (Math.abs(dq) === c.lineHalf && mod(a, 7) === 3) {
+          // Coche aparcado junto al bordillo (a veces).
+          const h = hash2(gx + 0.31, gy + 0.77);
+          if (h > 0.55) {
+            const inward = -Math.sign(dq) * 0.1;
+            car(g, col + (horiz ? 0 : inward), row + (horiz ? inward : 0), horiz, CAR_COLORS[Math.floor(h * 97) % CAR_COLORS.length]);
+          }
+        }
+      } else if (c.kind === "sidewalk") {
+        let dirX = 0;
+        let dirZ = 0;
+        for (const [dx, dz] of NEIGHBORS) {
+          if (at(col + dx, row + dz).kind === "road") {
+            dirX = dx;
+            dirZ = dz;
+            break;
+          }
+        }
+        if (dirX !== 0 || dirZ !== 0) {
+          if (mod(gx * 3 + gy * 7, 16) === 0) streetlight(g, col, row, dirX, dirZ);
+          else if (mod(gx * 5 + gy * 3, 11) === 0 && hash2(gx, gy) > 0.3) tree(g, col, row, CROWNS[Math.floor(hash2(gy, gx) * 97) % CROWNS.length], 1);
+        }
+      } else if (c.kind === "lot" && c.park) {
+        const h = hash2(gx + 5.5, gy + 1.1);
+        if (h > 0.9) tree(g, col, row, CROWNS[Math.floor(h * 971) % CROWNS.length], 1.3);
+      }
     }
   }
-  lastX = -99;
-  for (let x = S + 2; x < W - 3; x += 1) {
-    if (x - lastX < 6) continue;
-    const h = hash2(gx0 + x, gz0 + 8.9);
-    if (h > 0.6) {
-      car(g, x, roadLo + 1.2, true, CAR_COLORS[Math.floor(h * 71) % CAR_COLORS.length]);
-      lastX = x;
-    }
-  }
-  let lastZ = -99;
-  for (let z = S + 2; z < H - 2; z += 1) {
-    if (z - lastZ < 5) continue;
-    const h = hash2(gx0 + 2.7, gz0 + z);
-    if (h > 0.5) {
-      car(g, roadHi - 1.2, z, false, CAR_COLORS[Math.floor(h * 89) % CAR_COLORS.length]);
-      lastZ = z;
-    }
-  }
+
   const merged = mergeByMaterial(g);
   merged.position.set(offsetX * T, 0, offsetZ * T);
   return merged;
