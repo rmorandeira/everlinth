@@ -1,39 +1,49 @@
-// Círculo de visión: en pantalla, un círculo centrado en el jugador dentro del cual
-// desaparecen SOLO las partes de edificios y elementos altos que están entre la
-// cámara y el jugador (más cerca de la cámara que él). Lo que queda detrás del
-// jugador, y el suelo, nunca se tocan. Borde suave (tramado).
+// Área del personaje sin obstrucciones, sin dejar de ver los edificios: todo lo que
+// se interpone entre la cámara (el punto de vista del jugador) y el suelo alrededor
+// del personaje (un radio en metros reales) se vuelve TRANSLÚCIDO, no se borra.
 //
-// Se inyecta en el shader de los materiales afectados (onBeforeCompile) y usa
-// transparencia por tramado (Bayer 4×4 + discard): el material sigue siendo opaco
-// (escribe profundidad, sin problemas de orden) y las sombras no cambian.
+// Para cada fragmento de un material afectado se calcula dónde toca el suelo el
+// rayo de visión que pasa por él (cámara ortográfica: todos los rayos van en la
+// misma dirección). Si ese punto cae dentro del área del personaje, el fragmento
+// está tapando esa área → se aclara. Así solo se tocan los trozos de edificio que
+// estorban de verdad; lo que está al lado o detrás del personaje queda intacto.
+//
+// Se inyecta en el shader (onBeforeCompile) con transparencia por tramado (Bayer
+// 4×4 + discard): el material sigue siendo opaco (escribe profundidad, sin problemas
+// de orden entre edificios) y las sombras no cambian.
 import * as THREE from "three";
 
 const uniforms = {
-  uCutCenter: { value: new THREE.Vector2(0, 0) }, // jugador en píxeles del búfer
-  uCutRadius: { value: 100 }, // radio en píxeles
-  uCutDepth: { value: 50 }, // distancia del jugador a la cámara (vista)
+  uCutChar: { value: new THREE.Vector2(0, 0) }, // personaje en el suelo (x, z) en unidades de render
+  uCutRadius: { value: 4 }, // radio del área (unidades de render; 1 = 3 m)
+  uCutViewDir: { value: new THREE.Vector3(0, -1, 0) }, // dirección de visión (cámara → escena)
+  uCutCamWorld: { value: new THREE.Matrix4() }, // matriz de mundo de la cámara (vista → mundo)
+  uCutKeep: { value: 0.3 }, // opacidad que conserva lo que tapa el área
 };
 
 const DECL = /* glsl */ `
-uniform vec2 uCutCenter;
+uniform vec2 uCutChar;
 uniform float uCutRadius;
-uniform float uCutDepth;
+uniform vec3 uCutViewDir;
+uniform mat4 uCutCamWorld;
+uniform float uCutKeep;
 `;
 
 const BODY = /* glsl */ `
 {
-  float dist = length(gl_FragCoord.xy - uCutCenter);
-  // 0 fuera del círculo, 1 dentro (borde suave del 30 %)
-  float inside = 1.0 - smoothstep(uCutRadius * 0.7, uCutRadius, dist);
-  // solo lo que está delante del jugador (más cerca de la cámara), con transición
-  float front = smoothstep(0.15, 0.9, uCutDepth - vViewPosition.z);
-  float cut = inside * front;
-  if (cut > 0.001) {
-    int bx = int(mod(gl_FragCoord.x, 4.0));
-    int by = int(mod(gl_FragCoord.y, 4.0));
-    float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    float keep = 1.0 - cut * 0.97;
-    if (keep < (bayer[bx + by * 4] + 0.5) / 16.0) discard;
+  vec3 wp = (uCutCamWorld * vec4(-vViewPosition, 1.0)).xyz;
+  if (wp.y > 0.12) {
+    // punto del suelo que este fragmento tapa (siguiendo el rayo de visión)
+    vec2 g = wp.xz - uCutViewDir.xz * (wp.y / uCutViewDir.y);
+    float d = length(g - uCutChar);
+    float cut = 1.0 - smoothstep(uCutRadius * 0.65, uCutRadius, d);
+    if (cut > 0.001) {
+      int bx = int(mod(gl_FragCoord.x, 4.0));
+      int by = int(mod(gl_FragCoord.y, 4.0));
+      float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+      float keep = mix(1.0, uCutKeep, cut);
+      if (keep < (bayer[bx + by * 4] + 0.5) / 16.0) discard;
+    }
   }
 }
 `;
@@ -58,7 +68,7 @@ function patch(mat: THREE.Material): void {
   mat.needsUpdate = true;
 }
 
-// Aplica el recorte a todos los materiales de un objeto (edificio, farola, árbol…).
+// Aplica el efecto a todos los materiales de un objeto (edificio, farola, árbol…).
 export function applyCutaway(obj: THREE.Object3D): void {
   obj.traverse((o) => {
     const m = (o as THREE.Mesh).material;
@@ -72,13 +82,10 @@ export function applyCutawayToMaterial(m: THREE.Material): void {
   patch(m);
 }
 
-// Cada frame: jugador en pantalla (píxeles del búfer), su profundidad y el radio
-// (fracción de la altura del búfer).
-const tmp = new THREE.Vector3();
-export function updateCutaway(camera: THREE.Camera, playerX: number, playerZ: number, bufferW: number, bufferH: number, radiusFrac: number): void {
-  tmp.set(playerX, 0.35, playerZ).applyMatrix4(camera.matrixWorldInverse);
-  uniforms.uCutDepth.value = -tmp.z;
-  tmp.set(playerX, 0.28, playerZ).project(camera); // centro de la figura (≈ media altura)
-  uniforms.uCutCenter.value.set((tmp.x * 0.5 + 0.5) * bufferW, (tmp.y * 0.5 + 0.5) * bufferH);
-  uniforms.uCutRadius.value = radiusFrac * bufferH;
+// Cada frame: posición del personaje, radio del área (unidades de render) y cámara.
+export function updateCutaway(camera: THREE.Camera, charX: number, charZ: number, radius: number): void {
+  uniforms.uCutChar.value.set(charX, charZ);
+  uniforms.uCutRadius.value = radius;
+  camera.getWorldDirection(uniforms.uCutViewDir.value);
+  uniforms.uCutCamWorld.value.copy(camera.matrixWorld);
 }

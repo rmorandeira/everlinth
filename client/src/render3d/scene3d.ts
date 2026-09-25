@@ -86,13 +86,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const lighting = createLighting3D(scene);
 
   const iso = createIsoCamera();
-  const bufSize = new THREE.Vector2();
-  // Radio del círculo de visión (fracción de la altura de pantalla): solo lo que tapa
-  // al propio jugador desde la cámara (su figura y un pequeño margen).
-  const CUT_RADIUS = 0.075; // ≈ la figura del jugador y un pequeño margen
-  const CUT_RADIUS_COMBAT = 0.075;
-  let cutRadius = CUT_RADIUS;
-  let combatT = 0;
+  // Área del personaje que se ve siempre sin obstrucciones (lo que la tapa se vuelve
+  // translúcido, ver cutaway3d.ts): radio en unidades de render (4 = 12 m).
+  const CHAR_AREA_RADIUS = 4;
   const gunFx = createGunFx(scene);
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
@@ -371,7 +367,6 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     const l = Math.hypot(dx, dz);
     if (l < 1e-6) return;
     gunFx.fire(tileX * T, tileZ * T, dx / l, dz / l);
-    combatT = 1.5;
   }
   function gunImpact(tileX: number, tileZ: number): void {
     gunFx.impact(tileX * T, tileZ * T);
@@ -413,12 +408,8 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     gunFx.update(dt);
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
-    // Círculo de visión alrededor del jugador (ver cutaway3d.ts).
-    combatT = Math.max(0, combatT - dt);
-    const goalR = combatT > 0 ? CUT_RADIUS_COMBAT : CUT_RADIUS;
-    cutRadius += (goalR - cutRadius) * (1 - Math.exp(-4 * dt));
-    renderer.getDrawingBufferSize(bufSize);
-    updateCutaway(iso.camera, playerX, playerZ, bufSize.x, bufSize.y, cutRadius);
+    // Área del personaje sin obstrucciones (ver cutaway3d.ts).
+    updateCutaway(iso.camera, playerX, playerZ, CHAR_AREA_RADIUS);
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
