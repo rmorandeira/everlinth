@@ -83,10 +83,35 @@ function buildLimb(sideX: number, pivotY: number, geo: THREE.BoxGeometry, mat: T
   return pivot;
 }
 
+// Silueta a través de las paredes: copia de cada pieza con un material que solo se
+// pinta donde la figura está TAPADA (prueba de profundidad invertida), en un color
+// plano semitransparente. Así nunca se pierde de vista al jugador ni a los zombis.
+const silhouetteCache = new Map<number, THREE.MeshBasicMaterial>();
+function silhouetteMaterial(color: number): THREE.MeshBasicMaterial {
+  let m = silhouetteCache.get(color);
+  if (!m) {
+    m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false, depthFunc: THREE.GreaterDepth, fog: false });
+    silhouetteCache.set(color, m);
+  }
+  return m;
+}
+function addSilhouettes(root: THREE.Object3D, color: number): void {
+  const parts: THREE.Mesh[] = [];
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh && !(o as unknown as THREE.Sprite).isSprite && m.geometry !== shadowGeo) parts.push(m);
+  });
+  for (const p of parts) {
+    const ghost = new THREE.Mesh(p.geometry, silhouetteMaterial(color));
+    ghost.renderOrder = 10; // después de la escena opaca
+    p.add(ghost);
+  }
+}
+
 const gunGeo = new THREE.BoxGeometry(0.07, 0.09, 0.5);
 const gunMat = new THREE.MeshLambertMaterial({ color: 0x23262b });
 
-function buildRig(color: number, label?: string, armed = false): Rig {
+function buildRig(color: number, label?: string, armed = false, silhouette?: number): Rig {
   const root = new THREE.Group();
   root.scale.setScalar(FIGURE_SCALE);
 
@@ -126,6 +151,7 @@ function buildRig(color: number, label?: string, armed = false): Rig {
   root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh && !(o as THREE.Sprite).isSprite && o !== shadow) o.castShadow = true;
   });
+  if (silhouette !== undefined) addSilhouettes(root, silhouette);
 
   return { root, legL, legR, armL, armR, phase: 0, lastX: 0, lastZ: 0, facing: 0 };
 }
@@ -145,6 +171,8 @@ export interface FigureEntity {
   z: number;
   color: number;
   label?: string;
+  /** Color de su silueta cuando queda tapada (sin silueta si no se da). */
+  silhouette?: number;
   /** Lleva ametralladora (se dibuja en la mano). */
   armed?: boolean;
   /** Si se da, la figura mira ahí (ángulo atan2(dx,dz)) en vez de hacia donde camina. */
@@ -168,7 +196,7 @@ export function createFigureManager(): FigureManager {
       seen.add(e.id);
       let rig = rigs.get(e.id);
       if (!rig) {
-        rig = buildRig(e.color, e.label, e.armed);
+        rig = buildRig(e.color, e.label, e.armed, e.silhouette);
         rig.lastX = e.x;
         rig.lastZ = e.z;
         rigs.set(e.id, rig);

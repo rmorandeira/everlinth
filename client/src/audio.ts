@@ -33,6 +33,7 @@ export function unlockAudio(): void {
     master.gain.value = 0.8;
     master.connect(ctx.destination);
     void loadAll();
+    loadGun();
   } else if (ctx.state === "suspended") {
     void ctx.resume();
   }
@@ -50,4 +51,56 @@ export function playStep(volume = 1): void {
   g.gain.value = volume * (0.75 + Math.random() * 0.25);
   src.connect(g).connect(master);
   src.start();
+}
+
+// ---- Ametralladora (Sounds/machinegun.mp3 → public/sounds/machinegun.mp3) ----
+// La grabación es una ráfaga con un disparo cada ~85 ms (casi la cadencia del arma,
+// GUN_FIRE_MS) seguida de la cola de eco. Cada disparo del juego reproduce uno de los
+// golpes de la ráfaga (al azar), y al dejar de disparar suena la cola.
+const GUN_SHOTS = [0.025, 0.105, 0.19, 0.28, 0.36]; // inicio de cada golpe (s)
+const SHOT_LEN = 0.11;
+const TAIL_START = 0.86;
+let gun: AudioBuffer | null = null;
+let gunLoading = false;
+
+function loadGun(): void {
+  if (!ctx || gun || gunLoading) return;
+  gunLoading = true;
+  const c = ctx;
+  fetch("/sounds/machinegun.mp3")
+    .then((r) => r.arrayBuffer())
+    .then((ab) => c.decodeAudioData(ab))
+    .then((buf) => {
+      gun = buf;
+    })
+    .catch((e) => console.warn("Sonido de ametralladora no cargado:", e));
+}
+
+function playSlice(offset: number, dur: number, volume: number, rate: number, fadeIn: number, fadeOut: number): void {
+  if (!ctx || !master || !gun) return;
+  const src = ctx.createBufferSource();
+  src.buffer = gun;
+  src.playbackRate.value = rate;
+  const g = ctx.createGain();
+  const t = ctx.currentTime;
+  const real = dur / rate;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(volume, t + fadeIn);
+  g.gain.setValueAtTime(volume, t + Math.max(fadeIn, real - fadeOut));
+  g.gain.linearRampToValueAtTime(0, t + real);
+  src.connect(g).connect(master);
+  src.start(t, offset, dur);
+}
+
+// volume 0..1 (los disparos de otros jugadores, atenuados por distancia).
+export function playGunshot(volume = 1): void {
+  loadGun();
+  const off = GUN_SHOTS[Math.floor(Math.random() * GUN_SHOTS.length)];
+  playSlice(off, SHOT_LEN, volume, 0.96 + Math.random() * 0.08, 0.002, 0.03);
+}
+
+export function playGunTail(volume = 1): void {
+  loadGun();
+  if (!gun) return;
+  playSlice(TAIL_START, gun.duration - TAIL_START, volume * 0.9, 1, 0.01, 0.35);
 }

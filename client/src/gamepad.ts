@@ -4,6 +4,7 @@ const DEADZONE = 0.35;
 const ATTACK_BUTTON = 0; // A / Cruz
 const PICKUP_BUTTON = 2; // X / Cuadrado
 export const START_BUTTON = 9; // Start / Options: confirma formularios (login)
+const FIRE_BUTTON = 11; // R3 (pulsar el stick derecho): disparo, mantenido = ráfaga
 
 // Mapeo estándar de la Web Gamepad API (independiente de la marca real del
 // mando): sirve para que la UI muestre "(A)", "(Start)"... entre paréntesis
@@ -27,7 +28,6 @@ export const GAMEPAD_BUTTON_LABELS: Record<number, string> = {
   15: "→",
 };
 
-const CURSOR_SPEED = 900; // px/seg del cursor al fondo del recorrido del stick derecho
 
 // Mando Bluetooth/USB vía Web Gamepad API: no hace falta ninguna librería, funciona
 // en cualquier navegador Chromium (incluye Chromecast con Google TV / Android TV).
@@ -37,13 +37,15 @@ export function setupGamepad(
   onAttack: () => void,
   onPickup: () => void,
   onStart: () => void,
-  onRightStick: (dx: number, dy: number) => void,
-  onConnectedChange: (connected: boolean) => void
+  onRightStick: (x: number, y: number, amount: number) => void,
+  onConnectedChange: (connected: boolean) => void,
+  onFire: (held: boolean) => void = () => {}
 ): () => void {
   let dirs: InputState = { N: false, S: false, E: false, W: false };
   let prevAttack = false;
   let prevPickup = false;
   let prevStart = false;
+  let prevFire = false;
   let prevConnected = false;
   let lastTime = performance.now();
   let rafId = 0;
@@ -88,17 +90,21 @@ export function setupGamepad(
       if (start && !prevStart) onStart();
       prevStart = start;
 
-      // Stick derecho mueve el cursor (apuntado de la linterna, selección de UI):
-      // se manda como delta ya escalado por dt, no como eje crudo, así quien
-      // recibe esto solo tiene que sumarlo a la posición actual del cursor.
+      const fire = gp.buttons[FIRE_BUTTON]?.pressed === true;
+      if (fire !== prevFire) onFire(fire);
+      prevFire = fire;
+
+      // Stick derecho: apuntado directo (doble stick). Se manda la dirección unitaria
+      // en pantalla y cuánto está inclinado (0..1, ya sin zona muerta): quien lo recibe
+      // coloca el punto de mira en esa dirección, al instante.
       const rsx = gp.axes[2] ?? 0;
       const rsy = gp.axes[3] ?? 0;
       const mag = Math.hypot(rsx, rsy);
       if (mag > DEADZONE) {
-        const eased = (mag - DEADZONE) / (1 - DEADZONE);
-        const speed = (CURSOR_SPEED * eased) / mag;
-        onRightStick(rsx * speed * dt, rsy * speed * dt);
+        const amount = Math.min(1, (mag - DEADZONE) / (1 - DEADZONE));
+        onRightStick(rsx / mag, rsy / mag, amount);
       }
+      void dt;
     }
 
     rafId = requestAnimationFrame(poll);

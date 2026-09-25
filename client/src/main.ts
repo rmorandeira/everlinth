@@ -23,7 +23,7 @@ import { WeatherSystem, pickWeather } from "./render/weather.js";
 import { drawCursorDot } from "./render/cursor.js";
 import { createScene3D } from "./render3d/scene3d.js";
 import { createMinimap, type MinimapDot } from "./render/minimap.js";
-import { unlockAudio, playStep } from "./audio.js";
+import { unlockAudio, playStep, playGunshot, playGunTail } from "./audio.js";
 import { MONSTER_COLORS, MONSTER_COLOR_DEFAULT, type FigureEntity } from "./render3d/figures3d.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
@@ -124,6 +124,8 @@ const zombieTargets = new Map<number, { gx: number; gy: number }>();
 const zombieDisplay = new Map<number, { gx: number; gy: number }>();
 const ZOMBIE_COLOR = 0x5b8f45;
 let aimAngle = 0;
+let lastLocalShot = 0;
+let tailPending = false;
 const STRIDE = 1.1; // tiles entre pisadas: ~7 pisadas/s a la velocidad del jugador (carrera)
 let strideAcc = 0;
 let firing = false;
@@ -235,6 +237,15 @@ function handleServerMessage(msg: ServerMessage): void {
         const ox = currentScreen.sx * SCREEN_WIDTH;
         const oy = currentScreen.sy * SCREEN_HEIGHT;
         scene3d.addTracer(msg.from.gx - ox, msg.from.gy - oy, msg.to.gx - ox, msg.to.gy - oy);
+        scene3d.gunImpact(msg.to.gx - ox, msg.to.gy - oy);
+        if (you) {
+          // Disparo de otro jugador: su fogonazo y su sonido, atenuado con la distancia.
+          const d = Math.hypot(msg.from.gx - (ox + youDisplay.x), msg.from.gy - (oy + youDisplay.y));
+          if (d > 1.5) {
+            scene3d.gunFire(msg.from.gx - ox, msg.from.gy - oy, msg.to.gx - msg.from.gx, msg.to.gy - msg.from.gy);
+            playGunshot(Math.max(0.08, 0.8 / (1 + d / 12)));
+          }
+        }
       }
       break;
     case "visionSettings":
@@ -372,6 +383,11 @@ function fireGun(): void {
   const dz = g.z - youDisplay.y;
   if (Math.hypot(dx, dz) < 0.05) return;
   conn?.send({ type: "shoot", dx, dz });
+  // Respuesta inmediata en local (sin esperar al servidor): sonido, fogonazo y humo.
+  playGunshot(0.9);
+  scene3d.gunFire(youDisplay.x, youDisplay.y, dx, dz);
+  lastLocalShot = performance.now();
+  tailPending = true;
 }
 gameEl.addEventListener("mousedown", (ev) => {
   if (ev.button === 0) firing = true;
@@ -407,11 +423,24 @@ function handleGamepadStart(): void {
   if (!loginEl.classList.contains("hidden")) loginForm.requestSubmit();
 }
 
-function handleRightStick(dx: number, dy: number): void {
+// Apuntado con el stick derecho: el punto de mira gira en círculo alrededor del
+// jugador (centrado en horizontal y al 40 % desde abajo), a radio fijo, en la
+// dirección del stick: instantáneo y preciso. El ratón lo mueve libremente.
+function handleRightStick(x: number, y: number, amount: number): void {
+  const px = sceneCanvas.width / 2;
+  const py = sceneCanvas.height * 0.6;
+  const r = sceneCanvas.height * 0.28;
+  void amount;
   cursorPx = {
-    x: Math.max(0, Math.min(sceneCanvas.width, cursorPx.x + dx)),
-    y: Math.max(0, Math.min(sceneCanvas.height, cursorPx.y + dy)),
+    x: Math.max(0, Math.min(sceneCanvas.width, px + x * r)),
+    y: Math.max(0, Math.min(sceneCanvas.height, py + y * r)),
   };
+}
+
+let padFiring = false;
+function handleGamepadFire(held: boolean): void {
+  if (!loginEl.classList.contains("hidden")) return;
+  padFiring = held;
 }
 
 function resetToLogin(): void {
@@ -449,7 +478,7 @@ setupInput(
   sendPickup
 );
 
-setupGamepad(handleGamepadDirs, handleGamepadAttack, handleGamepadPickup, handleGamepadStart, handleRightStick, handleGamepadConnectedChange);
+setupGamepad(handleGamepadDirs, handleGamepadAttack, handleGamepadPickup, handleGamepadStart, handleRightStick, handleGamepadConnectedChange, handleGamepadFire);
 
 let lastTime = performance.now();
 function frame(now: number): void {
@@ -487,11 +516,11 @@ function frame(now: number): void {
     minimap.update(currentScreen, currentNeighbors);
 
     const entities: FigureEntity[] = [
-      { id: you.username, x: youDisplay.x, z: youDisplay.y, color: 0xf0f0f0, label: you.username, armed: true, facing: aimAngle },
+      { id: you.username, x: youDisplay.x, z: youDisplay.y, color: 0xf0f0f0, label: you.username, armed: true, facing: aimAngle, silhouette: 0xffffff },
     ];
     for (const [username, p] of otherPlayers) {
       const d = otherDisplay.get(username)!;
-      entities.push({ id: username, x: d.x, z: d.y, color: 0x3ba0e0, label: username, armed: true });
+      entities.push({ id: username, x: d.x, z: d.y, color: 0x3ba0e0, label: username, armed: true, silhouette: 0x3ba0e0 });
     }
     const zox = currentScreen.sx * SCREEN_WIDTH;
     const zoy = currentScreen.sy * SCREEN_HEIGHT;
@@ -501,7 +530,7 @@ function frame(now: number): void {
         d.gx = lerpTowards(d.gx, t.gx, dt, 14);
         d.gy = lerpTowards(d.gy, t.gy, dt, 14);
       }
-      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR });
+      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR, silhouette: 0xff3b3b });
     }
     for (const m of currentScreen.monsters) {
       if (!m.alive) continue;
@@ -517,7 +546,11 @@ function frame(now: number): void {
     // Apuntado: el jugador mira hacia el cursor; con el botón mantenido, ráfaga.
     const aim = scene3d.cursorToGround(cursorNdcX, cursorNdcY);
     if (aim) aimAngle = Math.atan2(aim.x - youDisplay.x, aim.z - youDisplay.y);
-    if (firing && now - lastShotAt >= 90) {
+    if (tailPending && !firing && !padFiring && now - lastLocalShot > 110) {
+      tailPending = false;
+      playGunTail(0.8);
+    }
+    if ((firing || padFiring) && now - lastShotAt >= 90) {
       lastShotAt = now;
       fireGun();
     }

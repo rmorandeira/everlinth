@@ -16,7 +16,8 @@ import { buildTreeResources, instantiateTree, resolveTreeInstances, type TreeRes
 import { buildBuilding, disposeBuildings, initBuildingTextures, buildingTexturesReady } from "./buildings3d.js";
 import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
-import { createOcclusion3D } from "./occlusion3d.js";
+import { applyCutaway, applyCutawayToMaterial, updateCutaway } from "./cutaway3d.js";
+import { createGunFx } from "./gunfx3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityLayer } from "./city3d.js";
 import { initModels, modelsReady } from "./models3d.js";
@@ -64,6 +65,10 @@ export interface Scene3D {
   cameraYaw(): number;
   /** Punto del suelo (plano y=0) bajo el cursor, en coordenadas de mundo. */
   cursorToGround(ndcX: number, ndcY: number): { x: number; z: number } | null;
+  /** Fogonazo, luz y humo de un disparo desde (tileX,tileZ) en la dirección (dx,dz) (tiles, locales a la sala). */
+  gunFire(tileX: number, tileZ: number, dx: number, dz: number): void;
+  /** Chispa y luz del impacto de una bala (tiles, locales a la sala). */
+  gunImpact(tileX: number, tileZ: number): void;
   /** Trazador de bala efímero entre dos puntos del suelo. */
   addTracer(x0: number, z0: number, x1: number, z1: number): void;
   render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void;
@@ -81,7 +86,14 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const lighting = createLighting3D(scene);
 
   const iso = createIsoCamera();
-  const occlusion = createOcclusion3D();
+  const bufSize = new THREE.Vector2();
+  // Radio del círculo de visión (fracción de la altura de pantalla); crece un poco al
+  // disparar para ver mejor la zona de combate.
+  const CUT_RADIUS = 0.2;
+  const CUT_RADIUS_COMBAT = 0.26;
+  let cutRadius = CUT_RADIUS;
+  let combatT = 0;
+  const gunFx = createGunFx(scene);
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
   let aspect = 1;
@@ -161,7 +173,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
             const building = buildBuilding(gx0 + col, gz0 + row, w, d, urban);
             building.position.set((x + (w - 1) / 2) * T, 0, (z + (d - 1) / 2) * T);
             obstacles.add(building);
-            occlusion.register(building);
+            applyCutaway(building);
           }
           continue;
         }
@@ -219,7 +231,6 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     }
     if (treeGroup) scene.remove(treeGroup);
     disposeBuildings();
-    occlusion.clear();
 
     const positions: Array<{ x: number; z: number; tile: TileType }> = [];
     const obstacles = new THREE.Group();
@@ -242,7 +253,14 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     const cityLayer = cityDatas.length > 0 ? buildCityLayer(cityDatas, screen.sx * SCREEN_WIDTH, screen.sy * SCREEN_HEIGHT) : null;
     if (cityLayer) {
       obstacles.add(cityLayer.group);
-      for (const bg of cityLayer.buildings) occlusion.register(bg);
+      for (const bg of cityLayer.buildings) applyCutaway(bg);
+      // Mobiliario alto de los kits de Kenney (farolas, semáforos, árboles, camiones):
+      // sus materiales vienen marcados en models3d. El suelo y las marcas no se recortan.
+      cityLayer.group.traverse((o) => {
+        const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        if (!m) return;
+        for (const mm of Array.isArray(m) ? m : [m]) if (mm.userData.cutaway) applyCutawayToMaterial(mm);
+      });
     }
 
     const mesh = new THREE.InstancedMesh(tileGeo, tileMat, positions.length);
@@ -349,6 +367,16 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   let camStep = 0;
   let yaw = BASE_YAW;
   const PLAYER_SCREEN_Y = 0.4; // fracción de la altura desde el borde inferior
+  function gunFire(tileX: number, tileZ: number, dx: number, dz: number): void {
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-6) return;
+    gunFx.fire(tileX * T, tileZ * T, dx / l, dz / l);
+    combatT = 1.5;
+  }
+  function gunImpact(tileX: number, tileZ: number): void {
+    gunFx.impact(tileX * T, tileZ * T);
+  }
+
   function rotateCamera(step: number): void {
     camStep = (((camStep + step) % 4) + 4) % 4;
   }
@@ -359,8 +387,6 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     return yaw;
   }
 
-  const towardCamera = new THREE.Vector3();
-  const playerVec = new THREE.Vector3();
   function render(playerTileX: number, playerTileZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void {
     const playerX = playerTileX * T;
     const playerZ = playerTileZ * T;
@@ -384,25 +410,15 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     iso.camera.updateMatrixWorld();
     animateWater(time);
     updateTracers(dt);
+    gunFx.update(dt);
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
-    playerVec.set(playerX, 0, playerZ);
-    iso.camera.getWorldDirection(towardCamera).negate();
-    // Vista despejada: el jugador (con holgura amplia) y la línea hasta donde apunta
-    // (hasta el alcance del arma) no pueden quedar tapados por ningún edificio.
-    const sight: Array<{ p: THREE.Vector3; margin: number }> = [{ p: playerVec.clone(), margin: 1.4 }];
-    groundRaycaster.setFromCamera(ndcTmp.set(flashlight.cursorNdcX, flashlight.cursorNdcY), iso.camera);
-    if (groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) {
-      const dx = groundHit.x - playerX;
-      const dz = groundHit.z - playerZ;
-      const len = Math.min(Math.hypot(dx, dz), GUN_RANGE * T * 0.6);
-      if (len > 0.5) {
-        const ux = dx / Math.hypot(dx, dz);
-        const uz = dz / Math.hypot(dx, dz);
-        for (let d = 1.5; d <= len; d += 1.5) sight.push({ p: new THREE.Vector3(playerX + ux * d, 0, playerZ + uz * d), margin: 0.35 });
-      }
-    }
-    occlusion.update(sight, towardCamera, dt);
+    // Círculo de visión alrededor del jugador (ver cutaway3d.ts).
+    combatT = Math.max(0, combatT - dt);
+    const goalR = combatT > 0 ? CUT_RADIUS_COMBAT : CUT_RADIUS;
+    cutRadius += (goalR - cutRadius) * (1 - Math.exp(-4 * dt));
+    renderer.getDrawingBufferSize(bufSize);
+    updateCutaway(iso.camera, playerX, playerZ, bufSize.x, bufSize.y, cutRadius);
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
@@ -424,7 +440,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
         if (o.userData.ownGeometry) owned++;
       }
     });
-    return { meshes, instances, textured, owned, treeMeshes, ...occlusion.debug() };
+    return { meshes, instances, textured, owned, treeMeshes };
   }
 
   function dispose(): void {
@@ -432,5 +448,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, render, dispose, stats };
+  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, gunFire, gunImpact, render, dispose, stats };
 }

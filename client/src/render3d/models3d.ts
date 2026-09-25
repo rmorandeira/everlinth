@@ -52,6 +52,7 @@ function normalize(root: THREE.Object3D): ModelEntry {
       const std = mat as THREE.MeshStandardMaterial;
       if (std.map) std.map.anisotropy = 4;
       std.shadowSide = THREE.DoubleSide;
+      std.userData.cutaway = true; // se recorta en el círculo de visión (ver cutaway3d)
     }
   });
   return { object: g, size };
