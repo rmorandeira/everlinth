@@ -90,6 +90,10 @@ export interface Scene3D {
   updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void;
   updateFigures(entities: FigureEntity[], time: number): void;
   setCameraMood(mood: CameraMood, holdSeconds: number): void;
+  /** Punto del suelo (plano y=0) bajo el cursor, en coordenadas de mundo. */
+  cursorToGround(ndcX: number, ndcY: number): { x: number; z: number } | null;
+  /** Trazador de bala efímero entre dos puntos del suelo. */
+  addTracer(x0: number, z0: number, x1: number, z1: number): void;
   render(playerX: number, playerZ: number, time: number, dt: number, vision: VisionFogSettings, flashlight: FlashlightParams, heat: number): void;
   dispose(): void;
 }
@@ -289,6 +293,44 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     figures.update(entities, time);
   }
 
+  const groundRaycaster = new THREE.Raycaster();
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const groundHit = new THREE.Vector3();
+  const ndcTmp = new THREE.Vector2();
+  function cursorToGround(ndcX: number, ndcY: number): { x: number; z: number } | null {
+    iso.camera.updateMatrixWorld();
+    groundRaycaster.setFromCamera(ndcTmp.set(ndcX, ndcY), iso.camera);
+    if (!groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) return null;
+    return { x: groundHit.x, z: groundHit.z };
+  }
+
+  const tracerGeo = new THREE.BoxGeometry(1, 0.035, 0.035);
+  const tracers: Array<{ mesh: THREE.Mesh; life: number }> = [];
+  const TRACER_LIFE = 0.11;
+  function addTracer(x0: number, z0: number, x1: number, z1: number): void {
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    if (len < 0.05) return;
+    const mesh = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, fog: false }));
+    mesh.scale.x = len;
+    mesh.position.set((x0 + x1) / 2, 0.38, (z0 + z1) / 2);
+    mesh.rotation.y = -Math.atan2(z1 - z0, x1 - x0);
+    scene.add(mesh);
+    tracers.push({ mesh, life: TRACER_LIFE });
+  }
+  function updateTracers(dt: number): void {
+    for (let i = tracers.length - 1; i >= 0; i--) {
+      const t = tracers[i];
+      t.life -= dt;
+      if (t.life <= 0) {
+        scene.remove(t.mesh);
+        (t.mesh.material as THREE.Material).dispose();
+        tracers.splice(i, 1);
+      } else {
+        (t.mesh.material as THREE.MeshBasicMaterial).opacity = t.life / TRACER_LIFE;
+      }
+    }
+  }
+
   function setCameraMood(mood: CameraMood, holdSeconds: number): void {
     cameraRig.pulse(mood, holdSeconds);
   }
@@ -304,6 +346,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     // anterior (o ninguna, en el primer frame).
     iso.camera.updateMatrixWorld();
     animateWater(time);
+    updateTracers(dt);
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
@@ -314,5 +357,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, setCameraMood, render, dispose };
+  return { renderer, resize, updateGround, updateFigures, setCameraMood, cursorToGround, addTracer, render, dispose };
 }

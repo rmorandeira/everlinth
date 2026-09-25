@@ -105,6 +105,13 @@ const otherPlayers = new Map<string, PlayerPublicState>();
 // aunque el servidor solo envíe actualizaciones a un tick fijo.
 let youDisplay = { x: 0, y: 0 };
 const otherDisplay = new Map<string, { x: number; y: number }>();
+// Zombis: posiciones GLOBALES (sala*tamaño + local), suavizadas entre snapshots.
+const zombieTargets = new Map<number, { gx: number; gy: number }>();
+const zombieDisplay = new Map<number, { gx: number; gy: number }>();
+const ZOMBIE_COLOR = 0x5b8f45;
+let aimAngle = 0;
+let firing = false;
+let lastShotAt = 0;
 
 function lerpTowards(current: number, target: number, dt: number, rate = 18): number {
   const t = 1 - Math.exp(-rate * dt);
@@ -199,6 +206,22 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     case "error":
       loginError.textContent = msg.message;
+      break;
+    case "zombies": {
+      zombieTargets.clear();
+      for (const z of msg.zombies) {
+        zombieTargets.set(z.id, { gx: z.gx, gy: z.gy });
+        if (!zombieDisplay.has(z.id)) zombieDisplay.set(z.id, { gx: z.gx, gy: z.gy });
+      }
+      for (const id of zombieDisplay.keys()) if (!zombieTargets.has(id)) zombieDisplay.delete(id);
+      break;
+    }
+    case "shot":
+      if (currentScreen) {
+        const ox = currentScreen.sx * SCREEN_WIDTH;
+        const oy = currentScreen.sy * SCREEN_HEIGHT;
+        scene3d.addTracer(msg.from.gx - ox, msg.from.gy - oy, msg.to.gx - ox, msg.to.gy - oy);
+      }
       break;
     case "visionSettings":
       // Cambios desde el backoffice: se aplican al momento, sin recargar.
@@ -306,8 +329,30 @@ function handleGamepadDirs(dirs: InputState): void {
 // disparado desde el único punto por el que pasan tanto teclado como mando.
 function sendAttack(): void {
   conn?.send({ type: "attack" });
+  fireGun();
   scene3d.setCameraMood("action", 0.6);
 }
+
+// Ametralladora: dispara hacia el punto del suelo bajo el cursor (botón izquierdo
+// del ratón, mantenido = ráfaga; el servidor limita la cadencia).
+function fireGun(): void {
+  if (!you) return;
+  const g = scene3d.cursorToGround((cursorPx.x / sceneCanvas.width) * 2 - 1, -(cursorPx.y / sceneCanvas.height) * 2 + 1);
+  if (!g) return;
+  const dx = g.x - youDisplay.x;
+  const dz = g.z - youDisplay.y;
+  if (Math.hypot(dx, dz) < 0.05) return;
+  conn?.send({ type: "shoot", dx, dz });
+}
+gameEl.addEventListener("mousedown", (ev) => {
+  if (ev.button === 0) firing = true;
+});
+window.addEventListener("mouseup", (ev) => {
+  if (ev.button === 0) firing = false;
+});
+window.addEventListener("blur", () => {
+  firing = false;
+});
 
 function sendPickup(): void {
   conn?.send({ type: "pickup" });
@@ -399,11 +444,21 @@ function frame(now: number): void {
     scene3d.updateGround(currentScreen, currentNeighbors, treeDefs);
 
     const entities: FigureEntity[] = [
-      { id: you.username, x: youDisplay.x, z: youDisplay.y, color: 0xf0f0f0, label: you.username },
+      { id: you.username, x: youDisplay.x, z: youDisplay.y, color: 0xf0f0f0, label: you.username, armed: true, facing: aimAngle },
     ];
     for (const [username, p] of otherPlayers) {
       const d = otherDisplay.get(username)!;
-      entities.push({ id: username, x: d.x, z: d.y, color: 0x3ba0e0, label: username });
+      entities.push({ id: username, x: d.x, z: d.y, color: 0x3ba0e0, label: username, armed: true });
+    }
+    const zox = currentScreen.sx * SCREEN_WIDTH;
+    const zoy = currentScreen.sy * SCREEN_HEIGHT;
+    for (const [id, d] of zombieDisplay) {
+      const t = zombieTargets.get(id);
+      if (t) {
+        d.gx = lerpTowards(d.gx, t.gx, dt, 14);
+        d.gy = lerpTowards(d.gy, t.gy, dt, 14);
+      }
+      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR });
     }
     for (const m of currentScreen.monsters) {
       if (!m.alive) continue;
@@ -416,6 +471,13 @@ function frame(now: number): void {
     // three.js, a partir del cursor ya trackeado en píxeles de canvas.
     const cursorNdcX = (cursorPx.x / sceneCanvas.width) * 2 - 1;
     const cursorNdcY = -(cursorPx.y / sceneCanvas.height) * 2 + 1;
+    // Apuntado: el jugador mira hacia el cursor; con el botón mantenido, ráfaga.
+    const aim = scene3d.cursorToGround(cursorNdcX, cursorNdcY);
+    if (aim) aimAngle = Math.atan2(aim.x - youDisplay.x, aim.z - youDisplay.y);
+    if (firing && now - lastShotAt >= 90) {
+      lastShotAt = now;
+      fireGun();
+    }
     scene3d.render(youDisplay.x, youDisplay.y, time, dt, visionSettings, { enabled: flashlightOn, cursorNdcX, cursorNdcY }, weather.getType() === "heat" ? 1 : 0);
   }
 

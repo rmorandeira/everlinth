@@ -83,7 +83,10 @@ function buildLimb(sideX: number, pivotY: number, geo: THREE.BoxGeometry, mat: T
   return pivot;
 }
 
-function buildRig(color: number, label?: string): Rig {
+const gunGeo = new THREE.BoxGeometry(0.07, 0.09, 0.5);
+const gunMat = new THREE.MeshLambertMaterial({ color: 0x23262b });
+
+function buildRig(color: number, label?: string, armed = false): Rig {
   const root = new THREE.Group();
   root.scale.setScalar(FIGURE_SCALE);
 
@@ -106,6 +109,12 @@ function buildRig(color: number, label?: string): Rig {
   const head = new THREE.Mesh(headGeo, mat);
   head.position.y = HEAD_Y;
   root.add(head);
+
+  if (armed) {
+    const gun = new THREE.Mesh(gunGeo, gunMat);
+    gun.position.set(0.12, SHOULDER_Y - 0.12, 0.26);
+    root.add(gun);
+  }
 
   if (label) {
     const sprite = new THREE.Sprite(labelMaterialFor(label));
@@ -136,6 +145,10 @@ export interface FigureEntity {
   z: number;
   color: number;
   label?: string;
+  /** Lleva ametralladora (se dibuja en la mano). */
+  armed?: boolean;
+  /** Si se da, la figura mira ahí (ángulo atan2(dx,dz)) en vez de hacia donde camina. */
+  facing?: number;
 }
 
 export interface FigureManager {
@@ -155,7 +168,7 @@ export function createFigureManager(): FigureManager {
       seen.add(e.id);
       let rig = rigs.get(e.id);
       if (!rig) {
-        rig = buildRig(e.color, e.label);
+        rig = buildRig(e.color, e.label, e.armed);
         rig.lastX = e.x;
         rig.lastZ = e.z;
         rigs.set(e.id, rig);
@@ -173,7 +186,7 @@ export function createFigureManager(): FigureManager {
       rig.lastZ = e.z;
 
       rig.root.position.set(e.x, 0, e.z);
-      rig.root.rotation.y = rig.facing;
+      rig.root.rotation.y = e.facing ?? rig.facing;
 
       const legSwing = Math.sin(rig.phase) * 0.5;
       const armSwing = Math.sin(rig.phase + Math.PI) * 0.4;

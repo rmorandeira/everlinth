@@ -9,15 +9,19 @@ import {
   PICKUP_RANGE,
   WORLD_MIN,
   WORLD_MAX,
+  ZOMBIE_MAX_HP,
+  ZOMBIE_VIEW_RANGE,
+  GUN_RANGE,
+  GUN_FIRE_MS,
   screenKey,
   type ClientMessage,
   type ServerMessage,
   type PlayerPrivateState,
   type PlayerPublicState,
-  type Direction,
   type ScreenData,
   type InputState,
   type NeighborTiles,
+  type ZombieState,
 } from "@roi/shared";
 import { getScreen, saveScreen, getPlayer, savePlayer, deletePlayer } from "./db.js";
 import { generateScreen } from "./worldgen.js";
@@ -29,6 +33,7 @@ interface Connection {
   socket: WebSocket;
   username: string | null;
   input: InputState;
+  lastShot: number;
 }
 
 function send(socket: WebSocket, msg: ServerMessage): void {
@@ -54,6 +59,9 @@ export class GameServer {
   private screenRooms = new Map<string, Set<Connection>>();
   private connByUsername = new Map<string, Connection>();
   private screenCache = new Map<string, ScreenData>();
+  private zombies: Array<ZombieState & { speed: number; hitCooldown: number }> = [];
+  private nextZombieId = 1;
+  private spawnTimer = 0;
 
   constructor() {
     setInterval(() => this.tick(), TICK_MS);
@@ -61,7 +69,7 @@ export class GameServer {
   }
 
   handleConnection(socket: WebSocket): void {
-    const conn: Connection = { socket, username: null, input: { ...NO_INPUT } };
+    const conn: Connection = { socket, username: null, input: { ...NO_INPUT }, lastShot: 0 };
     this.connections.add(conn);
 
     socket.on("message", (raw: Buffer) => {
@@ -109,6 +117,7 @@ export class GameServer {
     if (msg.type === "input") conn.input = msg.dirs;
     else if (msg.type === "attack") this.handleAttack(conn, player);
     else if (msg.type === "pickup") this.handlePickup(conn, player);
+    else if (msg.type === "shoot") this.handleShoot(conn, player, msg.dx, msg.dz);
   }
 
   private handleJoin(conn: Connection, usernameRaw: string): void {
@@ -215,15 +224,24 @@ export class GameServer {
     }
   }
 
-  private isBlocked(screen: ScreenData, x: number, y: number): boolean {
-    const tx = Math.floor(x);
-    const ty = Math.floor(y);
-    if (tx < 0 || tx >= SCREEN_WIDTH || ty < 0 || ty >= SCREEN_HEIGHT) return false;
+  // Colisión en coordenadas locales de la sala (sx,sy), pudiendo salirse de ella:
+  // las celdas fuera de rango se resuelven contra la sala vecina. Más allá del
+  // límite del mundo actúa un muro invisible.
+  private isBlockedAt(sx: number, sy: number, x: number, y: number): boolean {
+    const gx = Math.floor(x);
+    const gy = Math.floor(y);
+    const rsx = sx + Math.floor(gx / SCREEN_WIDTH);
+    const rsy = sy + Math.floor(gy / SCREEN_HEIGHT);
+    if (rsx < WORLD_MIN || rsx > WORLD_MAX || rsy < WORLD_MIN || rsy > WORLD_MAX) return true;
+    const { screen } = this.ensureScreenLoaded(rsx, rsy);
+    const tx = ((gx % SCREEN_WIDTH) + SCREEN_WIDTH) % SCREEN_WIDTH;
+    const ty = ((gy % SCREEN_HEIGHT) + SCREEN_HEIGHT) % SCREEN_HEIGHT;
     return BLOCKING_TILES.has(screen.tiles[ty][tx]);
   }
 
   private tick(): void {
     const dt = TICK_MS / 1000;
+    this.tickZombies(dt);
 
     for (const [username, conn] of this.connByUsername) {
       const player = this.players.get(username);
@@ -245,72 +263,31 @@ export class GameServer {
       const stepX = (dx / len) * PLAYER_SPEED * dt;
       const stepY = (dy / len) * PLAYER_SPEED * dt;
 
-      const { screen } = this.ensureScreenLoaded(player.sx, player.sy);
-
+      // Mundo continuo: x/y son coordenadas locales de la sala actual, pero las
+      // salas se colocan en una rejilla alineada con los ejes (igual que las dibuja
+      // el cliente), así que cruzar un borde es solo re-basar x/y en la sala vecina
+      // — la posición global no cambia ni un ápice. La colisión también mira los
+      // tiles de las salas vecinas, para poder andar sobre el borde sin atravesar
+      // obstáculos.
       const targetX = player.x + stepX;
-      if (targetX < 0 || targetX >= SCREEN_WIDTH || !this.isBlocked(screen, targetX, player.y)) {
-        player.x = targetX;
-      }
+      if (!this.isBlockedAt(player.sx, player.sy, targetX, player.y)) player.x = targetX;
       const targetY = player.y + stepY;
-      if (targetY < 0 || targetY >= SCREEN_HEIGHT || !this.isBlocked(screen, player.x, targetY)) {
-        player.y = targetY;
-      }
+      if (!this.isBlockedAt(player.sx, player.sy, player.x, targetY)) player.y = targetY;
 
       if (dx > 0) player.facing = "E";
       else if (dx < 0) player.facing = "W";
       else if (dy > 0) player.facing = "S";
       else if (dy < 0) player.facing = "N";
 
-      // Los bordes de la estancia son rectos EN PANTALLA (arriba/abajo/izq/dcha), no
-      // las esquinas del mundo. Como la cámara es isométrica, eso corresponde a un
-      // sistema de coordenadas rotado: s = x+y (eje norte-sur) y d = x-y (eje oeste-
-      // este). El movimiento relativo a pantalla cambia s y d de forma INDEPENDIENTE
-      // (arriba/abajo solo mueven s, izq/dcha solo mueven d), así que cruzar un borde
-      // no depende de tocar también el otro eje: se sale en línea recta, sin desvíos.
-      const sMax = SCREEN_WIDTH - 1 + (SCREEN_HEIGHT - 1);
-      const dMin = -(SCREEN_HEIGHT - 1);
-      const dMax = SCREEN_WIDTH - 1;
-
-      let s = player.x + player.y;
-      let d = player.x - player.y;
-
-      let crossedDir: Direction | null = null;
       let nsx = player.sx;
       let nsy = player.sy;
+      if (player.x < 0) { nsx -= 1; player.x += SCREEN_WIDTH; }
+      else if (player.x >= SCREEN_WIDTH) { nsx += 1; player.x -= SCREEN_WIDTH; }
+      if (player.y < 0) { nsy -= 1; player.y += SCREEN_HEIGHT; }
+      else if (player.y >= SCREEN_HEIGHT) { nsy += 1; player.y -= SCREEN_HEIGHT; }
 
-      if (s < 0) {
-        crossedDir = "N";
-        nsy -= 1;
-        s += sMax;
-      } else if (s > sMax) {
-        crossedDir = "S";
-        nsy += 1;
-        s -= sMax;
-      } else if (d < dMin) {
-        crossedDir = "W";
-        nsx -= 1;
-        d += dMax - dMin;
-      } else if (d > dMax) {
-        crossedDir = "E";
-        nsx += 1;
-        d -= dMax - dMin;
-      }
-
-      // Límite actual del mundo (400x400, provisional): más allá de esto no hay
-      // pantallas, así que el borde exterior actúa como un muro invisible.
-      const withinWorld = nsx >= WORLD_MIN && nsx <= WORLD_MAX && nsy >= WORLD_MIN && nsy <= WORLD_MAX;
-
-      if (crossedDir && !withinWorld) {
-        // Se queda pegado justo dentro del límite de su propia pantalla.
-        s = Math.min(Math.max(s, 0.001), sMax - 0.001);
-        d = Math.min(Math.max(d, dMin + 0.001), dMax - 0.001);
-        player.x = (s + d) / 2;
-        player.y = (s - d) / 2;
-        send(conn.socket, { type: "youUpdate", you: player });
-        this.broadcastToScreen(player.sx, player.sy, { type: "playerUpdate", player: toPublic(player) }, conn);
-      } else if (crossedDir) {
-        player.x = (s + d) / 2;
-        player.y = (s - d) / 2;
+      const crossed = nsx !== player.sx || nsy !== player.sy;
+      if (crossed) {
         const oldKey = screenKey({ sx: player.sx, sy: player.sy });
         this.leaveScreenRoom(conn, oldKey);
         this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username }, conn);
@@ -355,6 +332,127 @@ export class GameServer {
     }
     savePlayer(player);
     send(conn.socket, { type: "youUpdate", you: player });
+  }
+
+  private handleShoot(conn: Connection, player: PlayerPrivateState, dxRaw: number, dzRaw: number): void {
+    const now = Date.now();
+    if (now - conn.lastShot < GUN_FIRE_MS * 0.8) return;
+    if (!Number.isFinite(dxRaw) || !Number.isFinite(dzRaw)) return;
+    const len = Math.hypot(dxRaw, dzRaw);
+    if (len < 1e-6) return;
+    conn.lastShot = now;
+    const dx = dxRaw / len;
+    const dz = dzRaw / len;
+    const ox = player.sx * SCREEN_WIDTH + player.x;
+    const oy = player.sy * SCREEN_HEIGHT + player.y;
+
+    // Distancia hasta el primer obstáculo que bloquea el disparo.
+    let wall = GUN_RANGE;
+    for (let t = 0.3; t <= GUN_RANGE; t += 0.25) {
+      if (this.isBlockedAt(0, 0, ox + dx * t, oy + dz * t)) {
+        wall = t;
+        break;
+      }
+    }
+    // Primer zombi alcanzado a lo largo del rayo (radio de impacto 0.45).
+    let hit: (typeof this.zombies)[number] | null = null;
+    let hitT = wall;
+    for (const z of this.zombies) {
+      const rx = z.gx - ox;
+      const ry = z.gy - oy;
+      const t = rx * dx + ry * dz;
+      if (t < 0 || t > hitT) continue;
+      if (Math.abs(rx * dz - ry * dx) < 0.45) {
+        hit = z;
+        hitT = t;
+      }
+    }
+    if (hit) {
+      hit.hp -= 1;
+      if (hit.hp <= 0) {
+        this.zombies = this.zombies.filter((z) => z !== hit);
+        this.grantXp(player, 2);
+        send(conn.socket, { type: "youUpdate", you: player });
+      }
+    }
+    const shot: ServerMessage = { type: "shot", from: { gx: ox, gy: oy }, to: { gx: ox + dx * hitT, gy: oy + dz * hitT } };
+    for (const c of this.connections) {
+      if (!c.username) continue;
+      const p = this.players.get(c.username);
+      if (p && dist(p.sx * SCREEN_WIDTH + p.x, p.sy * SCREEN_HEIGHT + p.y, ox, oy) <= ZOMBIE_VIEW_RANGE) send(c.socket, shot);
+    }
+  }
+
+  // Horda: cada jugador atrae hasta HORDE_SIZE zombis que aparecen en un anillo
+  // fuera de pantalla, caminan hacia el jugador más cercano y le muerden al
+  // contacto. Se descartan si quedan lejos de todos.
+  private static readonly HORDE_SIZE = 14;
+  private tickZombies(dt: number): void {
+    const targets: Array<{ conn: Connection; player: PlayerPrivateState; gx: number; gy: number }> = [];
+    for (const [username, conn] of this.connByUsername) {
+      const player = this.players.get(username);
+      if (player) targets.push({ conn, player, gx: player.sx * SCREEN_WIDTH + player.x, gy: player.sy * SCREEN_HEIGHT + player.y });
+    }
+    if (targets.length === 0) {
+      this.zombies = [];
+      return;
+    }
+
+    this.spawnTimer -= dt;
+    if (this.spawnTimer <= 0 && this.zombies.length < GameServer.HORDE_SIZE * targets.length) {
+      this.spawnTimer = 0.5;
+      const t = targets[Math.floor(Math.random() * targets.length)];
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const ang = Math.random() * Math.PI * 2;
+        const r = 15 + Math.random() * 5;
+        const gx = t.gx + Math.cos(ang) * r;
+        const gy = t.gy + Math.sin(ang) * r;
+        if (this.isBlockedAt(0, 0, gx, gy)) continue;
+        this.zombies.push({ id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 1.1 + Math.random() * 0.8, hitCooldown: 0 });
+        break;
+      }
+    }
+
+    const dead = new Set<Connection>();
+    this.zombies = this.zombies.filter((z) => {
+      let near = targets[0];
+      let nd = Infinity;
+      for (const t of targets) {
+        const d = dist(z.gx, z.gy, t.gx, t.gy);
+        if (d < nd) {
+          nd = d;
+          near = t;
+        }
+      }
+      if (nd > ZOMBIE_VIEW_RANGE * 1.6) return false;
+      z.hitCooldown -= dt;
+      if (nd < 0.55) {
+        if (z.hitCooldown <= 0 && !dead.has(near.conn)) {
+          z.hitCooldown = 1;
+          near.player.hp -= 2;
+          if (near.player.hp <= 0) {
+            dead.add(near.conn);
+            this.handleDeath(near.conn, near.player);
+          } else {
+            send(near.conn.socket, { type: "youUpdate", you: near.player });
+          }
+        }
+        return true;
+      }
+      const sx = ((near.gx - z.gx) / nd) * z.speed * dt;
+      const sy = ((near.gy - z.gy) / nd) * z.speed * dt;
+      if (!this.isBlockedAt(0, 0, z.gx + sx, z.gy)) z.gx += sx;
+      if (!this.isBlockedAt(0, 0, z.gx, z.gy + sy)) z.gy += sy;
+      return true;
+    });
+
+    for (const t of targets) {
+      if (dead.has(t.conn)) continue;
+      const list = this.zombies
+        .filter((z) => Math.abs(z.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(z.gy - t.gy) < ZOMBIE_VIEW_RANGE)
+        .map((z) => ({ id: z.id, gx: Math.round(z.gx * 100) / 100, gy: Math.round(z.gy * 100) / 100, hp: z.hp }));
+      send(t.conn.socket, { type: "zombies", zombies: list });
+    }
   }
 
   private handlePickup(conn: Connection, player: PlayerPrivateState): void {

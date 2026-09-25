@@ -335,12 +335,28 @@ export interface PlayerPrivateState extends PlayerPublicState {
   inventory: string[];
 }
 
+// ---- Horda de zombis ----
+// Coordenadas GLOBALES del mundo (sx*SCREEN_WIDTH + x, sy*SCREEN_HEIGHT + y): los
+// zombis no pertenecen a una sala, cruzan bordes con total libertad.
+export interface ZombieState {
+  id: number;
+  gx: number;
+  gy: number;
+  hp: number;
+}
+export const ZOMBIE_MAX_HP = 3;
+export const ZOMBIE_VIEW_RANGE = 30;
+export const GUN_RANGE = 18;
+export const GUN_FIRE_MS = 90;
+
 // ---- Mensajes cliente -> servidor ----
 export type ClientMessage =
   | { type: "join"; username: string }
   | { type: "input"; dirs: InputState }
   | { type: "attack" }
-  | { type: "pickup" };
+  | { type: "pickup" }
+  // Ametralladora: dirección de disparo en el plano del mundo (x = columna, z = fila).
+  | { type: "shoot"; dx: number; dz: number };
 
 // ---- Mensajes servidor -> cliente ----
 export type ServerMessage =
@@ -354,4 +370,6 @@ export type ServerMessage =
   | { type: "discovery"; tier: ExoticTier; xp: number }
   | { type: "died" }
   | { type: "error"; message: string }
-  | { type: "visionSettings"; settings: VisionFogSettings };
+  | { type: "visionSettings"; settings: VisionFogSettings }
+  | { type: "zombies"; zombies: ZombieState[] }
+  | { type: "shot"; from: { gx: number; gy: number }; to: { gx: number; gy: number } };
