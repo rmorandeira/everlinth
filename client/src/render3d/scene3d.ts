@@ -343,14 +343,12 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     }
   }
 
-  // Cámara: giro en pasos de 90° animado, y adelanto hacia donde apunta el jugador
-  // (la cámara se desplaza parte del camino hacia el cursor, así se ve más de la zona
-  // a la que se dispara y menos de la que queda a la espalda).
+  // Cámara: giro en pasos de 90° animado. El jugador queda siempre centrado en
+  // horizontal y al 40 % de la altura desde abajo (se ve más de lo que tiene delante
+  // en pantalla que de lo que queda a su espalda).
   let camStep = 0;
   let yaw = BASE_YAW;
-  const lookAhead = new THREE.Vector2();
-  const LOOK_AHEAD_FACTOR = 0.35;
-  const LOOK_AHEAD_MAX = 4.5; // unidades de render
+  const PLAYER_SCREEN_Y = 0.4; // fracción de la altura desde el borde inferior
   function rotateCamera(step: number): void {
     camStep = (((camStep + step) % 4) + 4) % 4;
   }
@@ -372,24 +370,14 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     while (goal - yaw > Math.PI) goal -= Math.PI * 2;
     while (goal - yaw < -Math.PI) goal += Math.PI * 2;
     yaw += (goal - yaw) * (1 - Math.exp(-8 * dt));
-    iso.setYaw(yaw);
-    // Adelanto: punto del suelo bajo el cursor con la cámara de este frame.
-    iso.setTarget(playerX + lookAhead.x, playerZ + lookAhead.y);
-    iso.camera.updateMatrixWorld();
-    groundRaycaster.setFromCamera(ndcTmp.set(flashlight.cursorNdcX, flashlight.cursorNdcY), iso.camera);
-    if (groundRaycaster.ray.intersectPlane(groundPlane, groundHit)) {
-      let ox = (groundHit.x - playerX) * LOOK_AHEAD_FACTOR;
-      let oz = (groundHit.z - playerZ) * LOOK_AHEAD_FACTOR;
-      const l = Math.hypot(ox, oz);
-      if (l > LOOK_AHEAD_MAX) {
-        ox *= LOOK_AHEAD_MAX / l;
-        oz *= LOOK_AHEAD_MAX / l;
-      }
-      const k = 1 - Math.exp(-3 * dt);
-      lookAhead.x += (ox - lookAhead.x) * k;
-      lookAhead.y += (oz - lookAhead.y) * k;
-    }
-    iso.setTarget(playerX + lookAhead.x, playerZ + lookAhead.y);
+    // Deriva: balanceo lento de orientación y posición (varias senoides de periodos
+    // largos y distintos, así nunca se repite de forma evidente) para que la cámara
+    // no se sienta clavada, como un dron que mantiene la posición.
+    const drift = Math.sin(time * 0.13) * 0.018 + Math.sin(time * 0.071 + 1.3) * 0.012;
+    iso.setYaw(yaw + drift);
+    const driftX = Math.sin(time * 0.11 + 0.4) * 0.22 + Math.sin(time * 0.043) * 0.12;
+    const driftZ = Math.cos(time * 0.093 + 2.1) * 0.22 + Math.sin(time * 0.057 + 0.7) * 0.12;
+    iso.setTarget(playerX + driftX, playerZ + driftZ, 0, (0.5 - PLAYER_SCREEN_Y) * 2 * VIEW_HALF_HEIGHT);
     // El raycast de la linterna (dentro de lighting.update) necesita la
     // matriz de mundo YA actualizada (normalmente lo hace renderer.render(),
     // pero eso ocurre después).
@@ -399,7 +387,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
     playerVec.set(playerX, 0, playerZ);
-    towardCamera.copy(iso.camera.position).sub(playerVec).normalize();
+    iso.camera.getWorldDirection(towardCamera).negate();
     // Vista despejada: el jugador (con holgura amplia) y la línea hasta donde apunta
     // (hasta el alcance del arma) no pueden quedar tapados por ningún edificio.
     const sight: Array<{ p: THREE.Vector3; margin: number }> = [{ p: playerVec.clone(), margin: 1.4 }];

@@ -48,6 +48,7 @@ interface Seg {
   y0: number;
   x1: number;
   y1: number;
+  s0: number; // distancia a lo largo de su calle al inicio del segmento (tiles)
 }
 interface Lot {
   id: string;
@@ -198,8 +199,10 @@ function buildDistrict(
   let li = 0;
   for (const grp of groups) {
     for (const line of grp.lines) {
+      let acc = 0;
       for (let i = 0; i + 1 < line.length; i++) {
-        segs.push({ id: `${key}:${li}:${i}`, kind: grp.kind, x0: line[i].x + ox, y0: line[i].y + oy, x1: line[i + 1].x + ox, y1: line[i + 1].y + oy });
+        segs.push({ id: `${key}:${li}:${i}`, kind: grp.kind, x0: line[i].x + ox, y0: line[i].y + oy, x1: line[i + 1].x + ox, y1: line[i + 1].y + oy, s0: acc });
+        acc += Math.hypot(line[i + 1].x - line[i].x, line[i + 1].y - line[i].y);
       }
       li++;
     }
@@ -357,7 +360,7 @@ export function rasterRoom(sx: number, sy: number): RasterRoom {
         const s = d.segs[i];
         if (Math.max(s.x0, s.x1) < gx0 - pad || Math.min(s.x0, s.x1) > gx0 + SCREEN_WIDTH + pad) continue;
         if (Math.max(s.y0, s.y1) < gy0 - pad || Math.min(s.y0, s.y1) > gy0 + SCREEN_HEIGHT + pad) continue;
-        roads.push({ id: s.id, kind: s.kind, x0: round2(s.x0), y0: round2(s.y0), x1: round2(s.x1), y1: round2(s.y1) });
+        roads.push({ id: s.id, kind: s.kind, x0: round2(s.x0), y0: round2(s.y0), x1: round2(s.x1), y1: round2(s.y1), s0: round2(s.s0) });
       }
     }
   }

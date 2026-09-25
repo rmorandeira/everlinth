@@ -252,6 +252,8 @@ export interface CityRoad {
   y0: number;
   x1: number;
   y1: number;
+  /** Distancia a lo largo de su calle (tiles) en (x0, y0): los discontinuos casan entre segmentos. */
+  s0: number;
 }
 export interface CityBuilding {
   id: string;

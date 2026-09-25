@@ -38,7 +38,7 @@ export function asphaltTexture(): THREE.CanvasTexture {
   const S = 512;
   const [c, g] = canvas(S, S);
   const r = rng(7);
-  g.fillStyle = "#44474c";
+  g.fillStyle = "#5d6066";
   g.fillRect(0, 0, S, S);
   const wrap = (fn: (ox: number, oy: number) => void): void => {
     for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) fn(ox, oy);
@@ -72,15 +72,40 @@ export function asphaltTexture(): THREE.CanvasTexture {
       g.strokeRect(x + ox, y + oy, w, h);
     });
   }
-  // Árido: miles de puntos claros/oscuros de 1-2 px.
+  // Zonas descoloridas por el sol y el tráfico (más claras y algo más cálidas).
+  for (let i = 0; i < 10; i++) {
+    const x = r() * S;
+    const y = r() * S;
+    const rad = 50 + r() * 120;
+    const alpha = 0.06 + r() * 0.08;
+    wrap((ox, oy) => {
+      const grd = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, rad);
+      grd.addColorStop(0, `rgba(170,165,152,${alpha})`);
+      grd.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = grd;
+      g.fillRect(x + ox - rad, y + oy - rad, rad * 2, rad * 2);
+    });
+  }
+  // Árido: ruido fino por píxel y "puntos de claridad" (piedrecitas claras que
+  // asoman al gastarse el betún), más algún punto oscuro.
   const img = g.getImageData(0, 0, S, S);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
-    const n = (r() - 0.5) * 34;
-    const speck = r() < 0.03 ? 40 + r() * 40 : r() < 0.03 ? -35 : 0;
+    const n = (r() - 0.5) * 30;
+    const q = r();
+    const speck = q < 0.045 ? 45 + r() * 60 : q < 0.075 ? -30 - r() * 15 : 0;
     for (let k = 0; k < 3; k++) d[i + k] = Math.max(0, Math.min(255, d[i + k] + n + speck));
   }
   g.putImageData(img, 0, 0);
+  // Piedras claras algo mayores (2-3 px).
+  for (let i = 0; i < 900; i++) {
+    const x = r() * S;
+    const y = r() * S;
+    g.fillStyle = `rgba(${200 + r() * 40},${196 + r() * 40},${185 + r() * 40},${0.35 + r() * 0.4})`;
+    g.beginPath();
+    g.arc(x, y, 0.8 + r() * 1.3, 0, Math.PI * 2);
+    g.fill();
+  }
   // Grietas: polilíneas finas y quebradas, algunas ramificadas.
   g.lineCap = "round";
   for (let i = 0; i < 9; i++) {
@@ -162,22 +187,73 @@ export function skidTexture(): THREE.CanvasTexture {
 
 const PAINT = "#ecebe4";
 
+let worn: THREE.CanvasTexture | null = null;
+// Desgaste de la pintura vial: blanco opaco con desconchones y zonas más finas (alfa),
+// repetible. Se aplica con UV de mundo, así cada marca tiene su propio desgaste.
+export function wornPaintTexture(): THREE.CanvasTexture {
+  if (worn) return worn;
+  const S = 256;
+  const [c, g] = canvas(S, S);
+  const r = rng(41);
+  g.fillStyle = "#ffffff";
+  g.fillRect(0, 0, S, S);
+  const img = g.getImageData(0, 0, S, S);
+  const d = img.data;
+  // base: opacidad alta con ruido
+  for (let i = 0; i < d.length; i += 4) d[i + 3] = 215 + r() * 40;
+  g.putImageData(img, 0, 0);
+  g.globalCompositeOperation = "destination-out";
+  for (let i = 0; i < 70; i++) {
+    const x = r() * S;
+    const y = r() * S;
+    const rad = 3 + r() * 16;
+    const a = 0.25 + r() * 0.6;
+    for (const ox of [-S, 0, S]) {
+      for (const oy of [-S, 0, S]) {
+        const grd = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, rad);
+        grd.addColorStop(0, `rgba(0,0,0,${a})`);
+        grd.addColorStop(1, "rgba(0,0,0,0)");
+        g.fillStyle = grd;
+        g.fillRect(x + ox - rad, y + oy - rad, rad * 2, rad * 2);
+      }
+    }
+  }
+  for (let i = 0; i < 1800; i++) {
+    g.fillStyle = `rgba(0,0,0,${0.5 + r() * 0.5})`;
+    g.fillRect(r() * S, r() * S, 1 + r() * 2, 1 + r() * 2);
+  }
+  g.globalCompositeOperation = "source-over";
+  worn = toTexture(c, true);
+  return worn;
+}
+
 let stop: THREE.CanvasTexture | null = null;
 // "STOP" alargado (así se pinta de verdad: muy estirado en la dirección de la marcha
 // para que se lea bien desde el coche). Arriba del canvas = sentido de la marcha.
 export function stopTexture(): THREE.CanvasTexture {
   if (stop) return stop;
-  const [c, g] = canvas(256, 512);
+  const [c, g] = canvas(512, 1024);
+  const r = rng(5);
   g.fillStyle = PAINT;
   g.textAlign = "center";
   g.textBaseline = "middle";
-  g.font = "bold 150px Arial, Helvetica, sans-serif";
+  g.font = "900 250px 'Arial Black', Arial, Helvetica, sans-serif";
   g.save();
-  g.translate(128, 256);
-  g.scale(1, 2.6);
+  g.translate(256, 512);
+  g.scale(0.98, 2.9);
   g.fillText("STOP", 0, 0);
   g.restore();
+  // desgaste: desconchones donde pisan las ruedas
+  g.globalCompositeOperation = "destination-out";
+  for (let i = 0; i < 900; i++) {
+    g.fillStyle = `rgba(0,0,0,${0.3 + r() * 0.6})`;
+    g.beginPath();
+    g.arc(r() * 512, r() * 1024, 1 + r() * 5, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.globalCompositeOperation = "source-over";
   stop = toTexture(c, false);
+  stop.anisotropy = 8;
   return stop;
 }
 

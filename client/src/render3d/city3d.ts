@@ -13,17 +13,42 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { TILE_SIZE, CITY_ROAD_HALF, type CityData, type CityRoad } from "@roi/shared";
-import { buildPolygonBuilding } from "./buildings3d.js";
+import { buildPolygonBuilding, facadeFor } from "./buildings3d.js";
 import { cloneModel, modelSize, modelsReady, KIT_SCALE, BUILDING_SETS, type Kit } from "./models3d.js";
-import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture } from "./roadTextures.js";
+import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture, wornPaintTexture } from "./roadTextures.js";
 
 // Asfalto texturizado (UV en coordenadas de mundo: se repite sin costuras entre
 // segmentos) y materiales de calcomanía para manchas, frenadas y rotulado.
-let asphaltMatCache: THREE.MeshLambertMaterial | null = null;
-function asphaltMaterial(): THREE.MeshLambertMaterial {
-  if (!asphaltMatCache) asphaltMatCache = new THREE.MeshLambertMaterial({ map: asphaltTexture() });
-  return asphaltMatCache;
+// Tonos de asfalto (multiplican la textura): calle reasfaltada hace poco (oscura),
+// normal y vieja/descolorida (clara). Cada calle entera tiene su tono.
+const ASPHALT_TONES = [0x8f9195, 0xb3b5b8, 0xd4d3cf];
+const asphaltMats = new Map<number, THREE.MeshLambertMaterial>();
+function asphaltMaterial(tone: number, patch = false): THREE.MeshLambertMaterial {
+  const key = tone * 2 + (patch ? 1 : 0);
+  let m = asphaltMats.get(key);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ map: asphaltTexture(), color: tone });
+    if (patch) {
+      // parche de reasfaltado: por encima del asfalto de la calle sin pelearse en profundidad
+      m.polygonOffset = true;
+      m.polygonOffsetFactor = -1;
+      m.polygonOffsetUnits = -1;
+    }
+    asphaltMats.set(key, m);
+  }
+  return m;
 }
+// Pintura vial con desgaste (textura de alfa con desconchones, UV de mundo).
+const paintMats = new Map<number, THREE.MeshLambertMaterial>();
+function paintMaterial(color: number): THREE.MeshLambertMaterial {
+  let m = paintMats.get(color);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ color, map: wornPaintTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+    paintMats.set(color, m);
+  }
+  return m;
+}
+const PAINT_UV = 1.6; // unidades de render por repetición del desgaste
 const decalCache = new Map<string, THREE.MeshLambertMaterial>();
 function decalMaterial(key: string, tex: () => THREE.Texture, opacity = 1): THREE.MeshLambertMaterial {
   let m = decalCache.get(key);
@@ -260,10 +285,11 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
 
   const b = new Batch();
   const curbMat = lambert(CURB);
-  const asphaltMat = asphaltMaterial();
   void ASPHALT;
-  const white = lambert(PAINT_WHITE);
-  const yellow = lambert(PAINT_YELLOW);
+  const white = paintMaterial(PAINT_WHITE);
+  const yellow = paintMaterial(PAINT_YELLOW);
+  const lineKeyOf = (sg: CityRoad): string => sg.id.slice(0, sg.id.lastIndexOf(":"));
+  const toneOf = (sg: CityRoad): number => ASPHALT_TONES[Math.floor(hashStr(lineKeyOf(sg) + "t") * ASPHALT_TONES.length) % ASPHALT_TONES.length];
 
   // ---- Calzada ----
   for (const s of segs) {
@@ -275,8 +301,29 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
     const ang = Math.atan2(dy, dx);
     const mx = L((s.x0 + s.x1) / 2);
     const mz = Lz((s.y0 + s.y1) / 2);
+    const asphaltMat = asphaltMaterial(toneOf(s));
     flatQuad(b, curbMat, mx, mz, len * T, (half + CURB_W) * 2 * T, ang, Y_CURB);
     flatQuad(b, asphaltMat, mx, mz, len * T, half * 2 * T, ang, Y_ASPHALT, ASPHALT_UV);
+    // Parches de reasfaltado (otro tono, rectangulares, en un carril) y tapas de
+    // alcantarilla/registro en mitad del carril.
+    const ux0 = dx / len;
+    const uy0 = dy / len;
+    for (let t = 3; t < len - 3; t += 9) {
+      const px = s.x0 + ux0 * t;
+      const py = s.y0 + uy0 * t;
+      const hp = hash2(Math.round(px * 2.3) + 7, Math.round(py * 2.3) - 3);
+      if (hp > 0.8) {
+        const side = hp > 0.9 ? 1 : -1;
+        const w = half * (0.6 + (hp % 0.1) * 5);
+        const off = side * (half - w / 2) * 0.9;
+        const tone = ASPHALT_TONES[(ASPHALT_TONES.indexOf(toneOf(s)) + 1 + (hp > 0.87 ? 1 : 0)) % ASPHALT_TONES.length];
+        flatQuad(b, asphaltMaterial(tone, true), L(px - uy0 * off), Lz(py + ux0 * off), (1.6 + hp * 3) * T, w * T, ang + (hp - 0.85) * 0.1, Y_ASPHALT + 0.001, ASPHALT_UV);
+      } else if (hp < 0.07) {
+        const off = (hp < 0.035 ? 1 : -1) * half * 0.45;
+        flatDisc(b, lambert(0x3f4145), L(px - uy0 * off), Lz(py + ux0 * off), 0.42 * T, Y_ASPHALT + 0.003);
+        flatDisc(b, lambert(0x2c2e31), L(px - uy0 * off), Lz(py + ux0 * off), 0.32 * T, Y_ASPHALT + 0.004);
+      }
+    }
     for (const [ex, ey] of [
       [s.x0, s.y0],
       [s.x1, s.y1],
@@ -295,7 +342,7 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
   // (Las texturas de rotulado tienen "arriba" hacia la izquierda de ang: con
   // ang = sentido + 90°, se leen de frente desde el coche que llega.)
   const mark = (mat: THREE.Material, gx: number, gy: number, len: number, w: number, ang: number, y = Y_PAINT): void =>
-    flatQuad(b, mat, L(gx), Lz(gy), len * T, w * T, ang, y);
+    flatQuad(b, mat, L(gx), Lz(gy), len * T, w * T, ang, y, mat === white || mat === yellow ? PAINT_UV : undefined);
   const lineInfo = (sg: CityRoad): { oneWay: boolean; dir: number } => {
     const key = sg.id.slice(0, sg.id.lastIndexOf(":"));
     return { oneWay: sg.kind === 0 && hashStr(key) < 0.5, dir: hashStr(key + "d") < 0.5 ? 1 : -1 };
@@ -320,25 +367,38 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
     const ang = Math.atan2(dy, dx);
     const { oneWay, dir } = lineInfo(s);
 
-    // Posiciones a lo largo en coordenada "a" global (proyección sobre la dirección),
-    // para que los discontinuos casen entre segmentos consecutivos.
-    const a0 = s.x0 * ux + s.y0 * uy;
-    const DASH = 2.5;
-    const start = Math.ceil(a0 / DASH) * DASH - a0;
-    for (let t = start; t < len; t += DASH) {
-      const px = s.x0 + ux * t;
-      const py = s.y0 + uy * t;
-      if (nearCross(px, py, 1.0)) continue;
-      if (!oneWay) {
-        if (s.kind === 2) {
-          for (const side of [-1, 1]) mark(yellow, px + nx * side * 0.14, py + ny * side * 0.14, DASH, 0.12, ang);
-        } else {
-          mark(yellow, px, py, 1.2, 0.13, ang);
-        }
+    // Marcas por longitud de arco a lo largo de la calle (s0 viene del servidor):
+    // un patrón [trazo, hueco] se recorta a este segmento, así los discontinuos
+    // continúan en las curvas y no cambian al pasar de una sala a otra.
+    const pieces = (period: number, dashLen: number, fn: (px: number, py: number, l: number) => void): void => {
+      const a = s.s0;
+      const bEnd = s.s0 + len;
+      for (let k = Math.floor(a / period); k * period < bEnd; k++) {
+        const d0 = Math.max(a, k * period);
+        const d1 = Math.min(bEnd, k * period + dashLen);
+        if (d1 - d0 < 0.15) continue;
+        const tm = (d0 + d1) / 2 - a;
+        fn(s.x0 + ux * tm, s.y0 + uy * tm, d1 - d0);
       }
-      if (s.kind === 2 && !nearCross(px, py, 9)) {
-        for (const side of [-1, 1]) mark(white, px + nx * side * half * 0.5, py + ny * side * half * 0.5, 1.0, 0.1, ang);
+    };
+    if (!oneWay) {
+      if (s.kind === 2) {
+        // doble línea continua amarilla (troceada solo para poder cortarla en los cruces)
+        pieces(2, 2, (px, py, l) => {
+          if (nearCross(px, py, 0.6)) return;
+          for (const side of [-1, 1]) mark(yellow, px + nx * side * 0.15, py + ny * side * 0.15, l + 0.02, 0.12, ang);
+        });
+      } else {
+        pieces(6, 2, (px, py, l) => {
+          if (!nearCross(px, py, 0.8)) mark(yellow, px, py, l, 0.13, ang);
+        });
       }
+    }
+    if (s.kind === 2) {
+      pieces(6, 2, (px, py, l) => {
+        if (nearCross(px, py, 9)) return;
+        for (const side of [-1, 1]) mark(white, px + nx * side * half * 0.5, py + ny * side * half * 0.5, l, 0.11, ang);
+      });
     }
     if (oneWay) {
       for (let t = 7; t < len - 3; t += 14) {
@@ -454,7 +514,7 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
           const [sx, sy] = at(D, mid);
           mark(white, sx, sy, bandW - 0.1, 0.4, hang + Math.PI / 2);
           const [tx, ty] = at(D + 2.3, mid);
-          mark(stopMat, tx, ty, Math.min(bandW * 0.85, 2.2), 2.8, hang + Math.PI / 2);
+          mark(stopMat, tx, ty, Math.min(bandW * 0.92, 2.4), 3.4, hang + Math.PI / 2);
           if (!oneWay) {
             // línea central continua antes del stop: prohibido adelantar
             const [lx, ly] = at(D + 3.5, 0);
@@ -590,6 +650,10 @@ function kitBuilding(bd: CityData["buildings"][number], segs: CityRoad[], origin
   if (!obj) return null;
   const naturalH = sz.y * base;
   const stretch = kit === "suburban" ? 1 : Math.min(1.6, Math.max(0.85, (floors * 1.0) / naturalH));
+  if (kit === "commercial") {
+    const facade = facadeFor(set === BUILDING_SETS.low ? (r1 < 0.5 ? "lowrise" : "tower") : "tower", floors, r1);
+    if (facade) applyFacade(obj, facade, base, base * stretch);
+  }
   obj.scale.set(base, base * stretch, base);
   const g = new THREE.Group();
   g.add(obj);
@@ -597,4 +661,87 @@ function kitBuilding(bd: CityData["buildings"][number], segs: CityRoad[], origin
   g.position.set((cx - originGX) * T, 0.05, (cy - originGZ) * T);
   void chosenSet;
   return g;
+}
+
+// Reviste un modelo de Kenney con una foto de fachada: los triángulos de las paredes
+// (normal casi horizontal) pasan al material de la foto con UV proyectadas por cara
+// (u a lo largo del muro, v en altura, en metros reales tras escalar: sx en planta,
+// sy en altura); tejados, cornisas y salientes conservan el material original.
+// La geometría se copia (no se toca la del modelo compartido).
+function applyFacade(obj: THREE.Object3D, facade: { mat: THREE.Material; tileW: number; tileH: number }, sx: number, sy: number): void {
+  obj.updateMatrixWorld(true);
+  const p = new THREE.Vector3();
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  obj.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+    const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+    const pos = src.getAttribute("position") as THREE.BufferAttribute;
+    const nor = src.getAttribute("normal") as THREE.BufferAttribute | undefined;
+    const uv = src.getAttribute("uv") as THREE.BufferAttribute | undefined;
+    if (!uv || !nor) return;
+    const m = mesh.matrixWorld; // espacio del modelo normalizado
+    const tri = pos.count / 3;
+    const wall: number[] = [];
+    const rest: number[] = [];
+    for (let t = 0; t < tri; t++) {
+      a.fromBufferAttribute(pos, t * 3).applyMatrix4(m);
+      b.fromBufferAttribute(pos, t * 3 + 1).applyMatrix4(m);
+      c.fromBufferAttribute(pos, t * 3 + 2).applyMatrix4(m);
+      n.subVectors(b, a).cross(p.subVectors(c, a));
+      const len = n.length();
+      if (len < 1e-9) {
+        rest.push(t);
+        continue;
+      }
+      n.divideScalar(len);
+      (Math.abs(n.y) < 0.3 ? wall : rest).push(t);
+    }
+    if (wall.length === 0) return;
+    const order = [...wall, ...rest];
+    const out = new THREE.BufferGeometry();
+    const P = new Float32Array(pos.count * 3);
+    const N = new Float32Array(pos.count * 3);
+    const U = new Float32Array(pos.count * 2);
+    order.forEach((t, k) => {
+      a.fromBufferAttribute(pos, t * 3).applyMatrix4(m);
+      b.fromBufferAttribute(pos, t * 3 + 1).applyMatrix4(m);
+      c.fromBufferAttribute(pos, t * 3 + 2).applyMatrix4(m);
+      n.subVectors(b, a).cross(p.subVectors(c, a)).normalize();
+      const isWall = k < wall.length;
+      // tangente horizontal del muro (perpendicular a la normal en planta)
+      const tx = -n.z;
+      const tz = n.x;
+      for (let v = 0; v < 3; v++) {
+        const i = t * 3 + v;
+        const dst = k * 3 + v;
+        P[dst * 3] = pos.getX(i);
+        P[dst * 3 + 1] = pos.getY(i);
+        P[dst * 3 + 2] = pos.getZ(i);
+        N[dst * 3] = nor.getX(i);
+        N[dst * 3 + 1] = nor.getY(i);
+        N[dst * 3 + 2] = nor.getZ(i);
+        if (isWall) {
+          p.fromBufferAttribute(pos, i).applyMatrix4(m);
+          U[dst * 2] = ((p.x * tx + p.z * tz) * sx) / facade.tileW;
+          U[dst * 2 + 1] = (p.y * sy) / facade.tileH;
+        } else {
+          U[dst * 2] = uv.getX(i);
+          U[dst * 2 + 1] = uv.getY(i);
+        }
+      }
+    });
+    out.setAttribute("position", new THREE.BufferAttribute(P, 3));
+    out.setAttribute("normal", new THREE.BufferAttribute(N, 3));
+    out.setAttribute("uv", new THREE.BufferAttribute(U, 2));
+    out.addGroup(0, wall.length * 3, 0);
+    out.addGroup(wall.length * 3, rest.length * 3, 1);
+    src.dispose();
+    mesh.geometry = out;
+    mesh.material = [facade.mat, mesh.material];
+    mesh.userData.ownGeometry = true;
+  });
 }

@@ -23,6 +23,7 @@ import { WeatherSystem, pickWeather } from "./render/weather.js";
 import { drawCursorDot } from "./render/cursor.js";
 import { createScene3D } from "./render3d/scene3d.js";
 import { createMinimap, type MinimapDot } from "./render/minimap.js";
+import { unlockAudio, playStep } from "./audio.js";
 import { MONSTER_COLORS, MONSTER_COLOR_DEFAULT, type FigureEntity } from "./render3d/figures3d.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
@@ -123,6 +124,8 @@ const zombieTargets = new Map<number, { gx: number; gy: number }>();
 const zombieDisplay = new Map<number, { gx: number; gy: number }>();
 const ZOMBIE_COLOR = 0x5b8f45;
 let aimAngle = 0;
+const STRIDE = 1.4; // tiles entre pisadas (≈2 m, zancada de carrera)
+let strideAcc = 0;
 let firing = false;
 let lastShotAt = 0;
 
@@ -424,6 +427,7 @@ function resetToLogin(): void {
 }
 
 loginForm.addEventListener("submit", async (ev) => {
+  unlockAudio(); // el login es un gesto del usuario: el navegador deja arrancar el audio
   ev.preventDefault();
   loginError.textContent = "";
   const username = usernameInput.value.trim();
@@ -454,8 +458,21 @@ function frame(now: number): void {
   const time = now / 1000;
 
   if (you && currentScreen) {
+    const prevX = youDisplay.x;
+    const prevY = youDisplay.y;
     youDisplay.x = lerpTowards(youDisplay.x, you.x, dt);
     youDisplay.y = lerpTowards(youDisplay.y, you.y, dt);
+    // Pasos: una pisada cada STRIDE tiles recorridos (a la velocidad del jugador,
+    // ~5 pisadas por segundo: carrera). Los saltos grandes (re-base al cambiar de
+    // sala) no cuentan.
+    const moved = Math.hypot(youDisplay.x - prevX, youDisplay.y - prevY);
+    if (moved < 2) {
+      strideAcc += moved;
+      if (strideAcc >= STRIDE) {
+        strideAcc -= STRIDE;
+        playStep(0.9);
+      }
+    }
     for (const [username, p] of otherPlayers) {
       const d = otherDisplay.get(username) ?? { x: p.x, y: p.y };
       d.x = lerpTowards(d.x, p.x, dt);

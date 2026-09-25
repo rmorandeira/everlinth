@@ -294,6 +294,17 @@ function roofDecor(b: PlaneBatch, top: number, hx: number, hz: number, seed: num
 
 // Textura "tower" adecuada a un bloque de `floors` plantas: prefiere las que enseñan
 // como mucho esas plantas (para no recortar la foto por arriba).
+// Foto de fachada para revestir un modelo 3D (ver city3d.kitBuilding): material
+// compartido y tamaño de una repetición de la textura en unidades de render (el
+// manifest dice cuántas plantas enseña cada foto: una planta ≈ FLOOR_H).
+export function facadeFor(kind: "tower" | "lowrise", floors: number, n: number): { mat: THREE.Material; tileW: number; tileH: number } | null {
+  if (!ready) return null;
+  const tex = kind === "tower" ? chooseTower(Math.max(3, Math.min(floors, 8)), n) : pick(byCat.lowrise, n);
+  if (!tex) return null;
+  const tileH = tex.floors * FLOOR_H;
+  return { mat: texMaterial(tex.id), tileW: tileH * (tex.w / tex.h), tileH };
+}
+
 function chooseTower(floors: number, n: number): TexMeta {
   const fit = byCat.tower.filter((t) => t.floors <= floors + 1);
   return pick(fit.length > 0 ? fit : byCat.tower, n);
