@@ -78,7 +78,7 @@ const tmp = new THREE.Vector3();
 export function updateCutaway(camera: THREE.Camera, playerX: number, playerZ: number, bufferW: number, bufferH: number, radiusFrac: number): void {
   tmp.set(playerX, 0.35, playerZ).applyMatrix4(camera.matrixWorldInverse);
   uniforms.uCutDepth.value = -tmp.z;
-  tmp.set(playerX, 0.35, playerZ).project(camera);
+  tmp.set(playerX, 0.28, playerZ).project(camera); // centro de la figura (≈ media altura)
   uniforms.uCutCenter.value.set((tmp.x * 0.5 + 0.5) * bufferW, (tmp.y * 0.5 + 0.5) * bufferH);
   uniforms.uCutRadius.value = radiusFrac * bufferH;
 }

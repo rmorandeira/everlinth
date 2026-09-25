@@ -35,6 +35,7 @@ interface Connection {
   username: string | null;
   input: InputState;
   lastShot: number;
+  zombiesOn: boolean;
 }
 
 function send(socket: WebSocket, msg: ServerMessage): void {
@@ -70,7 +71,7 @@ export class GameServer {
   }
 
   handleConnection(socket: WebSocket): void {
-    const conn: Connection = { socket, username: null, input: { ...NO_INPUT }, lastShot: 0 };
+    const conn: Connection = { socket, username: null, input: { ...NO_INPUT }, lastShot: 0, zombiesOn: true };
     this.connections.add(conn);
 
     socket.on("message", (raw: Buffer) => {
@@ -119,6 +120,10 @@ export class GameServer {
     else if (msg.type === "attack") this.handleAttack(conn, player);
     else if (msg.type === "pickup") this.handlePickup(conn, player);
     else if (msg.type === "shoot") this.handleShoot(conn, player, msg.dx, msg.dz);
+    else if (msg.type === "setZombies") {
+      conn.zombiesOn = msg.enabled === true;
+      if (!conn.zombiesOn) send(conn.socket, { type: "zombies", zombies: [] });
+    }
   }
 
   // Punto transitable más cercano al centro de la sala, preferiblemente calzada.
@@ -406,6 +411,7 @@ export class GameServer {
         this.zombies = this.zombies.filter((z) => z !== hit);
         this.grantXp(player, 2);
         send(conn.socket, { type: "youUpdate", you: player });
+        send(conn.socket, { type: "kill" });
       }
     }
     const shot: ServerMessage = { type: "shot", from: { gx: ox, gy: oy }, to: { gx: ox + dx * hitT, gy: oy + dz * hitT } };
@@ -416,15 +422,16 @@ export class GameServer {
     }
   }
 
-  // Horda: cada jugador atrae hasta HORDE_SIZE zombis que aparecen en un anillo
-  // fuera de pantalla, caminan hacia el jugador más cercano y le muerden al
-  // contacto. Se descartan si quedan lejos de todos.
-  private static readonly HORDE_SIZE = 14;
+  // Horda: cada jugador (con los zombis activados) atrae hasta HORDE_SIZE zombis que
+  // aparecen en grupos en un anillo fuera de pantalla, caminan despacio
+  // arrastrándose hacia el jugador más cercano, se empujan entre ellos para no
+  // amontonarse en un punto, y muerden al contacto. Se descartan si quedan lejos de todos.
+  private static readonly HORDE_SIZE = 70;
   private tickZombies(dt: number): void {
     const targets: Array<{ conn: Connection; player: PlayerPrivateState; gx: number; gy: number }> = [];
     for (const [username, conn] of this.connByUsername) {
       const player = this.players.get(username);
-      if (player) targets.push({ conn, player, gx: player.sx * SCREEN_WIDTH + player.x, gy: player.sy * SCREEN_HEIGHT + player.y });
+      if (player && conn.zombiesOn) targets.push({ conn, player, gx: player.sx * SCREEN_WIDTH + player.x, gy: player.sy * SCREEN_HEIGHT + player.y });
     }
     if (targets.length === 0) {
       this.zombies = [];
@@ -437,16 +444,23 @@ export class GameServer {
     }
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.zombies.length < GameServer.HORDE_SIZE * targets.length) {
-      this.spawnTimer = 0.5;
+      this.spawnTimer = 0.3;
       const t = targets[Math.floor(Math.random() * targets.length)];
-      for (let attempt = 0; attempt < 6; attempt++) {
-        const ang = Math.random() * Math.PI * 2;
-        const r = 30 + Math.random() * 10;
-        const gx = t.gx + Math.cos(ang) * r;
-        const gy = t.gy + Math.sin(ang) * r;
-        if (this.isBlockedAt(0, 0, gx, gy)) continue;
-        this.zombies.push({ id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 2.2 + Math.random() * 1.6, hitCooldown: 0 });
-        break;
+      // un grupo de 2-5 alrededor de un punto del anillo
+      const ang = Math.random() * Math.PI * 2;
+      const r = 28 + Math.random() * 12;
+      const cx = t.gx + Math.cos(ang) * r;
+      const cy = t.gy + Math.sin(ang) * r;
+      const n = 2 + Math.floor(Math.random() * 4);
+      for (let i = 0; i < n; i++) {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const gx = cx + (Math.random() - 0.5) * 6;
+          const gy = cy + (Math.random() - 0.5) * 6;
+          if (this.isBlockedAt(0, 0, gx, gy)) continue;
+          // lentos, arrastrándose: 0,8-1,6 tiles/s (el jugador corre a más de 7)
+          this.zombies.push({ id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 0.8 + Math.random() * 0.8, hitCooldown: 0 });
+          break;
+        }
       }
     }
 
@@ -476,8 +490,20 @@ export class GameServer {
         }
         return true;
       }
-      const sx = ((near.gx - z.gx) / nd) * z.speed * dt;
-      const sy = ((near.gy - z.gy) / nd) * z.speed * dt;
+      let sx = ((near.gx - z.gx) / nd) * z.speed * dt;
+      let sy = ((near.gy - z.gy) / nd) * z.speed * dt;
+      // separación: empuje suave contra los vecinos muy cercanos
+      for (const o of this.zombies) {
+        if (o === z) continue;
+        const ox = z.gx - o.gx;
+        const oy = z.gy - o.gy;
+        const d2 = ox * ox + oy * oy;
+        if (d2 > 0.0001 && d2 < 0.49) {
+          const d = Math.sqrt(d2);
+          sx += (ox / d) * (0.7 - d) * 0.8 * dt;
+          sy += (oy / d) * (0.7 - d) * 0.8 * dt;
+        }
+      }
       if (!this.isBlockedAt(0, 0, z.gx + sx, z.gy)) z.gx += sx;
       if (!this.isBlockedAt(0, 0, z.gx, z.gy + sy)) z.gy += sy;
       return true;

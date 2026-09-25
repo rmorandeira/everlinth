@@ -171,6 +171,8 @@ export interface FigureEntity {
   z: number;
   color: number;
   label?: string;
+  /** Anda como un zombi: brazos al frente, arrastrando una pierna, balanceándose. */
+  zombie?: boolean;
   /** Color de su silueta cuando queda tapada (sin silueta si no se da). */
   silhouette?: number;
   /** Lleva ametralladora (se dibuja en la mano). */
@@ -216,12 +218,23 @@ export function createFigureManager(): FigureManager {
       rig.root.position.set(e.x, 0, e.z);
       rig.root.rotation.y = e.facing ?? rig.facing;
 
-      const legSwing = Math.sin(rig.phase) * 0.5;
-      const armSwing = Math.sin(rig.phase + Math.PI) * 0.4;
-      rig.legL.rotation.x = legSwing;
-      rig.legR.rotation.x = -legSwing;
-      rig.armL.rotation.x = -armSwing;
-      rig.armR.rotation.x = armSwing;
+      if (e.zombie) {
+        // Zombi: pasos cortos y lentos, la pierna derecha se arrastra (apenas se
+        // levanta), brazos extendidos al frente que oscilan un poco y balanceo lateral.
+        const p = rig.phase * 0.55;
+        rig.legL.rotation.x = Math.sin(p) * 0.35;
+        rig.legR.rotation.x = -Math.sin(p) * 0.12 + 0.15;
+        rig.armL.rotation.x = -1.35 + Math.sin(p + 0.5) * 0.12;
+        rig.armR.rotation.x = -1.25 + Math.sin(p + 2.1) * 0.12;
+        rig.root.rotation.z = Math.sin(p) * 0.1;
+      } else {
+        const legSwing = Math.sin(rig.phase) * 0.5;
+        const armSwing = Math.sin(rig.phase + Math.PI) * 0.4;
+        rig.legL.rotation.x = legSwing;
+        rig.legR.rotation.x = -legSwing;
+        rig.armL.rotation.x = -armSwing;
+        rig.armR.rotation.x = armSwing;
+      }
     }
 
     for (const [id, rig] of rigs) {

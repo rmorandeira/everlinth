@@ -87,10 +87,10 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
 
   const iso = createIsoCamera();
   const bufSize = new THREE.Vector2();
-  // Radio del círculo de visión (fracción de la altura de pantalla); crece un poco al
-  // disparar para ver mejor la zona de combate.
-  const CUT_RADIUS = 0.2;
-  const CUT_RADIUS_COMBAT = 0.26;
+  // Radio del círculo de visión (fracción de la altura de pantalla): solo lo que tapa
+  // al propio jugador desde la cámara (su figura y un pequeño margen).
+  const CUT_RADIUS = 0.075; // ≈ la figura del jugador y un pequeño margen
+  const CUT_RADIUS_COMBAT = 0.075;
   let cutRadius = CUT_RADIUS;
   let combatT = 0;
   const gunFx = createGunFx(scene);

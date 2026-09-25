@@ -104,3 +104,35 @@ export function playGunTail(volume = 1): void {
   if (!gun) return;
   playSlice(TAIL_START, gun.duration - TAIL_START, volume * 0.9, 1, 0.01, 0.35);
 }
+
+// ---- Risa (Sounds/laugh.mp3 → public/sounds/laugh.mp3), algo acelerada/aguda ----
+let laugh: AudioBuffer | null = null;
+let laughLoading = false;
+export function playLaugh(volume = 1): void {
+  if (!ctx || !master) return;
+  if (!laugh) {
+    if (!laughLoading) {
+      laughLoading = true;
+      const c = ctx;
+      fetch("/sounds/laugh.mp3")
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.arrayBuffer();
+        })
+        .then((ab) => c.decodeAudioData(ab))
+        .then((buf) => {
+          laugh = buf;
+          playLaugh(volume);
+        })
+        .catch((e) => console.warn("Risa no cargada:", e));
+    }
+    return;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = laugh;
+  src.playbackRate.value = 1.3; // más rápida y más aguda
+  const g = ctx.createGain();
+  g.gain.value = volume;
+  src.connect(g).connect(master);
+  src.start();
+}

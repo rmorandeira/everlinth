@@ -375,7 +375,9 @@ export type ClientMessage =
   | { type: "attack" }
   | { type: "pickup" }
   // Ametralladora: dirección de disparo en el plano del mundo (x = columna, z = fila).
-  | { type: "shoot"; dx: number; dz: number };
+  | { type: "shoot"; dx: number; dz: number }
+  // Interruptor de zombis del jugador (arriba a la derecha): sin zombis, la horda le ignora.
+  | { type: "setZombies"; enabled: boolean };
 
 // ---- Mensajes servidor -> cliente ----
 export type ServerMessage =
@@ -391,4 +393,6 @@ export type ServerMessage =
   | { type: "error"; message: string }
   | { type: "visionSettings"; settings: VisionFogSettings }
   | { type: "zombies"; zombies: ZombieState[] }
-  | { type: "shot"; from: { gx: number; gy: number }; to: { gx: number; gy: number } };
+  | { type: "shot"; from: { gx: number; gy: number }; to: { gx: number; gy: number } }
+  // Al tirador, cada vez que mata un zombi.
+  | { type: "kill" };

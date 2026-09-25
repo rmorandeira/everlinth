@@ -23,7 +23,7 @@ import { WeatherSystem, pickWeather } from "./render/weather.js";
 import { drawCursorDot } from "./render/cursor.js";
 import { createScene3D } from "./render3d/scene3d.js";
 import { createMinimap, type MinimapDot } from "./render/minimap.js";
-import { unlockAudio, playStep, playGunshot, playGunTail } from "./audio.js";
+import { unlockAudio, playStep, playGunshot, playGunTail, playLaugh } from "./audio.js";
 import { MONSTER_COLORS, MONSTER_COLOR_DEFAULT, type FigureEntity } from "./render3d/figures3d.js";
 
 const loginEl = document.getElementById("login") as HTMLDivElement;
@@ -124,6 +124,40 @@ const zombieTargets = new Map<number, { gx: number; gy: number }>();
 const zombieDisplay = new Map<number, { gx: number; gy: number }>();
 const ZOMBIE_COLOR = 0x5b8f45;
 let aimAngle = 0;
+// Interruptor de zombis (arriba a la derecha, o tecla Z): se recuerda entre sesiones.
+const zombieToggle = document.getElementById("zombie-toggle-input") as HTMLInputElement;
+const zombieToggleLabel = document.getElementById("zombie-toggle") as HTMLLabelElement;
+try {
+  zombieToggle.checked = localStorage.getItem("everlinth.zombies") !== "off";
+} catch {
+  /* sin almacenamiento: activado */
+}
+function sendZombieSetting(): void {
+  try {
+    localStorage.setItem("everlinth.zombies", zombieToggle.checked ? "on" : "off");
+  } catch {
+    /* ignorar */
+  }
+  conn?.send({ type: "setZombies", enabled: zombieToggle.checked });
+  if (!zombieToggle.checked) {
+    zombieTargets.clear();
+    zombieDisplay.clear();
+  }
+}
+zombieToggle.addEventListener("change", sendZombieSetting);
+// que el clic en el interruptor no dispare el arma
+zombieToggleLabel.addEventListener("mousedown", (ev) => ev.stopPropagation());
+window.addEventListener("keydown", (ev) => {
+  if ((ev.key === "z" || ev.key === "Z") && loginEl.classList.contains("hidden")) {
+    zombieToggle.checked = !zombieToggle.checked;
+    sendZombieSetting();
+  }
+});
+
+// Racha de muertes: 4 zombis en 8 s → risa (como mucho una cada 12 s).
+const recentKills: number[] = [];
+let lastLaugh = -1e9;
+
 let lastLocalShot = 0;
 let tailPending = false;
 const STRIDE = 1.1; // tiles entre pisadas: ~7 pisadas/s a la velocidad del jugador (carrera)
@@ -161,6 +195,7 @@ function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case "joined":
       you = msg.you;
+      conn?.send({ type: "setZombies", enabled: zombieToggle.checked });
       youDisplay = { x: you.x, y: you.y };
       loginEl.classList.add("hidden");
       gameEl.classList.remove("hidden");
@@ -223,6 +258,17 @@ function handleServerMessage(msg: ServerMessage): void {
     case "error":
       loginError.textContent = msg.message;
       break;
+    case "kill": {
+      const t = performance.now();
+      recentKills.push(t);
+      while (recentKills.length > 0 && t - recentKills[0] > 8000) recentKills.shift();
+      if (recentKills.length >= 4 && t - lastLaugh > 12000) {
+        lastLaugh = t;
+        recentKills.length = 0;
+        playLaugh(0.9);
+      }
+      break;
+    }
     case "zombies": {
       zombieTargets.clear();
       for (const z of msg.zombies) {
@@ -530,7 +576,7 @@ function frame(now: number): void {
         d.gx = lerpTowards(d.gx, t.gx, dt, 14);
         d.gy = lerpTowards(d.gy, t.gy, dt, 14);
       }
-      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR, silhouette: 0xff3b3b });
+      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR, silhouette: 0xff3b3b, zombie: true });
     }
     for (const m of currentScreen.monsters) {
       if (!m.alive) continue;
