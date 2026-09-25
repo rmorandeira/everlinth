@@ -44,7 +44,7 @@ export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
 
 // Movimiento continuo (no por casillas): el servidor simula a este tick fijo.
 export const TICK_MS = 50;
-export const PLAYER_SPEED = 7; // tiles/segundo
+export const PLAYER_SPEED = 7.7; // tiles/segundo
 export const ATTACK_RANGE = 1.8; // tiles
 export const PICKUP_RANGE = 1.5; // tiles
 

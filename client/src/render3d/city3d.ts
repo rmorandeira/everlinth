@@ -13,7 +13,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { TILE_SIZE, CITY_ROAD_HALF, type CityData, type CityRoad } from "@roi/shared";
-import { buildPolygonBuilding, facadeFor } from "./buildings3d.js";
+import { buildPolygonBuilding } from "./buildings3d.js";
 import { cloneModel, modelSize, modelsReady, KIT_SCALE, BUILDING_SETS, type Kit } from "./models3d.js";
 import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture, wornPaintTexture } from "./roadTextures.js";
 
@@ -650,10 +650,6 @@ function kitBuilding(bd: CityData["buildings"][number], segs: CityRoad[], origin
   if (!obj) return null;
   const naturalH = sz.y * base;
   const stretch = kit === "suburban" ? 1 : Math.min(1.6, Math.max(0.85, (floors * 1.0) / naturalH));
-  if (kit === "commercial") {
-    const facade = facadeFor(set === BUILDING_SETS.low ? (r1 < 0.5 ? "lowrise" : "tower") : "tower", floors, r1);
-    if (facade) applyFacade(obj, facade, base, base * stretch);
-  }
   obj.scale.set(base, base * stretch, base);
   const g = new THREE.Group();
   g.add(obj);
@@ -663,85 +659,3 @@ function kitBuilding(bd: CityData["buildings"][number], segs: CityRoad[], origin
   return g;
 }
 
-// Reviste un modelo de Kenney con una foto de fachada: los triángulos de las paredes
-// (normal casi horizontal) pasan al material de la foto con UV proyectadas por cara
-// (u a lo largo del muro, v en altura, en metros reales tras escalar: sx en planta,
-// sy en altura); tejados, cornisas y salientes conservan el material original.
-// La geometría se copia (no se toca la del modelo compartido).
-function applyFacade(obj: THREE.Object3D, facade: { mat: THREE.Material; tileW: number; tileH: number }, sx: number, sy: number): void {
-  obj.updateMatrixWorld(true);
-  const p = new THREE.Vector3();
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  const c = new THREE.Vector3();
-  const n = new THREE.Vector3();
-  obj.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || Array.isArray(mesh.material)) return;
-    const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
-    const pos = src.getAttribute("position") as THREE.BufferAttribute;
-    const nor = src.getAttribute("normal") as THREE.BufferAttribute | undefined;
-    const uv = src.getAttribute("uv") as THREE.BufferAttribute | undefined;
-    if (!uv || !nor) return;
-    const m = mesh.matrixWorld; // espacio del modelo normalizado
-    const tri = pos.count / 3;
-    const wall: number[] = [];
-    const rest: number[] = [];
-    for (let t = 0; t < tri; t++) {
-      a.fromBufferAttribute(pos, t * 3).applyMatrix4(m);
-      b.fromBufferAttribute(pos, t * 3 + 1).applyMatrix4(m);
-      c.fromBufferAttribute(pos, t * 3 + 2).applyMatrix4(m);
-      n.subVectors(b, a).cross(p.subVectors(c, a));
-      const len = n.length();
-      if (len < 1e-9) {
-        rest.push(t);
-        continue;
-      }
-      n.divideScalar(len);
-      (Math.abs(n.y) < 0.3 ? wall : rest).push(t);
-    }
-    if (wall.length === 0) return;
-    const order = [...wall, ...rest];
-    const out = new THREE.BufferGeometry();
-    const P = new Float32Array(pos.count * 3);
-    const N = new Float32Array(pos.count * 3);
-    const U = new Float32Array(pos.count * 2);
-    order.forEach((t, k) => {
-      a.fromBufferAttribute(pos, t * 3).applyMatrix4(m);
-      b.fromBufferAttribute(pos, t * 3 + 1).applyMatrix4(m);
-      c.fromBufferAttribute(pos, t * 3 + 2).applyMatrix4(m);
-      n.subVectors(b, a).cross(p.subVectors(c, a)).normalize();
-      const isWall = k < wall.length;
-      // tangente horizontal del muro (perpendicular a la normal en planta)
-      const tx = -n.z;
-      const tz = n.x;
-      for (let v = 0; v < 3; v++) {
-        const i = t * 3 + v;
-        const dst = k * 3 + v;
-        P[dst * 3] = pos.getX(i);
-        P[dst * 3 + 1] = pos.getY(i);
-        P[dst * 3 + 2] = pos.getZ(i);
-        N[dst * 3] = nor.getX(i);
-        N[dst * 3 + 1] = nor.getY(i);
-        N[dst * 3 + 2] = nor.getZ(i);
-        if (isWall) {
-          p.fromBufferAttribute(pos, i).applyMatrix4(m);
-          U[dst * 2] = ((p.x * tx + p.z * tz) * sx) / facade.tileW;
-          U[dst * 2 + 1] = (p.y * sy) / facade.tileH;
-        } else {
-          U[dst * 2] = uv.getX(i);
-          U[dst * 2 + 1] = uv.getY(i);
-        }
-      }
-    });
-    out.setAttribute("position", new THREE.BufferAttribute(P, 3));
-    out.setAttribute("normal", new THREE.BufferAttribute(N, 3));
-    out.setAttribute("uv", new THREE.BufferAttribute(U, 2));
-    out.addGroup(0, wall.length * 3, 0);
-    out.addGroup(wall.length * 3, rest.length * 3, 1);
-    src.dispose();
-    mesh.geometry = out;
-    mesh.material = [facade.mat, mesh.material];
-    mesh.userData.ownGeometry = true;
-  });
-}
