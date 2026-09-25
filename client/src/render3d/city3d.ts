@@ -14,8 +14,9 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { TILE_SIZE, CITY_ROAD_HALF, type CityData, type CityRoad } from "@roi/shared";
 import { buildPolygonBuilding } from "./buildings3d.js";
+import { nycStreetlight, nycTrafficSignal } from "./streetFurniture3d.js";
 import { cloneModel, modelSize, modelsReady, KIT_SCALE, BUILDING_SETS, type Kit } from "./models3d.js";
-import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture, wornPaintTexture } from "./roadTextures.js";
+import { asphaltTexture, oilTexture, skidTexture, stopTexture, arrowStraightTexture, arrowLeftTexture, wornPaintTexture, puddleTexture } from "./roadTextures.js";
 
 // Asfalto texturizado (UV en coordenadas de mundo: se repite sin costuras entre
 // segmentos) y materiales de calcomanía para manchas, frenadas y rotulado.
@@ -49,6 +50,25 @@ function paintMaterial(color: number): THREE.MeshLambertMaterial {
   return m;
 }
 const PAINT_UV = 1.6; // unidades de render por repetición del desgaste
+// Charcos: agua oscura muy brillante (brillo especular del sol, farolas y fogonazos).
+let puddleMatCache: THREE.MeshPhongMaterial | null = null;
+function puddleMaterial(): THREE.MeshPhongMaterial {
+  if (!puddleMatCache) {
+    puddleMatCache = new THREE.MeshPhongMaterial({
+      color: 0x2b333d,
+      specular: 0xcfdcff,
+      shininess: 110,
+      alphaMap: puddleTexture(),
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+  }
+  return puddleMatCache;
+}
 const decalCache = new Map<string, THREE.MeshLambertMaterial>();
 function decalMaterial(key: string, tex: () => THREE.Texture, opacity = 1): THREE.MeshLambertMaterial {
   let m = decalCache.get(key);
@@ -197,8 +217,10 @@ function kitProp(kit: Kit, name: string, x: number, z: number, fx: number, fz: n
 }
 
 function streetlight(x: number, z: number, dx: number, dz: number): THREE.Object3D {
-  const k = kitProp("retro", "detail-light-single", x, z, dx, dz);
-  if (k) return k;
+  return nycStreetlight(x, z, dx, dz);
+}
+// (versión anterior de primitivas, sin uso)
+function streetlightBoxes(x: number, z: number, dx: number, dz: number): THREE.Object3D {
   const g = new THREE.Group();
   const pole = new THREE.Mesh(cylGeo, lambert(0x3d4248));
   pole.scale.set(0.09, 2.0, 0.09);
@@ -453,6 +475,20 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
         const lane = oneWay ? 0 : (ho > 0.95 ? 1 : -1) * half * 0.5;
         mark(oilMat, px + nx * lane, py + ny * lane, 1.1, 0.8, ang + ho * 5, Y_DECAL);
       }
+      // Charcos: sobre todo en la cuneta (junto al bordillo, alargados según la calle),
+      // alguno en un bache del carril y otros en la acera.
+      const hw = hash2(Math.round(px * 4) - 5, Math.round(py * 4) + 9);
+      if (hw < 0.16) {
+        const sideP = hw < 0.08 ? 1 : -1;
+        const gx = px + nx * sideP * (half - 0.4);
+        const gy = py + ny * sideP * (half - 0.4);
+        mark(puddleMaterial(), gx, gy, 1.6 + hw * 14, 0.8 + hw * 3, ang + (hw - 0.08) * 0.5, Y_DECAL + 0.002);
+      } else if (hw > 0.95) {
+        mark(puddleMaterial(), px + nx * half * 0.4, py + ny * half * 0.4, 1.3, 1.0, ang + hw * 9, Y_DECAL + 0.002);
+      } else if (hw > 0.88) {
+        const sideP = hw > 0.915 ? 1 : -1;
+        mark(puddleMaterial(), px + nx * sideP * (half + 1.0), py + ny * sideP * (half + 1.0), 1.4, 0.9, ang + hw * 4, 0.056);
+      }
     }
   }
 
@@ -502,11 +538,14 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
         const bandW = hi - lo;
         const at = (dist: number, off: number): [number, number] => [c.x - hx * dist + rx * off, c.y - hy * dist + ry * off];
         const rnd = hashStr(ckey + sgn + th.seg.id);
-        if (c.maxHalf >= CITY_ROAD_HALF[1] && !higher) {
-          // semáforo en la acera derecha, antes del paso de cebra, con el brazo sobre la calzada
-          const [qx, qy] = at(other + 2.6, half + 0.7);
-          const tl = kitProp("retro", "detail-light-traffic", L(qx), Lz(qy), -rx, -ry, 0.75);
-          if (tl) b.addObject(tl);
+        if (!higher && !allWayStop) {
+          // Semáforo de mástil en la esquina derecha, antes del paso de cebra: el brazo
+          // cruza la calzada y lleva una cabeza sobre cada carril que llega.
+          const poleOff = half + 0.7;
+          const laneCenters = oneWay ? (half >= 3 ? [-half * 0.5, half * 0.5] : [0]) : half >= 3 ? [half * 0.25, half * 0.75] : [half * 0.5];
+          const [qx, qy] = at(other + 2.6, poleOff);
+          const axis = Math.abs(th.ux * c.through[0].ux + th.uy * c.through[0].uy) > 0.7 ? "A" : "B";
+          b.addObject(nycTrafficSignal(L(qx), Lz(qy), hx, hy, laneCenters.map((lc) => (poleOff - lc) * T), axis));
         }
 
         if (higher || allWayStop) {

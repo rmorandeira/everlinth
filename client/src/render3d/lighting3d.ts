@@ -31,7 +31,8 @@ function organicJitter(time: number, speedA: number, speedB: number, phase: numb
 const DAY_SKY = new THREE.Color(0x8fc7e8);
 const NIGHT_SKY = new THREE.Color(0x05070f);
 const GLOW_TINT = new THREE.Color(0xff8c3c);
-const NIGHT_AMBIENT = new THREE.Color(0x33406b);
+const NIGHT_AMBIENT = new THREE.Color(0x6b7fb8);
+const MOON = new THREE.Color(0x9fb4e8);
 const GLOW_SUN = new THREE.Color(0xffb066);
 const WHITE = new THREE.Color(0xffffff);
 
@@ -116,10 +117,11 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     bgColor.copy(skyMix);
     fog.color.copy(skyMix);
 
-    ambient.intensity = THREE.MathUtils.lerp(1.05, 0.2, dn.darkness);
+    // De noche: luna azulada y cielo que aún rellena algo (la ciudad tiene que leerse).
+    ambient.intensity = THREE.MathUtils.lerp(1.05, 0.55, dn.darkness);
     ambient.color.copy(WHITE).lerp(NIGHT_AMBIENT, dn.darkness);
-    sun.intensity = THREE.MathUtils.lerp(1.9, 0.25, dn.darkness);
-    sun.color.copy(WHITE).lerp(GLOW_SUN, dn.glow);
+    sun.intensity = THREE.MathUtils.lerp(1.9, 0.6, dn.darkness);
+    sun.color.copy(WHITE).lerp(GLOW_SUN, dn.glow).lerp(MOON, dn.darkness);
 
     // Mismos ajustes del backoffice que en 2D, remapeados a near/far
     // alrededor de ISO_CAMERA_DIST (ver comentario junto al new THREE.Fog):

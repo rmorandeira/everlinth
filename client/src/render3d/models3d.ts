@@ -37,6 +37,44 @@ export const BUILDING_SETS = {
   house: HOUSES.map((n) => `suburban/${n}`),
 };
 
+// ---- Ventanas iluminadas ----
+// Los modelos de Kenney pintan los cristales con un azul característico de su paleta.
+// En el shader se detecta ese color y, según una rejilla de "ventanas" en coordenadas
+// de mundo, se enciende una fracción al azar con luz cálida (o alguna fría, de
+// pantalla/fluorescente). La intensidad sigue al anochecer (uWinGlow, ver scene3d).
+export const windowUniforms = {
+  uWinGlow: { value: 0 }, // 0 de día → ~0,45 de noche
+  uWinLit: { value: 0.28 }, // fracción de ventanas encendidas
+};
+function addWindowLights(mat: THREE.MeshStandardMaterial): void {
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev?.call(mat, shader, renderer);
+    Object.assign(shader.uniforms, windowUniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace("void main() {", "varying vec3 vWinWorld;\nvoid main() {")
+      .replace("#include <project_vertex>", "#include <project_vertex>\n  vWinWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("void main() {", "uniform float uWinGlow;\nuniform float uWinLit;\nvarying vec3 vWinWorld;\nvoid main() {")
+      .replace(
+        "#include <emissivemap_fragment>",
+        `#include <emissivemap_fragment>
+  {
+    float isWin = step(0.1, diffuseColor.b - diffuseColor.r) * step(0.42, diffuseColor.b);
+    if (isWin > 0.0 && uWinGlow > 0.001) {
+      vec3 cell = floor(vWinWorld * vec3(1.6, 1.0, 1.6));
+      float rnd = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+      float on = step(1.0 - uWinLit, rnd);
+      vec3 warm = mix(vec3(1.0, 0.74, 0.4), vec3(0.75, 0.85, 1.0), step(0.85, fract(rnd * 7.31)));
+      totalEmissiveRadiance += warm * on * uWinGlow;
+    }
+  }`
+      );
+  };
+  const prevKey = mat.customProgramCacheKey.bind(mat);
+  mat.customProgramCacheKey = () => prevKey() + "|winlights";
+}
+
 function normalize(root: THREE.Object3D): ModelEntry {
   const box = new THREE.Box3().setFromObject(root);
   const size = box.getSize(new THREE.Vector3());
@@ -52,7 +90,11 @@ function normalize(root: THREE.Object3D): ModelEntry {
       const std = mat as THREE.MeshStandardMaterial;
       if (std.map) std.map.anisotropy = 4;
       std.shadowSide = THREE.DoubleSide;
-      std.userData.cutaway = true; // se recorta en el círculo de visión (ver cutaway3d)
+      std.userData.cutaway = true; // se aclara si tapa el área del personaje (ver cutaway3d)
+      if (std.isMeshStandardMaterial && !std.userData.winLights) {
+        std.userData.winLights = true;
+        addWindowLights(std);
+      }
     }
   });
   return { object: g, size };

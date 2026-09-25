@@ -18,9 +18,11 @@ import { createFigureManager, type FigureEntity } from "./figures3d.js";
 import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { applyCutaway, applyCutawayToMaterial, updateCutaway } from "./cutaway3d.js";
 import { createGunFx } from "./gunfx3d.js";
+import { updateSignals } from "./streetFurniture3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityLayer } from "./city3d.js";
-import { initModels, modelsReady } from "./models3d.js";
+import { initModels, modelsReady, windowUniforms } from "./models3d.js";
+import { getDayNight } from "../render/daynight.js";
 
 // Zoom FIJO: mitad de alto del frustum ortográfico, en unidades de render
 // (1 unidad = 3 m). Con 7, una persona de 1,8 m ocupa ~32 px a 720p: la escena
@@ -419,6 +421,10 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     animateWater(time);
     updateTracers(dt);
     gunFx.update(dt);
+    updateSignals(time);
+    // Ventanas encendidas: aparecen al atardecer y a pleno de noche.
+    const dn = getDayNight();
+    windowUniforms.uWinGlow.value = THREE.MathUtils.smoothstep(dn.darkness, 0.15, 0.85) * 0.45 + dn.glow * 0.08;
     for (const t of treeUpdaters) t.update(time, t.def);
     lighting.update(playerX, playerZ, time, vision, flashlight, iso.camera);
     // Área del personaje sin obstrucciones (ver cutaway3d.ts).

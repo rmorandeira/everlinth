@@ -301,3 +301,42 @@ export function arrowLeftTexture(): THREE.CanvasTexture {
   arrowLeft = toTexture(c, false);
   return arrowLeft;
 }
+
+let puddle: THREE.CanvasTexture | null = null;
+// Charco: mancha de agua de borde irregular (alfa), con el centro más profundo.
+export function puddleTexture(): THREE.CanvasTexture {
+  if (puddle) return puddle;
+  const S = 256;
+  const [c, g] = canvas(S, S);
+  const r = rng(77);
+  g.fillStyle = "rgba(0,0,0,0)";
+  g.fillRect(0, 0, S, S);
+  // unión de varios lóbulos elípticos → contorno orgánico
+  for (let i = 0; i < 9; i++) {
+    const x = S / 2 + (r() - 0.5) * S * 0.45;
+    const y = S / 2 + (r() - 0.5) * S * 0.3;
+    const rx = S * (0.12 + r() * 0.16);
+    const ry = rx * (0.5 + r() * 0.4);
+    const grd = g.createRadialGradient(x, y, 0, x, y, rx);
+    grd.addColorStop(0, "rgba(255,255,255,1)");
+    grd.addColorStop(0.75, "rgba(255,255,255,0.95)");
+    grd.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grd;
+    g.save();
+    g.translate(x, y);
+    g.scale(1, ry / rx);
+    g.translate(-x, -y);
+    g.fillRect(x - rx, y - rx, rx * 2, rx * 2);
+    g.restore();
+  }
+  // gotitas sueltas alrededor
+  for (let i = 0; i < 14; i++) {
+    g.fillStyle = "rgba(255,255,255,0.8)";
+    g.beginPath();
+    g.arc(S / 2 + (r() - 0.5) * S * 0.8, S / 2 + (r() - 0.5) * S * 0.55, 2 + r() * 5, 0, Math.PI * 2);
+    g.fill();
+  }
+  puddle = toTexture(c, false);
+  puddle.colorSpace = THREE.NoColorSpace; // se usa como mapa de alfa
+  return puddle;
+}
