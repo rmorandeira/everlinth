@@ -4,7 +4,7 @@ const DEADZONE = 0.35;
 const ATTACK_BUTTON = 0; // A / Cruz
 const PICKUP_BUTTON = 2; // X / Cuadrado
 export const START_BUTTON = 9; // Start / Options: confirma formularios (login)
-const FIRE_BUTTON = 11; // R3 (pulsar el stick derecho): disparo, mantenido = ráfaga
+const FIRE_BUTTON = 7; // gatillo derecho (R2 / RT): disparo, mantenido = ráfaga
 
 // Mapeo estándar de la Web Gamepad API (independiente de la marca real del
 // mando): sirve para que la UI muestre "(A)", "(Start)"... entre paréntesis
@@ -90,7 +90,8 @@ export function setupGamepad(
       if (start && !prevStart) onStart();
       prevStart = start;
 
-      const fire = gp.buttons[FIRE_BUTTON]?.pressed === true;
+      // analógico: basta con apretarlo un poco (algunos mandos no marcan "pressed" hasta el fondo)
+      const fire = (gp.buttons[FIRE_BUTTON]?.value ?? 0) > 0.25 || gp.buttons[FIRE_BUTTON]?.pressed === true;
       if (fire !== prevFire) onFire(fire);
       prevFire = fire;
 
