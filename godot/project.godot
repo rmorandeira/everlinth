@@ -20,6 +20,30 @@ Net="*res://scripts/net/net.gd"
 window/size/viewport_width=1280
 window/size/viewport_height=720
 
+[shader_globals]
+
+win_glow={
+"type": "float",
+"value": 0.0
+}
+win_lit={
+"type": "float",
+"value": 0.3
+}
+
+cut_params={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 1)
+}
+cut_cam_fwd={
+"type": "vec3",
+"value": Vector3(0, 0, 1)
+}
+cut_keep={
+"type": "float",
+"value": 0.3
+}
+
 [rendering]
 
 renderer/rendering_method="forward_plus"

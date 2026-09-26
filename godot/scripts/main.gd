@@ -12,7 +12,9 @@ const MAX_ZOMBIES := 1024
 
 var cam := IsoCamera.new()
 var ground := Ground.new()
-var sun := DirectionalLight3D.new()
+var lighting := Lighting.new()
+var city_root: Node3D
+var city_key := ""
 var player_node: Node3D
 var others := {} # username -> { node, x, y }
 var zombie_mm := MultiMeshInstance3D.new()
@@ -48,33 +50,10 @@ func _ready() -> void:
 # ---------------------------------------------------------------- escena
 
 func _build_world() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("2a2d33")
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("b8c4d6")
-	env.ambient_light_energy = 0.55
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
+	if Config.hour >= 0.0:
+		lighting.hour_override = Config.hour
+	add_child(lighting)
 
-	sun.rotation_degrees = Vector3(-52.0, -35.0, 0.0)
-	sun.light_energy = 1.25
-	sun.light_color = Color("fff2dc")
-	sun.shadow_enabled = true
-	# Cámara ortográfica a DIST unidades: la escena visible está entre ~35 y ~80 de
-	# distancia. Las divisiones de sombra se concentran en ese tramo (las de por
-	# defecto gastan casi toda la resolución en los primeros metros, donde no hay nada).
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	sun.directional_shadow_max_distance = 100.0
-	sun.directional_shadow_split_1 = 0.42
-	sun.directional_shadow_split_2 = 0.55
-	sun.directional_shadow_split_3 = 0.72
-	sun.directional_shadow_blend_splits = true
-	sun.shadow_bias = 0.08
-	sun.shadow_normal_bias = 2.0
-	add_child(sun)
 
 	add_child(cam)
 	cam.current = true
@@ -117,7 +96,27 @@ func _make_figure(color: Color) -> Node3D:
 # ---------------------------------------------------------------- interfaz
 
 func _build_ui() -> void:
+	# Posproceso de pantalla (tilt-shift + color): debajo del HUD, que no se desenfoca.
+	var post := CanvasLayer.new()
+	post.layer = 0
+	add_child(post)
+	var blur_shader: Shader = load("res://shaders/tilt_blur.gdshader")
+	for pass_dir in [Vector2(1, 0), Vector2(0, 1)]:
+		var bb := BackBufferCopy.new()
+		bb.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
+		post.add_child(bb)
+		var rect := ColorRect.new()
+		rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var mat := ShaderMaterial.new()
+		mat.shader = blur_shader
+		mat.set_shader_parameter("dir", pass_dir)
+		mat.set_shader_parameter("grade", pass_dir.y > 0.5)
+		rect.material = mat
+		post.add_child(rect)
+
 	var layer := CanvasLayer.new()
+	layer.layer = 1
 	add_child(layer)
 
 	login_panel = PanelContainer.new()
@@ -205,6 +204,7 @@ func _on_message(msg: Dictionary) -> void:
 			for p in msg.players:
 				_set_other(p)
 			ground.build(screen, neighbors)
+			_build_city()
 		"playerUpdate":
 			_set_other(msg.player)
 		"playerLeft":
@@ -230,6 +230,29 @@ func _on_message(msg: Dictionary) -> void:
 			status_label.text = "Has muerto. Tu personaje se ha perdido para siempre."
 		"error":
 			status_label.text = str(msg.message)
+
+
+## Ciudad vectorial de la sala actual y sus vecinas (se rehace al cambiar de sala).
+func _build_city() -> void:
+	var key := "%d,%d" % [int(screen.sx), int(screen.sy)]
+	if key == city_key:
+		return
+	city_key = key
+	if city_root:
+		city_root.queue_free()
+		city_root = null
+	var datas: Array = []
+	if screen.has("city"):
+		datas.append(screen.city)
+	for n in neighbors:
+		if n.has("city"):
+			datas.append(n.city)
+	if datas.is_empty():
+		return
+	var t0 := Time.get_ticks_msec()
+	city_root = City.build(datas, int(screen.sx) * W, int(screen.sy) * H)
+	add_child(city_root)
+	print("ciudad construida en %d ms (%d nodos)" % [Time.get_ticks_msec() - t0, city_root.get_child_count()])
 
 
 func _set_other(p: Dictionary) -> void:
@@ -298,7 +321,7 @@ func _process(dt: float) -> void:
 
 	you_display.x = lerp_towards(you_display.x, float(you.x), dt)
 	you_display.y = lerp_towards(you_display.y, float(you.y), dt)
-	player_node.position = Vector3(you_display.x * T, 0.0, you_display.y * T)
+	player_node.position = Vector3(you_display.x * T, 0.05, you_display.y * T)
 
 	var sx := int(screen.sx)
 	var sy := int(screen.sy)
@@ -312,7 +335,10 @@ func _process(dt: float) -> void:
 		o.node.position = Vector3(o.x * T, 0.0, o.y * T)
 
 	_update_zombies(dt, sx * W, sy * H)
+	lighting.update(you_display.x * T, you_display.y * T)
+	StreetFurniture.update_signals(time)
 	cam.follow(you_display.x * T, you_display.y * T, time, dt)
+	_update_cutaway()
 	_maybe_capture()
 
 
@@ -332,6 +358,14 @@ func _update_zombies(dt: float, zox: int, zoy: int) -> void:
 		mm.set_instance_transform(n, Transform3D(basis, Vector3((d.x - zox) * T, 0.275 * s, (d.y - zoy) * T)))
 		n += 1
 	mm.visible_instance_count = n
+
+
+## Franja de pantalla del personaje (desde su cabeza hacia abajo, 70 % del ancho).
+func _update_cutaway() -> void:
+	var size := get_viewport().get_visible_rect().size
+	var head := cam.unproject_position(player_node.position + Vector3(0, 0.75, 0))
+	RenderingServer.global_shader_parameter_set("cut_params", Vector4(head.y, size.x * 0.5, size.x * 0.7 * 0.5, size.y * 0.05))
+	RenderingServer.global_shader_parameter_set("cut_cam_fwd", cam.global_transform.basis.z)
 
 
 ## Verificación sin pantalla: guarda una captura tras N segundos de partida y sale.

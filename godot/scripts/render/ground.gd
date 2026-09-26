@@ -9,11 +9,12 @@ const T := Protocol.TILE_SIZE
 const W := Protocol.SCREEN_WIDTH
 const H := Protocol.SCREEN_HEIGHT
 
-const GRASS := [Color("5d7f3e"), Color("56773a"), Color("648744")]
+const GRASS := [Color("5cb85c"), Color("4fa350"), Color("66c266")]
 const WATER := [Color("2e6fc4"), Color("3479cf")]
-const DIRT := Color("8a6a45")
+const DIRT := Color("b8a06a")
 const ROAD := Color("3b3d40")
-const SIDEWALK := Color("9a978f")
+const SIDEWALK := Color("bdb8ac")
+const Y := 0.05 # altura del suelo (como en la web: las calles van encima)
 
 var _key := ""
 var _floor := MultiMeshInstance3D.new()
@@ -62,20 +63,20 @@ func build(screen: Dictionary, neighbors: Array) -> void:
 	_key = key
 	var floor_cells: Array = []
 	var block_cells: Array = []
-	_collect(screen.tiles, 0, 0, sx, sy, floor_cells, block_cells)
+	_collect(screen.tiles, 0, 0, sx, sy, floor_cells, block_cells, screen.has("city"))
 	for n in neighbors:
 		var nx := int(n.sx)
 		var ny := int(n.sy)
-		_collect(n.tiles, (nx - sx) * W, (ny - sy) * H, nx, ny, floor_cells, block_cells)
+		_collect(n.tiles, (nx - sx) * W, (ny - sy) * H, nx, ny, floor_cells, block_cells, n.has("city"))
 
 	var fm := _floor.multimesh
 	fm.instance_count = floor_cells.size()
 	for i in floor_cells.size():
 		var c: Array = floor_cells[i]
-		fm.set_instance_transform(i, Transform3D(Basis(), Vector3(c[0] * T, 0.0, c[1] * T)))
+		fm.set_instance_transform(i, Transform3D(Basis(), Vector3(c[0] * T, Y, c[1] * T)))
 		fm.set_instance_color(i, c[2])
 
-	_blocks.mesh = _merge_blocks(block_cells)
+	_blocks.mesh = _merge_blocks(block_cells) if block_cells.size() > 0 else null
 
 
 ## Bloques fusionados en una sola malla, sin caras interiores: de cada celda solo
@@ -123,7 +124,8 @@ static func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector
 		st.add_vertex(v)
 
 
-func _collect(tiles: Array, ox: int, oz: int, room_x: int, room_y: int, floor_cells: Array, block_cells: Array) -> void:
+## urban: sala con ciudad vectorial (todo el suelo es pavimento; calles y edificios los pone City).
+func _collect(tiles: Array, ox: int, oz: int, room_x: int, room_y: int, floor_cells: Array, block_cells: Array, urban: bool) -> void:
 	var gx0 := room_x * W
 	var gz0 := room_y * H
 	for row in tiles.size():
@@ -133,6 +135,9 @@ func _collect(tiles: Array, ox: int, oz: int, room_x: int, room_y: int, floor_ce
 			var x := col + ox
 			var z := row + oz
 			var n := hash2(gx0 + col, gz0 + row)
+			if urban:
+				floor_cells.append([x, z, SIDEWALK])
+				continue
 			floor_cells.append([x, z, _floor_color(tile, n)])
 			if tile == Protocol.TileType.Building:
 				# Altura por manzana (hash de la celda de 6×6 que la contiene): bloques coherentes.
