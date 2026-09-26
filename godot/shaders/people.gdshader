@@ -21,6 +21,10 @@ void fragment() {
 	// fogonazos cercanos: los sprites se iluminan de naranja
 	float fl = sprite_flash.w * max(0.0, 1.0 - distance(v_world, sprite_flash.xyz) / 2.2);
 	ALBEDO = c.rgb * sprite_light + vec3(1.0, 0.7, 0.35) * fl * 0.8;
+	if (v_kind > 5.5) {
+		// mordido: se va poniendo verdoso y parpadea
+		ALBEDO = mix(ALBEDO, vec3(0.42, 0.58, 0.32) * sprite_light, 0.35 + 0.2 * sin(TIME * 9.0));
+	}
 	ALPHA = c.a;
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 }

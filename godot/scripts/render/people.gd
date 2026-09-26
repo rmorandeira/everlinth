@@ -12,12 +12,16 @@ const MAX_CORPSES := 1024
 const OTHER_VARIANTS := 7
 const ZOMBIE_VARIANTS := 32
 const ZOMBIE_BASE := 1 + OTHER_VARIANTS
+const CIVILIAN_VARIANTS := 24
+const CIVILIAN_BASE := ZOMBIE_BASE + ZOMBIE_VARIANTS
 
 ## Tipos (INSTANCE_CUSTOM.w; decide el color de la silueta).
 const KIND_ZOMBIE := 0
 const KIND_GIANT := 1
 const KIND_PLAYER := 2
 const KIND_OTHER := 3
+const KIND_CIVILIAN := 5 # sin silueta
+const KIND_BITTEN := 6 # mordido: se tambalea, tinte verdoso
 
 var _walkers := MultiMeshInstance3D.new()
 var _corpses := MultiMeshInstance3D.new()
@@ -33,6 +37,8 @@ func _ready() -> void:
 	for i in ZOMBIE_VARIANTS:
 		zspecs.append(PixelPeople.random_spec(2000 + i * 13, true))
 	specs.append_array(zspecs)
+	for i in CIVILIAN_VARIANTS:
+		specs.append(PixelPeople.random_spec(3000 + i * 17, false))
 	var atlas := ImageTexture.create_from_image(PixelPeople.build_atlas(specs))
 	var corpse_atlas := ImageTexture.create_from_image(PixelPeople.build_corpse_atlas(zspecs))
 

@@ -32,6 +32,8 @@ var you_display := Vector2.ZERO
 var others := {} # username -> { p, x, y, label, variant }
 var zombie_targets := {} # id -> Vector3(gx, gy, giant)
 var zombie_display := {} # id -> Vector2(gx, gy)
+var civ_targets := {} # id -> [Vector2(gx, gy), estado, variante]
+var civ_display := {} # id -> Vector2(gx, gy)
 var corpses: Array = [] # { gx, gy, variant, pose, scale }
 var last_dirs := {"N": false, "S": false, "E": false, "W": false}
 var time := 0.0
@@ -201,6 +203,16 @@ func _on_message(msg: Dictionary) -> void:
 			for id in zombie_display.keys():
 				if not zombie_targets.has(id):
 					zombie_display.erase(id)
+		"civilians":
+			civ_targets.clear()
+			for c in msg.civilians:
+				var id := int(c.id)
+				civ_targets[id] = [Vector2(c.gx, c.gy), int(c.s), int(c.v)]
+				if not civ_display.has(id):
+					civ_display[id] = Vector2(c.gx, c.gy)
+			for id in civ_display.keys():
+				if not civ_targets.has(id):
+					civ_display.erase(id)
 		"zombieDied":
 			corpses.append({"gx": float(msg.gx), "gy": float(msg.gy), "variant": randi() % People.ZOMBIE_VARIANTS, "pose": randi() % 2, "scale": Protocol.GIANT_SCALE if msg.giant else 1.0})
 			if corpses.size() > MAX_CORPSES:
@@ -477,6 +489,16 @@ func _process_game(dt: float) -> void:
 		ents.append({"id": "z%d" % id, "x": (d.x - zox) * T, "z": (d.y - zoy) * T, "variant": People.ZOMBIE_BASE + id % People.ZOMBIE_VARIANTS,
 			"scale": Protocol.GIANT_SCALE if giant else 1.0, "kind": People.KIND_GIANT if giant else People.KIND_ZOMBIE})
 		dots.append([d, Color("ff8a1a") if giant else Color("e04040"), 2.2 if giant else 1.0])
+	for id in civ_display:
+		var d: Vector2 = civ_display[id]
+		var ct: Array = civ_targets.get(id, [d, 0, 0])
+		var tp: Vector2 = ct[0]
+		d.x = lerp_towards(d.x, tp.x, dt, 12.0)
+		d.y = lerp_towards(d.y, tp.y, dt, 12.0)
+		civ_display[id] = d
+		ents.append({"id": "c%d" % id, "x": (d.x - zox) * T, "z": (d.y - zoy) * T, "variant": People.CIVILIAN_BASE + int(ct[2]) % People.CIVILIAN_VARIANTS,
+			"scale": 1.0, "kind": People.KIND_BITTEN if int(ct[1]) == 2 else People.KIND_CIVILIAN})
+		dots.append([d, Color("f0f0e0") if int(ct[1]) == 0 else (Color("ffd84a") if int(ct[1]) == 1 else Color("8fd06a")), 0.8])
 	var ks: Array = []
 	for c in corpses:
 		var cx: float = c.gx - zox

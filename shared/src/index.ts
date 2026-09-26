@@ -368,6 +368,16 @@ export interface ZombieState {
   /** Zombi gigante: más grande, lento y resistente (solo aparece con hordas grandes). */
   giant?: boolean;
 }
+/** Paseante (población civil): deambula, huye de la horda y, si le muerden, se convierte. */
+export interface CivilianState {
+  id: number;
+  gx: number;
+  gy: number;
+  /** 0 tranquilo, 1 huyendo, 2 mordido (se está convirtiendo) */
+  s: 0 | 1 | 2;
+  /** variante de ropa */
+  v: number;
+}
 export const GIANT_SCALE = 2.4;
 export const GIANT_HP = 40;
 export const ZOMBIE_MAX_HP = 3;
@@ -402,6 +412,7 @@ export type ServerMessage =
   | { type: "error"; message: string }
   | { type: "visionSettings"; settings: VisionFogSettings }
   | { type: "zombies"; zombies: ZombieState[] }
+  | { type: "civilians"; civilians: CivilianState[] }
   // hit: qué detuvo la bala (un zombi, un obstáculo, o nada: fin del alcance).
   | { type: "shot"; from: { gx: number; gy: number }; to: { gx: number; gy: number }; hit: "zombie" | "wall" | "none" }
   // Al tirador, cada vez que mata un zombi.

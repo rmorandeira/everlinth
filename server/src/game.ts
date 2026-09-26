@@ -25,6 +25,7 @@ import {
   type NeighborTiles,
   type ZombieState,
   type CityBuilding,
+  type CivilianState,
 } from "@roi/shared";
 import { getScreen, saveScreen, getPlayer, savePlayer, deletePlayer } from "./db.js";
 import { generateScreen } from "./worldgen.js";
@@ -68,6 +69,13 @@ export class GameServer {
   private zombies: Array<ZombieState & { speed: number; hitCooldown: number; pack: number; stun?: number }> = [];
   private nextZombieId = 1;
   private nextPack = 1;
+  // Población civil: deambula por las aceras, huye de la horda (y de los tiros) y, si
+  // la muerden, se convierte en zombi al cabo de unos segundos: la horda crece.
+  private civilians: Array<{ id: number; gx: number; gy: number; tx: number; ty: number; walk: number; run: number; panic: number; infected: number; v: number; wait: number }> = [];
+  private nextCivilianId = 1;
+  private noises: Array<{ gx: number; gy: number; t: number; r: number }> = [];
+  private static readonly CIVILIANS = 70;
+  private static readonly PREY_RANGE = 16; // un zombi ve a sus víctimas a esta distancia
   private spawnTimer = 0;
 
   constructor() {
@@ -396,6 +404,7 @@ export class GameServer {
     const len = Math.hypot(dxRaw, dzRaw);
     if (len < 1e-6) return;
     conn.lastShot = now;
+    this.noises.push({ gx: player.sx * SCREEN_WIDTH + player.x, gy: player.sy * SCREEN_HEIGHT + player.y, t: now, r: 14 });
     // Dispersión del arma: cada bala se desvía un poco de donde se apunta (normal con
     // σ ≈ 0,7°, aproximada sumando uniformes), así las ráfagas abren un pequeño cono.
     const spread = (Math.random() + Math.random() + Math.random() - 1.5) * 0.025;
@@ -467,6 +476,7 @@ export class GameServer {
    * las armas explosivas (granadas, cohetes…) y, de momento, la tecla de prueba.
    */
   explode(gx: number, gy: number, radius: number, power: number, by?: { conn: Connection; player: PlayerPrivateState }): void {
+    this.noises.push({ gx, gy, t: Date.now(), r: 30 });
     const seen = new Set<string>();
     const R = Math.ceil(radius / SCREEN_WIDTH) + 1;
     for (let ry = Math.floor(gy / SCREEN_HEIGHT) - R; ry <= Math.floor(gy / SCREEN_HEIGHT) + R; ry++) {
@@ -634,6 +644,16 @@ export class GameServer {
       if (!cell) grid.set(k, (cell = []));
       cell.push(z);
     }
+    this.tickCivilianSpawns(targets);
+    // rejilla de civiles (celdas de 4 tiles) para que cada zombi encuentre su presa
+    const civGrid = new Map<string, Array<(typeof this.civilians)[number]>>();
+    for (const c of this.civilians) {
+      if (c.infected > 0) continue;
+      const k = `${Math.floor(c.gx / 4)},${Math.floor(c.gy / 4)}`;
+      let cell = civGrid.get(k);
+      if (!cell) civGrid.set(k, (cell = []));
+      cell.push(c);
+    }
     const dead = new Set<Connection>();
     this.zombies = this.zombies.filter((z) => {
       let near = targets[0];
@@ -646,12 +666,38 @@ export class GameServer {
         }
       }
       if (nd > ZOMBIE_VIEW_RANGE * 1.6) return false;
+      // La horda se despliega: cada zombi va a por la víctima que tenga más cerca
+      // (un paseante o un jugador); sin presa a la vista, avanza con su manada.
+      let prey: (typeof this.civilians)[number] | null = null;
+      let pd = Math.min(nd, GameServer.PREY_RANGE);
+      const gcx = Math.floor(z.gx / 4);
+      const gcy = Math.floor(z.gy / 4);
+      for (let yy = gcy - 4; yy <= gcy + 4; yy++) {
+        for (let xx = gcx - 4; xx <= gcx + 4; xx++) {
+          for (const c of civGrid.get(`${xx},${yy}`) ?? []) {
+            const d = dist(z.gx, z.gy, c.gx, c.gy);
+            if (d < pd) {
+              pd = d;
+              prey = c;
+            }
+          }
+        }
+      }
       z.hitCooldown -= dt;
       if (z.stun && z.stun > 0) {
         z.stun -= dt;
         return true;
       }
-      if (nd < (z.giant ? 1.9 : 0.9)) {
+      if (prey) {
+        if (pd < (z.giant ? 1.6 : 0.75)) {
+          if (z.hitCooldown <= 0 && prey.infected <= 0) {
+            z.hitCooldown = 1;
+            prey.infected = 2.5 + Math.random() * 2; // mordido: se convierte al rato
+            prey.panic = 0;
+          }
+          return true;
+        }
+      } else if (nd < (z.giant ? 1.9 : 0.9)) {
         if (z.hitCooldown <= 0 && !dead.has(near.conn)) {
           z.hitCooldown = 1;
           near.player.hp -= z.giant ? 6 : 2;
@@ -664,11 +710,16 @@ export class GameServer {
         }
         return true;
       }
-      let sx = ((near.gx - z.gx) / nd) * z.speed * dt;
-      let sy = ((near.gy - z.gy) / nd) * z.speed * dt;
-      // cohesión: hacia el centro de su manada si se ha quedado atrás o a un lado
+      const tx = prey ? prey.gx : near.gx;
+      const ty = prey ? prey.gy : near.gy;
+      const td = Math.max(0.001, prey ? pd : nd);
+      // tras una presa corren algo más (un tirón hacia la víctima)
+      const sp = z.speed * (prey ? 1.35 : 1);
+      let sx = ((tx - z.gx) / td) * sp * dt;
+      let sy = ((ty - z.gy) / td) * sp * dt;
+      // cohesión: solo sin presa a la vista (con presa, la manada se abre en abanico)
       const p = packs.get(z.pack);
-      if (p && p.n > 1) {
+      if (!prey && nd > GameServer.PREY_RANGE && p && p.n > 1) {
         const px = p.x / p.n - z.gx;
         const py = p.y / p.n - z.gy;
         const pd = Math.hypot(px, py);
@@ -700,14 +751,161 @@ export class GameServer {
       return true;
     });
 
+    this.tickCivilians(dt);
+
     for (const t of targets) {
       if (dead.has(t.conn)) continue;
+      const civs: CivilianState[] = this.civilians
+        .filter((c) => Math.abs(c.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(c.gy - t.gy) < ZOMBIE_VIEW_RANGE)
+        .map((c) => ({ id: c.id, gx: Math.round(c.gx * 100) / 100, gy: Math.round(c.gy * 100) / 100, s: c.infected > 0 ? 2 : c.panic > 0 ? 1 : 0, v: c.v }));
+      send(t.conn.socket, { type: "civilians", civilians: civs });
       const list = this.zombies
         .filter((z) => Math.abs(z.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(z.gy - t.gy) < ZOMBIE_VIEW_RANGE)
         .map((z) => ({ id: z.id, gx: Math.round(z.gx * 100) / 100, gy: Math.round(z.gy * 100) / 100, hp: z.hp, ...(z.giant ? { giant: true } : {}) }));
       send(t.conn.socket, { type: "zombies", zombies: list });
     }
   }
+
+  /** ¿Se puede andar por ahí? */
+  private walkable(gx: number, gy: number): boolean {
+    return !this.isBlockedAt(0, 0, gx, gy);
+  }
+
+  private tickCivilianSpawns(targets: Array<{ gx: number; gy: number }>): void {
+    // se retiran los que quedan lejos de todos
+    this.civilians = this.civilians.filter((c) => targets.some((t) => dist(c.gx, c.gy, t.gx, t.gy) < ZOMBIE_VIEW_RANGE * 1.4));
+    const want = GameServer.CIVILIANS * targets.length;
+    for (let n = 0; n < 6 && this.civilians.length < want; n++) {
+      const t = targets[Math.floor(Math.random() * targets.length)];
+      // al principio también cerca (la calle ya está poblada); luego fuera de pantalla
+      const near = this.civilians.length < want * 0.5;
+      const ang = Math.random() * Math.PI * 2;
+      const r = (near ? 5 : 26) + Math.random() * (near ? 30 : 14);
+      const gx = t.gx + Math.cos(ang) * r;
+      const gy = t.gy + Math.sin(ang) * r;
+      if (!this.walkable(gx, gy)) continue;
+      this.civilians.push({ id: this.nextCivilianId++, gx, gy, tx: gx, ty: gy, walk: 0.8 + Math.random() * 0.5, run: 3.0 + Math.random() * 1.3, panic: 0, infected: 0, v: Math.floor(Math.random() * 1000), wait: Math.random() * 3 });
+    }
+  }
+
+  private tickCivilians(dt: number): void {
+    const now = Date.now();
+    this.noises = this.noises.filter((n) => now - n.t < 1500);
+    const zGrid = new Map<string, Array<(typeof this.zombies)[number]>>();
+    for (const z of this.zombies) {
+      const k = `${Math.floor(z.gx / 4)},${Math.floor(z.gy / 4)}`;
+      let cell = zGrid.get(k);
+      if (!cell) zGrid.set(k, (cell = []));
+      cell.push(z);
+    }
+    const turned: Array<(typeof this.civilians)[number]> = [];
+    for (const c of this.civilians) {
+      if (c.infected > 0) {
+        // mordido: se tambalea y al cabo de unos segundos se levanta como zombi
+        c.infected -= dt;
+        const a = Math.random() * Math.PI * 2;
+        const sx = Math.cos(a) * 0.3 * dt;
+        const sy = Math.sin(a) * 0.3 * dt;
+        if (this.walkable(c.gx + sx, c.gy + sy)) {
+          c.gx += sx;
+          c.gy += sy;
+        }
+        if (c.infected <= 0) turned.push(c);
+        continue;
+      }
+      // ¿amenaza cerca? zombis a menos de 11 tiles, o tiros / explosiones
+      let fx = 0;
+      let fy = 0;
+      let threat = false;
+      const gcx = Math.floor(c.gx / 4);
+      const gcy = Math.floor(c.gy / 4);
+      for (let yy = gcy - 3; yy <= gcy + 3; yy++) {
+        for (let xx = gcx - 3; xx <= gcx + 3; xx++) {
+          for (const z of zGrid.get(`${xx},${yy}`) ?? []) {
+            const dx = c.gx - z.gx;
+            const dy = c.gy - z.gy;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < 121 && d2 > 0.0001) {
+              threat = true;
+              fx += dx / d2;
+              fy += dy / d2;
+            }
+          }
+        }
+      }
+      for (const n of this.noises) {
+        const dx = c.gx - n.gx;
+        const dy = c.gy - n.gy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < n.r * n.r && d2 > 0.0001) {
+          threat = true;
+          fx += (dx / d2) * 0.5;
+          fy += (dy / d2) * 0.5;
+        }
+      }
+      if (threat) c.panic = 4 + Math.random() * 2;
+      else c.panic = Math.max(0, c.panic - dt);
+      if (c.panic > 0) {
+        // huida: lejos de la amenaza, corriendo; si choca, prueba a desviarse
+        const fl = Math.hypot(fx, fy);
+        let ang = fl > 1e-6 ? Math.atan2(fy, fx) : Math.atan2(c.gy - c.ty, c.gx - c.tx);
+        ang += (Math.random() - 0.5) * 0.4;
+        const step = c.run * dt;
+        for (const off of [0, 0.7, -0.7, 1.4, -1.4, 2.1, -2.1]) {
+          const nx = c.gx + Math.cos(ang + off) * step;
+          const ny = c.gy + Math.sin(ang + off) * step;
+          if (this.walkable(nx, ny)) {
+            c.tx = c.gx;
+            c.ty = c.gy;
+            c.gx = nx;
+            c.gy = ny;
+            break;
+          }
+        }
+        continue;
+      }
+      // paseo: va a un punto cercano, a veces se para un poco, y elige otro
+      if (c.wait > 0) {
+        c.wait -= dt;
+        continue;
+      }
+      const dx = c.tx - c.gx;
+      const dy = c.ty - c.gy;
+      const d = Math.hypot(dx, dy);
+      if (d < 0.3) {
+        c.wait = Math.random() < 0.3 ? 1 + Math.random() * 3 : 0;
+        for (let k = 0; k < 6; k++) {
+          const a = Math.random() * Math.PI * 2;
+          const r = 3 + Math.random() * 7;
+          const nx = c.gx + Math.cos(a) * r;
+          const ny = c.gy + Math.sin(a) * r;
+          if (this.walkable(nx, ny) && this.walkable((c.gx + nx) / 2, (c.gy + ny) / 2)) {
+            c.tx = nx;
+            c.ty = ny;
+            break;
+          }
+        }
+        continue;
+      }
+      const nx = c.gx + (dx / d) * c.walk * dt;
+      const ny = c.gy + (dy / d) * c.walk * dt;
+      if (this.walkable(nx, ny)) {
+        c.gx = nx;
+        c.gy = ny;
+      } else {
+        c.tx = c.gx;
+        c.ty = c.gy;
+      }
+    }
+    if (turned.length > 0) {
+      const gone = new Set(turned);
+      this.civilians = this.civilians.filter((c) => !gone.has(c));
+      for (const c of turned) {
+        this.zombies.push({ id: this.nextZombieId++, gx: c.gx, gy: c.gy, hp: ZOMBIE_MAX_HP, speed: 0.9 + Math.random() * 0.6, hitCooldown: 1, pack: this.nextPack++ });
+      }
+    }
+  }
+
 
   private handlePickup(conn: Connection, player: PlayerPrivateState): void {
     const { screen } = this.ensureScreenLoaded(player.sx, player.sy);
