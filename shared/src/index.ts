@@ -259,6 +259,9 @@ export interface CityBuilding {
   id: string;
   floors: number;
   pts: Array<[number, number]>;
+  /** Daño (solo si ha recibido alguno): vida actual y máxima; 0 = derrumbado. */
+  hp?: number;
+  maxHp?: number;
 }
 export interface CityData {
   roads: CityRoad[];
@@ -404,7 +407,9 @@ export type ServerMessage =
   // A los jugadores cercanos: un zombi ha muerto ahí (su cadáver queda en el suelo).
   | { type: "zombieDied"; gx: number; gy: number; giant: boolean }
   // Un asset del catálogo se ha guardado o borrado desde /admin/assets: recargarlo.
-  | { type: "assetsChanged"; id: string };
+  | { type: "assetsChanged"; id: string }
+  // Un edificio ha cambiado de escalón de daño (cada 10 %) o se ha derrumbado (hp 0).
+  | { type: "buildingDamaged"; id: string; hp: number; maxHp: number };
 
 // ---- Catálogo de assets (herramienta /admin/assets) ----
 // Un asset es cualquier cosa del juego con representación 3D: un modelo GLB (kits de

@@ -14,6 +14,7 @@ import {
   ZOMBIE_VIEW_RANGE,
   GUN_RANGE,
   GUN_FIRE_MS,
+  TileType,
   screenKey,
   type ClientMessage,
   type ServerMessage,
@@ -23,10 +24,12 @@ import {
   type InputState,
   type NeighborTiles,
   type ZombieState,
+  type CityBuilding,
 } from "@roi/shared";
 import { getScreen, saveScreen, getPlayer, savePlayer, deletePlayer } from "./db.js";
 import { generateScreen } from "./worldgen.js";
 import { rasterRoom } from "./citygen/index.js";
+import { annotateBuildings, damageBuilding, distanceToPolygon } from "./buildings.js";
 import { MONSTER_KINDS } from "./content.js";
 
 const NO_INPUT: InputState = { N: false, S: false, E: false, W: false };
@@ -198,6 +201,10 @@ export class GameServer {
     const withCity = (sc: ScreenData): ScreenData => {
       // La geometría vectorial de la ciudad no se guarda: se regenera (determinista).
       if (sc.biome === "city" && !sc.city) sc.city = rasterRoom(sx, sy).city;
+      if (sc.city) {
+        annotateBuildings(sc.city.buildings);
+        for (const b of sc.city.buildings) if (b.hp !== undefined && b.hp <= 0) this.clearBuildingTiles(sc, b);
+      }
       return sc;
     };
 
@@ -428,12 +435,79 @@ export class GameServer {
         }
       }
     }
+    if (!hit && wall < GUN_RANGE) this.shootBuilding(ox + dx * (wall + 0.15), oy + dz * (wall + 0.15));
     const shot: ServerMessage = { type: "shot", from: { gx: ox, gy: oy }, to: { gx: ox + dx * hitT, gy: oy + dz * hitT }, hit: hit ? "zombie" : wall < GUN_RANGE ? "wall" : "none" };
     for (const c of this.connections) {
       if (!c.username) continue;
       const p = this.players.get(c.username);
       if (p && dist(p.sx * SCREEN_WIDTH + p.x, p.sy * SCREEN_HEIGHT + p.y, ox, oy) <= ZOMBIE_VIEW_RANGE) send(c.socket, shot);
     }
+  }
+
+  // ---- Edificios destructibles (ver buildings.ts) ----
+
+  /** Bala que acaba en (gx, gy) (tiles globales): daña el edificio que haya ahí. */
+  private shootBuilding(gx: number, gy: number): void {
+    const rsx = Math.floor(gx / SCREEN_WIDTH);
+    const rsy = Math.floor(gy / SCREEN_HEIGHT);
+    if (rsx < WORLD_MIN || rsx > WORLD_MAX || rsy < WORLD_MIN || rsy > WORLD_MAX) return;
+    const { screen } = this.ensureScreenLoaded(rsx, rsy);
+    if (!screen.city) return;
+    let best: CityBuilding | null = null;
+    let bestD = 0.8;
+    for (const b of screen.city.buildings) {
+      if (b.hp !== undefined && b.hp <= 0) continue;
+      const d = distanceToPolygon(gx, gy, b.pts);
+      if (d < bestD) {
+        bestD = d;
+        best = b;
+      }
+    }
+    if (!best) return;
+    const r = damageBuilding(best, 1);
+    if (!r.changedStage && !r.collapsed) return;
+    // el mismo edificio aparece en la ciudad de cada sala que toca: se actualizan todas
+    for (const sc of this.screenCache.values()) {
+      if (!sc.city) continue;
+      for (const b of sc.city.buildings) {
+        if (b.id !== best.id) continue;
+        b.hp = r.hp;
+        b.maxHp = r.maxHp;
+      }
+    }
+    if (r.collapsed) {
+      const xs = best.pts.map((p) => p[0]);
+      const ys = best.pts.map((p) => p[1]);
+      for (let ry = Math.floor(Math.min(...ys) / SCREEN_HEIGHT); ry <= Math.floor(Math.max(...ys) / SCREEN_HEIGHT); ry++) {
+        for (let rx = Math.floor(Math.min(...xs) / SCREEN_WIDTH); rx <= Math.floor(Math.max(...xs) / SCREEN_WIDTH); rx++) {
+          if (rx < WORLD_MIN || rx > WORLD_MAX || ry < WORLD_MIN || ry > WORLD_MAX) continue;
+          const { screen: sc } = this.ensureScreenLoaded(rx, ry);
+          if (this.clearBuildingTiles(sc, best)) saveScreen(sc);
+        }
+      }
+    }
+    const msg: ServerMessage = { type: "buildingDamaged", id: best.id, hp: r.hp, maxHp: r.maxHp };
+    for (const c of this.connections) {
+      if (!c.username) continue;
+      const p = this.players.get(c.username);
+      if (p && dist(p.sx * SCREEN_WIDTH + p.x, p.sy * SCREEN_HEIGHT + p.y, gx, gy) <= ZOMBIE_VIEW_RANGE * 1.5) send(c.socket, msg);
+    }
+  }
+
+  /** Casillas de un edificio derrumbado en esta sala → acera (escombro transitable). */
+  private clearBuildingTiles(screen: ScreenData, b: CityBuilding): boolean {
+    const ox = screen.sx * SCREEN_WIDTH;
+    const oy = screen.sy * SCREEN_HEIGHT;
+    let changed = false;
+    for (let ty = 0; ty < SCREEN_HEIGHT; ty++) {
+      for (let tx = 0; tx < SCREEN_WIDTH; tx++) {
+        if (screen.tiles[ty][tx] !== TileType.Building) continue;
+        if (distanceToPolygon(ox + tx + 0.5, oy + ty + 0.5, b.pts) > 0.75) continue;
+        screen.tiles[ty][tx] = TileType.Sidewalk;
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   // Horda: cada jugador (con los zombis activados) atrae hasta HORDE_SIZE zombis que

@@ -131,6 +131,7 @@ var solid := GeoBatch.new()    # semáforos y demás piezas sueltas: con sombra
 var chunks := {}               # "rx,ry" -> { clave de instancia -> [Transform3D | [Transform3D, Color]] }
 var segs: Array = []
 var cars: Array = []
+var buildings := {} # id -> info para Destruction (pos, height, pts, refs, parts, xf, hp, max_hp)
 var crosses: Array = []
 
 
@@ -147,7 +148,7 @@ func _p(gx: float, gz: float, y: float) -> Vector3:
 
 
 ## Registra una instancia (modelo o malla compartida) en la sala que la contiene.
-func _place(kind: String, xf: Transform3D, color := Color.WHITE) -> void:
+func _place(kind: String, xf: Transform3D, color := Color.WHITE, building_id := "") -> void:
 	var gx := xf.origin.x / T + origin_gx
 	var gz := xf.origin.z / T + origin_gz
 	var ck := "%d,%d" % [floori(gx / W), floori(gz / H)]
@@ -155,7 +156,7 @@ func _place(kind: String, xf: Transform3D, color := Color.WHITE) -> void:
 		chunks[ck] = {}
 	if not chunks[ck].has(kind):
 		chunks[ck][kind] = []
-	chunks[ck][kind].append([xf, color])
+	chunks[ck][kind].append([xf, color, building_id])
 
 
 ## Modelo del kit en (x, z) (unidades de render), frente (+Z) hacia (fx, fz).
@@ -211,6 +212,7 @@ static func build(datas: Array, ogx: int, ogz: int) -> Node3D:
 	c.origin_gz = ogz
 	c._build(datas)
 	c.root.set_meta("cars", c.cars)
+	c.root.set_meta("buildings", c.buildings)
 	return c.root
 
 
@@ -581,6 +583,9 @@ func _kit_building(bd: Dictionary) -> bool:
 	var pts: Array = bd.pts
 	if pts.size() < 3:
 		return false
+	if bd.has("hp") and float(bd.hp) <= 0.0:
+		_add_rubble(bd)
+		return true
 	var best := 0.0
 	var theta := 0.0
 	for i in pts.size():
@@ -660,8 +665,73 @@ func _kit_building(bd: Dictionary) -> bool:
 	var natural_h := sz.y * base
 	var stretch := 1.0 if kit == "suburban" else clampf((floors * 1.0) / natural_h, 0.85, 1.6)
 	var xf := Transform3D(Basis(Vector3.UP, atan2(fx, fy)) * Basis.from_scale(Vector3(base, base * stretch, base)), Vector3((cx - origin_gx) * T, 0.05, (cy - origin_gz) * T))
-	_place("model:" + key, xf)
+	_place("model:" + key, xf, Color.WHITE, str(bd.id))
+	_register(bd, xf, sz.y * base * stretch, Kenney.model(key).parts, [])
 	return true
+
+
+func _render_pts(bd: Dictionary) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for p in bd.pts:
+		out.append(Vector2(_L(p[0]), _Lz(p[1])))
+	return out
+
+
+func _register(bd: Dictionary, xf: Transform3D, height: float, parts: Array, refs: Array) -> void:
+	var pts := _render_pts(bd)
+	var c := Vector2.ZERO
+	for p in pts:
+		c += p
+	c /= pts.size()
+	var info := {"id": str(bd.id), "pos": Vector3(c.x, 0.05, c.y), "height": height, "pts": pts, "refs": refs, "parts": parts, "xf": xf}
+	if bd.has("hp"):
+		info.hp = float(bd.hp)
+		info.max_hp = float(bd.maxHp)
+	buildings[str(bd.id)] = info
+
+
+func _add_rubble(bd: Dictionary) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = rubble_mesh(_render_pts(bd), str(bd.id))
+	root.add_child(mi)
+
+
+## Montón de escombros dentro de la planta (determinista por edificio).
+static func rubble_mesh(pts: PackedVector2Array, id: String) -> ArrayMesh:
+	var r := RandomNumberGenerator.new()
+	r.seed = _hash_int(id)
+	var b := GeoBatch.new()
+	var box := StreetFurniture.prim("box")
+	var cols := [Color("8f8f96"), Color("6b7080"), Color("4a4d57"), Color("a8a296"), Color("5c5650")]
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for p in pts:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	var c := (lo + hi) * 0.5
+	# base: mancha de polvo y cascote menudo
+	var tris := Geometry2D.triangulate_polygon(pts)
+	var dust := lambert(Color("77736b"))
+	for i in range(0, tris.size(), 3):
+		var a := pts[tris[i]]
+		var bb := pts[tris[i + 1]]
+		var cc := pts[tris[i + 2]]
+		b.tri(dust, Vector3(a.x, 0.07, a.y), Vector3(bb.x, 0.07, bb.y), Vector3(cc.x, 0.07, cc.y), Vector3.UP, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+	var n := 18 + r.randi() % 10
+	var placed := 0
+	var tries := 0
+	while placed < n and tries < n * 6:
+		tries += 1
+		var p := Vector2(r.randf_range(lo.x, hi.x), r.randf_range(lo.y, hi.y))
+		if not Geometry2D.is_point_in_polygon(p, pts):
+			continue
+		# más alto hacia el centro, como un montón
+		var k := 1.0 - clampf(p.distance_to(c) / maxf(0.1, (hi - lo).length() * 0.5), 0.0, 1.0)
+		var s := Vector3(r.randf_range(0.12, 0.5), r.randf_range(0.05, 0.12) + k * 0.35, r.randf_range(0.12, 0.45))
+		var xf := Transform3D(Basis.from_euler(Vector3(r.randf_range(-0.4, 0.4), r.randf() * TAU, r.randf_range(-0.4, 0.4))).scaled(s), Vector3(p.x, 0.05 + s.y * 0.35, p.y))
+		b.mesh(box, xf, lambert(cols[r.randi() % cols.size()]))
+		placed += 1
+	return b.to_mesh()
 
 
 ## Respaldo: planta poligonal extruida (parcelas donde no cabe ningún modelo).
@@ -669,6 +739,10 @@ func _polygon_building(bd: Dictionary) -> void:
 	var pts: Array = bd.pts
 	if pts.size() < 3:
 		return
+	if bd.has("hp") and float(bd.hp) <= 0.0:
+		_add_rubble(bd)
+		return
+	var own := GeoBatch.new()
 	var poly := PackedVector2Array()
 	for p in pts:
 		poly.append(Vector2(_L(p[0]), _Lz(p[1])))
@@ -681,7 +755,7 @@ func _polygon_building(bd: Dictionary) -> void:
 		var a := poly[tris[i]]
 		var b := poly[tris[i + 1]]
 		var c := poly[tris[i + 2]]
-		solid.tri(mat, Vector3(a.x, top, a.y), Vector3(b.x, top, b.y), Vector3(c.x, top, c.y), Vector3.UP, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+		own.tri(mat, Vector3(a.x, top, a.y), Vector3(b.x, top, b.y), Vector3(c.x, top, c.y), Vector3.UP, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
 	for i in poly.size():
 		var a := poly[i]
 		var b := poly[(i + 1) % poly.size()]
@@ -695,8 +769,13 @@ func _polygon_building(bd: Dictionary) -> void:
 		var b0 := Vector3(b.x, 0.05, b.y)
 		var a1 := Vector3(a.x, top, a.y)
 		var b1 := Vector3(b.x, top, b.y)
-		solid.tri(mat, a0, b0, b1, n, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
-		solid.tri(mat, a0, b1, a1, n, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+		own.tri(mat, a0, b0, b1, n, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+		own.tri(mat, a0, b1, a1, n, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+	var am := own.to_mesh()
+	var mi := MeshInstance3D.new()
+	mi.mesh = am
+	root.add_child(mi)
+	_register(bd, Transform3D(), top - 0.05, [[am, Transform3D()]], [mi])
 
 
 # ------------------------------------------------------------------ instancias
@@ -726,6 +805,9 @@ func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool) -> 
 		mm.set_instance_transform(i, list[i][0] * part_xf)
 		if colors:
 			mm.set_instance_color(i, list[i][1])
+		var bid: String = list[i][2] if list[i].size() > 2 else ""
+		if bid != "" and buildings.has(bid):
+			buildings[bid].refs.append([mm, i])
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	root.add_child(mmi)

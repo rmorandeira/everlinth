@@ -18,6 +18,7 @@ var lighting := Lighting.new()
 var people := People.new()
 var fx := Fx.new()
 var cars := Cars.new()
+var destruction := Destruction.new()
 var sfx := Sfx.new()
 var quality := Quality.new()
 var hud := Hud.new()
@@ -71,6 +72,8 @@ func _ready() -> void:
 	add_child(fx)
 	cars.fx = fx
 	add_child(cars)
+	destruction.fx = fx
+	add_child(destruction)
 	add_child(sfx)
 	quality.env = lighting.env
 	add_child(quality)
@@ -189,6 +192,10 @@ func _on_message(msg: Dictionary) -> void:
 				sfx.laugh(0.9)
 		"shot":
 			_on_shot(msg)
+		"buildingDamaged":
+			destruction.on_damage(str(msg.id), float(msg.hp), float(msg.maxHp))
+			if Config.bench:
+				print("edificio %s: %d/%d" % [msg.id, msg.hp, msg.maxHp])
 		"died":
 			you = {}
 			hud.set_playing(false)
@@ -243,6 +250,7 @@ func _build_city() -> void:
 	city_root = City.build(datas, int(screen.sx) * W, int(screen.sy) * H)
 	add_child(city_root)
 	cars.set_cars(city_root.get_meta("cars", []))
+	destruction.set_buildings(city_root.get_meta("buildings", {}))
 
 
 func _set_other(p: Dictionary) -> void:

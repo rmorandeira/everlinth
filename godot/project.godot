@@ -52,6 +52,10 @@ sprite_flash={
 "value": Vector4(0, 0, 0, 0)
 }
 
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
 [rendering]
 
 renderer/rendering_method="forward_plus"
