@@ -1,5 +1,14 @@
 # Migración del cliente de Everlinth a Godot 4
 
+## Estado (2026-09-26)
+
+Fases 0-7 hechas y verificadas con capturas (ciudad, pixel art procedural para
+personas y horda, combate, coches y edificios destructibles, HUD, calidad adaptativa,
+catálogo del gestor web con recarga en caliente). Fase 8: ajustes de exportación y
+`tools/godot/exportar.bat` listos; falta instalar las plantillas de exportación para
+generar los ejecutables. Pendientes menores: afinar la noche, recorte translúcido de
+farolas y semáforos, pestaña "Vista Godot" en el gestor, generación por IA (clave).
+
 ## Objetivo
 
 Pasar el juego (el cliente) de three.js en el navegador a **Godot 4**, para soportar la

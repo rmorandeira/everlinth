@@ -23,7 +23,23 @@ Opciones tras `--`:
 
 ## Controles
 
-WASD / flechas / stick izquierdo: mover · Q / R: girar la cámara 90° · F3: FPS.
+- Mover: WASD / flechas / stick izquierdo
+- Apuntar: ratón / stick derecho (en círculo alrededor del personaje)
+- Disparar: clic izquierdo / gatillo derecho (RT)
+- Q / R: girar la cámara 90° · Z: zombis sí/no · F3: FPS
+- Hora del día: deslizador arriba a la derecha ("Real" = hora del reloj)
+
+## Assets
+
+El catálogo lo manda el gestor web (`/admin/assets`): al guardar un asset el juego
+se rehace en caliente (categoría + bioma ciudad deciden qué edificios aparecen; escala,
+texturas por ranura y assets de primitivas se aplican tal cual).
+
+## Ejecutables
+
+`tools/godot/exportar.bat [Windows|Linux|macOS|"Web (ligera)"|todo]` → carpeta `build/`.
+Necesita las plantillas de exportación de Godot 4.7.2 (≈1,2 GB). La versión web usa
+el renderizador Compatibility (sin SSAO ni niebla volumétrica).
 
 ## Protocolo
 

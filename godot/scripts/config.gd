@@ -11,6 +11,7 @@ extends Node
 ## - aim=x,y / fire=1: apunta en esa dirección (tiles) y dispara sin parar (pruebas).
 
 var server_url := "ws://localhost:3000"
+var server_from_args := false
 var auto_user := ""
 var capture_path := ""
 var capture_after := 4.0
@@ -30,6 +31,7 @@ func _init() -> void:
 		match kv[0]:
 			"server":
 				server_url = kv[1]
+				server_from_args = true
 			"user":
 				auto_user = kv[1]
 			"capture":

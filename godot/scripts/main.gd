@@ -80,7 +80,7 @@ func _ready() -> void:
 	if not ("tilt" in Config.off):
 		_build_post()
 	add_child(hud)
-	hud.join_requested.connect(func(n: String) -> void: Net.send({"type": "join", "username": n}))
+	hud.join_requested.connect(_on_join_requested)
 	hud.zombies_toggled.connect(_on_zombies_toggled)
 	hud.hour_changed.connect(func(h: float) -> void: lighting.hour_override = h)
 	zombies_on = hud.zombie_toggle.button_pressed
@@ -117,9 +117,27 @@ func _build_post() -> void:
 	post.add_child(rect)
 
 
+var _pending_join := ""
+
+
+## Entrar: si se ha cambiado el servidor (o no hay conexión), se conecta primero.
+func _on_join_requested(n: String, server: String) -> void:
+	if server != Config.server_url or not Net.is_open():
+		Config.server_url = server
+		_pending_join = n
+		hud.status_label.text = "Conectando con %s…" % server
+		Net.connect_to(server)
+		Catalog.refresh("")
+		return
+	Net.send({"type": "join", "username": n})
+
+
 func _on_opened() -> void:
 	hud.status_label.text = ""
-	if Config.auto_user != "":
+	if _pending_join != "":
+		Net.send({"type": "join", "username": _pending_join})
+		_pending_join = ""
+	elif Config.auto_user != "":
 		Net.send({"type": "join", "username": Config.auto_user})
 
 

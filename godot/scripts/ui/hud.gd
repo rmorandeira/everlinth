@@ -5,7 +5,7 @@ extends CanvasLayer
 ## "Real" vuelve a la hora del reloj) arriba a la derecha, medidor de FPS (F3) y
 ## minimapa abajo a la izquierda. Los ajustes se recuerdan entre sesiones.
 
-signal join_requested(username: String)
+signal join_requested(username: String, server: String)
 signal zombies_toggled(enabled: bool)
 signal hour_changed(hour: float) # < 0 = hora real
 
@@ -13,6 +13,7 @@ const SETTINGS := "user://ajustes.cfg"
 
 var login_panel := PanelContainer.new()
 var name_edit := LineEdit.new()
+var server_edit := LineEdit.new()
 var status_label := Label.new()
 var stats := Label.new()
 var hp_bar := ProgressBar.new()
@@ -29,6 +30,9 @@ var _cfg := ConfigFile.new()
 func _ready() -> void:
 	layer = 1
 	_cfg.load(SETTINGS)
+	# servidor recordado (salvo que venga en la línea de comandos)
+	if not Config.server_from_args:
+		Config.server_url = _cfg.get_value("juego", "servidor", Config.server_url)
 
 	login_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	var box := VBoxContainer.new()
@@ -42,6 +46,10 @@ func _ready() -> void:
 	name_edit.text = _cfg.get_value("juego", "nombre", "")
 	name_edit.text_submitted.connect(func(_t: String) -> void: _join())
 	box.add_child(name_edit)
+	server_edit.placeholder_text = "Servidor (ws://host:3000)"
+	server_edit.text = Config.server_url
+	server_edit.text_submitted.connect(func(_t: String) -> void: _join())
+	box.add_child(server_edit)
 	var btn := Button.new()
 	btn.text = "Entrar"
 	btn.pressed.connect(_join)
@@ -124,9 +132,15 @@ func _join() -> void:
 	if n == "":
 		status_label.text = "Escribe un nombre."
 		return
+	var srv := server_edit.text.strip_edges()
+	if srv == "":
+		srv = Config.server_url
+	if not srv.begins_with("ws://") and not srv.begins_with("wss://"):
+		srv = "ws://" + srv
 	_cfg.set_value("juego", "nombre", n)
+	_cfg.set_value("juego", "servidor", srv)
 	_cfg.save(SETTINGS)
-	join_requested.emit(n)
+	join_requested.emit(n, srv)
 
 
 func _on_zombies(on: bool) -> void:
