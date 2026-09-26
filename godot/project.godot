@@ -42,7 +42,7 @@ cut_cam_fwd={
 }
 cut_keep={
 "type": "float",
-"value": 0.18
+"value": 0.0
 }
 sprite_light={
 "type": "float",

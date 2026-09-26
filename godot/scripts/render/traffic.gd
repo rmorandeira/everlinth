@@ -22,6 +22,9 @@ var info := {}
 var approaches: Array = []
 var _ends := {} # "x,y" redondeado -> [ [seg, extremo 0|1], ... ]
 var _veh: Array = []
+# autovías: carriles como polilíneas [PackedVector3Array (x, y tiles; z altura), longitudes acumuladas]
+var _hw_lanes: Array = []
+var _hw_veh: Array = [] # { lane, d, speed, model }
 var _mm := {} # modelo -> [[MultiMeshInstance3D, Transform3D de la pieza], ...]
 var _lights: Array[OmniLight3D] = []
 var _obstacles: Array = [] # Vector2 en tiles globales (zombis, paseantes, jugador)
@@ -53,9 +56,75 @@ func set_city(meta_root: Node3D, ogx: int, ogz: int) -> void:
 			_ends[k].append([s, e])
 	_veh.clear()
 	_fill = true
+	_build_hw_lanes(meta_root.get_meta("highways", []))
 
 
 var _fill := false
+
+
+## Carriles de las autovías: dos por sentido, por la derecha, a lo largo de cada una.
+func _build_hw_lanes(hws: Array) -> void:
+	_hw_lanes.clear()
+	_hw_veh.clear()
+	var groups := {}
+	for h in hws:
+		if int(h.kind) != 0:
+			continue
+		var key: String = str(h.id).split(":")[0]
+		if not groups.has(key):
+			groups[key] = []
+		groups[key].append(h)
+	for key in groups:
+		var list: Array = groups[key]
+		list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.s0) < float(b.s0))
+		var center := PackedVector3Array()
+		for h in list:
+			if center.is_empty():
+				center.append(Vector3(h.x0, h.y0, h.z0))
+			center.append(Vector3(h.x1, h.y1, h.z1))
+		if center.size() < 3:
+			continue
+		for off in [1.8, 4.2, -1.8, -4.2]:
+			var pts := PackedVector3Array()
+			for i in center.size():
+				var a := center[max(0, i - 1)]
+				var b := center[min(center.size() - 1, i + 1)]
+				var d := Vector2(b.x - a.x, b.y - a.y).normalized()
+				var r: Vector2 = Vector2(-d.y, d.x) * off
+				pts.append(Vector3(center[i].x + r.x, center[i].y + r.y, center[i].z))
+			if off < 0.0:
+				pts.reverse() # sentido contrario: se recorre al revés (siempre por su derecha)
+			var cum := PackedFloat32Array([0.0])
+			for i in range(1, pts.size()):
+				cum.append(cum[i - 1] + Vector2(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y).length())
+			_hw_lanes.append([pts, cum])
+
+
+func _hw_at(lane: Array, d: float) -> Array:
+	var pts: PackedVector3Array = lane[0]
+	var cum: PackedFloat32Array = lane[1]
+	var i := cum.bsearch(d) - 1
+	i = clampi(i, 0, pts.size() - 2)
+	var t := clampf((d - cum[i]) / maxf(0.001, cum[i + 1] - cum[i]), 0.0, 1.0)
+	var p := pts[i].lerp(pts[i + 1], t)
+	var h := Vector2(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y).normalized()
+	return [p, h]
+
+
+func _update_hw(dt: float) -> void:
+	if _hw_lanes.is_empty():
+		return
+	while _hw_veh.size() < _hw_lanes.size() * 3:
+		var li := randi() % _hw_lanes.size()
+		var cum: PackedFloat32Array = _hw_lanes[li][1]
+		var r := randf()
+		_hw_veh.append({"lane": li, "d": randf() * cum[cum.size() - 1], "speed": randf_range(5.0, 6.5) if li % 2 == 0 else randf_range(4.2, 5.2),
+			"model": (EMERGENCY[randi() % EMERGENCY.size()] if r < 0.05 else (BUS if r < 0.12 else CIVIL[randi() % CIVIL.size()]))})
+	for v in _hw_veh:
+		var cum: PackedFloat32Array = _hw_lanes[v.lane][1]
+		v.d += v.speed * dt
+		if v.d > cum[cum.size() - 1]:
+			v.d = 0.0
 
 
 func set_obstacles(list: Array) -> void:
@@ -286,6 +355,7 @@ func update(dt: float, time: float, player: Vector2) -> void:
 			continue
 		keep.append(v)
 	_veh = keep
+	_update_hw(dt)
 	_draw(time)
 
 
@@ -314,6 +384,21 @@ func _draw(time: float) -> void:
 			l.light_color = Color("ff2a2a") if on else Color("2a5cff")
 			l.light_energy = 2.2
 			l.position = xf.origin + Vector3(0, 0.6, 0)
+	# autovías
+	for v in _hw_veh:
+		var r := _hw_at(_hw_lanes[v.lane], v.d)
+		var p: Vector3 = r[0]
+		if absf((p.x - origin_gx) * T - _focus.x) > 22.0 or absf((p.y - origin_gz) * T - _focus.z) > 22.0:
+			continue
+		var h: Vector2 = r[1]
+		var s := Kenney.base_scale(v.model)
+		var xf := Transform3D(Basis(Vector3.UP, atan2(h.x, h.y)).scaled(Vector3(s, s, s)), Vector3((p.x - origin_gx) * T, p.z + 0.01, (p.y - origin_gz) * T))
+		var n: int = counts.get(v.model, 0)
+		if n >= CAP_PER_MODEL:
+			continue
+		for part in _model_parts(v.model):
+			part[0].multimesh.set_instance_transform(n, xf * (part[1] as Transform3D))
+		counts[v.model] = n + 1
 	for i in range(light, _lights.size()):
 		_lights[i].light_energy = 0.0
 	for k in _mm:

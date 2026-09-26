@@ -319,6 +319,12 @@ func _build(datas: Array) -> void:
 	flat.build(root, false)
 	litter.build(root, false)
 	solid.build(root, true)
+	HighwaysMesh.build(root, datas, origin_gx, origin_gz, paint_mat(PAINT_WHITE), paint_mat(PAINT_YELLOW))
+	var hws := {}
+	for d in datas:
+		for h in d.get("highways", []):
+			hws[h.id] = h
+	root.set_meta("highways", hws.values())
 	if Config.bench:
 		print("reglas: descartados por solape=%d edificio=%d calzada=%d" % [audit.prop, audit.edificio, audit.calzada])
 	_instantiate_chunks()

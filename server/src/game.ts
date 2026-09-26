@@ -218,7 +218,13 @@ export class GameServer {
     if (cached) return { screen: cached, discoveryXp: null };
     const withCity = (sc: ScreenData): ScreenData => {
       // La geometría vectorial de la ciudad no se guarda: se regenera (determinista).
-      if (sc.biome === "city" && !sc.city) sc.city = rasterRoom(sx, sy).city;
+      // La ciudad no se guarda: geometría y casillas se regeneran (deterministas), así
+      // las salas guardadas siguen al generador (autovías, pilares, corredores…).
+      if (sc.biome === "city" && !sc.city) {
+        const r = rasterRoom(sx, sy);
+        sc.city = r.city;
+        sc.tiles = r.tiles;
+      }
       if (sc.city) {
         annotateBuildings(sc.city.buildings);
         for (const b of sc.city.buildings) if (b.hp !== undefined && b.hp <= 0) this.clearBuildingTiles(sc, b);

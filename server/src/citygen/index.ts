@@ -28,6 +28,7 @@ import StreamlineGenerator, { type StreamlineParams } from "./streamlines.js";
 import Graph from "./graph.js";
 import PolygonFinder from "./polygon_finder.js";
 import PolygonUtil from "./polygon_util.js";
+import { highwaysIn, distToHw, type HwSeg, type HwPillar } from "./highways.js";
 
 const DISTRICT_ROOMS = 15;
 const DISTRICT_W = DISTRICT_ROOMS * SCREEN_WIDTH; // 720
@@ -213,6 +214,19 @@ function buildDistrict(
   const cyD = oy + DISTRICT_H / 2;
   const maxR = Math.hypot(DISTRICT_W / 2, DISTRICT_H / 2);
 
+  // corredor de las autovías y rampas: ahí no se construye (las calles siguen por debajo)
+  const hw = highwaysIn(ox, oy, ox + DISTRICT_W, oy + DISTRICT_H).segs;
+  const inCorridor = (pts: Pt[], cx: number, cy: number): boolean => {
+    for (const s of hw) {
+      const lim = s.half + 1.5;
+      if (distToHw(cx, cy, s) < lim + 6) {
+        if (distToHw(cx, cy, s) < lim) return true;
+        for (const p of pts) if (distToHw(p[0], p[1], s) < lim) return true;
+        if (pointInPolygon((s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2, pts)) return true;
+      }
+    }
+    return false;
+  };
   const lots: Lot[] = [];
   lotsRaw.forEach((raw, idx) => {
     let poly = raw;
@@ -233,6 +247,7 @@ function buildDistrict(
     cx /= pts.length;
     cy /= pts.length;
     if (parks.some((pk) => pointInPolygon(cx, cy, pk))) return;
+    if (inCorridor(pts, cx, cy)) return;
     const xs = pts.map((p) => p[0]);
     const ys = pts.map((p) => p[1]);
     // Más altos cerca del centro del distrito (downtown) y más bajos en la periferia.
@@ -302,6 +317,18 @@ export function rasterRoom(sx: number, sy: number): RasterRoom {
   const gx0 = sx * SCREEN_WIDTH;
   const gy0 = sy * SCREEN_HEIGHT;
 
+  // autovías de la sala: pilares (los que no caen en una calle) y rampas a ras de suelo
+  const hwAll = highwaysIn(gx0 - 8, gy0 - 8, gx0 + SCREEN_WIDTH + 8, gy0 + SCREEN_HEIGHT + 8);
+  const onStreet = (px: number, py: number): boolean => {
+    const bk = bucketKey(Math.floor(px / BUCKET), Math.floor(py / BUCKET));
+    for (const i of d.bucketsSeg.get(bk) ?? []) {
+      const s = d.segs[i];
+      if (distToSeg(px, py, s) < ROAD_HALF[s.kind] + 0.8) return true;
+    }
+    return false;
+  };
+  const pillars: HwPillar[] = hwAll.pillars.filter((p) => !onStreet(p.x, p.y));
+  const lowRamps: HwSeg[] = hwAll.segs.filter((s) => s.kind === 1 && Math.min(s.z0, s.z1) < 0.8);
   const tiles: TileType[][] = [];
   for (let y = 0; y < SCREEN_HEIGHT; y++) {
     const row: TileType[] = [];
@@ -342,6 +369,19 @@ export function rasterRoom(sx: number, sy: number): RasterRoom {
           }
         }
       }
+      // césped en los bucles de los enlaces
+      if (type === TileType.Sidewalk && hwAll.greens.some((g) => Math.hypot(gpx - g[0], gpy - g[1]) < g[2])) type = TileType.Grass;
+      // pilar de la autovía (1,2 tiles) o rampa baja: no se puede pasar
+      for (const p of pillars) {
+        if (Math.abs(gpx - p.x) < 0.9 && Math.abs(gpy - p.y) < 0.9) type = TileType.Building;
+      }
+      if (type !== TileType.Building) {
+        for (const s of lowRamps) {
+          const t = Math.max(0, Math.min(1, ((gpx - s.x0) * (s.x1 - s.x0) + (gpy - s.y0) * (s.y1 - s.y0)) / Math.max(1e-6, (s.x1 - s.x0) ** 2 + (s.y1 - s.y0) ** 2)));
+          const z = s.z0 + (s.z1 - s.z0) * t;
+          if (z < 0.8 && distToHw(gpx, gpy, s) < s.half) type = TileType.Building;
+        }
+      }
       row.push(type);
     }
     tiles.push(row);
@@ -371,7 +411,11 @@ export function rasterRoom(sx: number, sy: number): RasterRoom {
     }
   }
   const nodes = d.nodes.filter(([x, y]) => x >= gx0 - pad && x < gx0 + SCREEN_WIDTH + pad && y >= gy0 - pad && y < gy0 + SCREEN_HEIGHT + pad).map(([x, y]) => [round2(x), round2(y)] as [number, number]);
-  return { tiles, city: { roads, buildings, nodes } };
+  const r2 = (v: number): number => Math.round(v * 100) / 100;
+  const highways = hwAll.segs.map((s) => ({ id: s.id, kind: s.kind, x0: r2(s.x0), y0: r2(s.y0), z0: r2(s.z0), x1: r2(s.x1), y1: r2(s.y1), z1: r2(s.z1), half: s.half, s0: r2(s.s0) }));
+  const pil = pillars.map((p) => [r2(p.x), r2(p.y), r2(p.z), r2(p.w), r2(p.ang)] as [number, number, number, number, number]);
+  const greens = hwAll.greens.map((g) => [r2(g[0]), r2(g[1]), r2(g[2])] as [number, number, number]);
+  return { tiles, city: { roads, buildings, nodes, highways, pillars: pil, greens } };
 }
 
 function round2(v: number): number {

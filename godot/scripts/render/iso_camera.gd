@@ -20,7 +20,7 @@ var yaw := BASE_YAW
 func _ready() -> void:
 	projection = PROJECTION_ORTHOGONAL
 	keep_aspect = KEEP_HEIGHT
-	size = (Config.cenital if Config.cenital > 0.0 else VIEW_HALF_HEIGHT) * 2.0
+	size = (Config.cenital if Config.cenital > 0.0 else (Config.zoom if Config.zoom > 0.0 else VIEW_HALF_HEIGHT)) * 2.0
 	near = 0.1
 	far = 500.0
 

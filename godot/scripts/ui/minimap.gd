@@ -82,6 +82,13 @@ class _MapLayer extends Node2D:
 			draw_line(Vector2(s.x0, s.y0), Vector2(s.x1, s.y1), Color("3a3d42"), w)
 			draw_circle(Vector2(s.x0, s.y0), w / 2.0, Color("3a3d42"))
 			draw_circle(Vector2(s.x1, s.y1), w / 2.0, Color("3a3d42"))
+		var hws := {}
+		for r in rooms:
+			if r.has("city"):
+				for h in r.city.get("highways", []):
+					hws[h.id] = h
+		for h in hws.values():
+			draw_line(Vector2(h.x0, h.y0), Vector2(h.x1, h.y1), Color("9aa0a8") if int(h.kind) == 0 else Color("8a9098"), float(h.half) * 2.0)
 		for b in buildings.values():
 			var pts := PackedVector2Array()
 			for p in b.pts:

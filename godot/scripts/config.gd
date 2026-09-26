@@ -20,6 +20,7 @@ var walk := ""
 var aim := Vector2.ZERO
 var fire := false
 var bench := false
+var zoom := 0.0 # depuración: mitad de alto visible (unidades) con la inclinación normal
 var cenital := 0.0 # depuración: vista desde arriba con esa mitad de alto (unidades)
 var boom := 0.0 # pruebas: explosiones a esa distancia (tiles) en la dirección de mira
 var off: PackedStringArray = [] # efectos apagados para medir (ssao,msaa,glow,tilt,shadow,ghost)
@@ -49,6 +50,8 @@ func _init() -> void:
 				off = kv[1].split(",")
 			"boom":
 				boom = float(kv[1])
+			"zoom":
+				zoom = float(kv[1])
 			"cenital":
 				cenital = float(kv[1])
 			"bench":

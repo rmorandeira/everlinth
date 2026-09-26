@@ -20,12 +20,13 @@ static var _lens := {} # "A"/"B" -> { lente -> StandardMaterial3D }
 static var _streetlight: ArrayMesh
 
 
-static func lambert(c: Color) -> StandardMaterial3D:
+## Material liso con el recorte de la franja del personaje (solid_cut.gdshader).
+static func lambert(c: Color) -> Material:
 	var k := c.to_html()
 	if not _mats.has(k):
-		var m := StandardMaterial3D.new()
-		m.albedo_color = c
-		m.roughness = 0.9
+		var m := ShaderMaterial.new()
+		m.shader = load("res://shaders/solid_cut.gdshader")
+		m.set_shader_parameter("albedo", c)
 		_mats[k] = m
 	return _mats[k]
 

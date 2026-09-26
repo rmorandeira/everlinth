@@ -263,9 +263,29 @@ export interface CityBuilding {
   hp?: number;
   maxHp?: number;
 }
+/** Tramo de autovía elevada o de rampa (tiles globales; z en unidades de render). */
+export interface CityHighway {
+  id: string;
+  /** 0 autovía, 1 rampa / ramal de enlace */
+  kind: 0 | 1;
+  x0: number;
+  y0: number;
+  z0: number;
+  x1: number;
+  y1: number;
+  z1: number;
+  half: number;
+  s0: number;
+}
 export interface CityData {
   roads: CityRoad[];
   buildings: CityBuilding[];
+  /** Autovías elevadas y rampas que pasan por la sala. */
+  highways?: CityHighway[];
+  /** Pilares: [x, y, altura bajo el tablero, anchura del cabezal, ángulo]. */
+  pillars?: Array<[number, number, number, number, number]>;
+  /** Césped (círculos [x, y, radio]) en el interior de los enlaces. */
+  greens?: Array<[number, number, number]>;
   /** Cruces de calles (para pasos de cebra y cortar las marcas). */
   nodes: Array<[number, number]>;
 }
