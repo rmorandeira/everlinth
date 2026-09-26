@@ -50,6 +50,22 @@ func quad(mat: Material, c: Vector3, length: float, w: float, ang: float, uv_wor
 	tri(mat, p00, p11, p01, Vector3.UP, u00, u11, u01)
 
 
+## Como quad(), con las UV de un trozo del atlas (uv: rectángulo 0..1).
+func quad_uv(mat: Material, c: Vector3, length: float, w: float, ang: float, uv: Rect2) -> void:
+	var a := Vector3(cos(ang), 0.0, sin(ang)) * (length * 0.5)
+	var b := Vector3(-sin(ang), 0.0, cos(ang)) * (w * 0.5)
+	var p00 := c - a - b
+	var p10 := c + a - b
+	var p11 := c + a + b
+	var p01 := c - a + b
+	var u00 := uv.position
+	var u10 := uv.position + Vector2(uv.size.x, 0)
+	var u11 := uv.end
+	var u01 := uv.position + Vector2(0, uv.size.y)
+	tri(mat, p00, p10, p11, Vector3.UP, u00, u10, u11)
+	tri(mat, p00, p11, p01, Vector3.UP, u00, u11, u01)
+
+
 func disc(mat: Material, c: Vector3, r: float, uv_world := 0.0, segments := 14) -> void:
 	for i in segments:
 		var a0 := TAU * i / segments

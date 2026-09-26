@@ -116,8 +116,8 @@ static func build_corpse_atlas(specs: Array) -> Image:
 		r.seed = int(spec.seed) * 31 + 5
 		for pose in 2:
 			var cell := Image.create(KW, KH, false, Image.FORMAT_RGBA8)
-			# charco de sangre bajo el cuerpo
-			var bc := Color(BLOOD)
+			# charco de sangre bajo el cuerpo (solo los zombis abatidos; los caídos, no)
+			var bc := Color(BLOOD) if spec.zombie else Color(0, 0, 0, 0)
 			var cx := 14 + r.randi_range(-2, 2)
 			for y in range(4, KH):
 				for x in KW:
@@ -162,6 +162,7 @@ class _Painter:
 	var cx := 12
 	var rng := RandomNumberGenerator.new()
 	var zombie := false
+	var cur_frame := 0
 
 	func _init(image: Image, spec: Dictionary) -> void:
 		img = image
@@ -196,6 +197,7 @@ class _Painter:
 
 	## view: N, NE, E, SE, S (O/NO/SO son el espejo). frame: 0-3 del andar.
 	func figure(view: String, frame: int) -> void:
+		cur_frame = frame
 		var hunch := 1 if zombie else 0
 		var fwd := 1 if (zombie and view in ["E", "SE", "NE"]) else 0
 		var head_y := 4 + hunch
@@ -232,7 +234,7 @@ class _Painter:
 		if top == "habit":
 			bare_from = 99
 			leg_c = col("top_color")
-		var stride := 2 if not zombie else 1
+		var stride := 1 if zombie else (3 if s.get("panic", false) else 2)
 		if view == "E":
 			# de perfil: piernas como trazos de la cadera al pie, la lejana más oscura
 			var far := step * -stride
@@ -305,7 +307,11 @@ class _Painter:
 			elif top == "sweater":
 				rect(cx - 1, y0 + 4, 4, 1, accent)
 			# brazo cercano
-			if zombie:
+			if s.get("panic", false):
+				var wv := cur_frame % 2
+				line(cx, y0, cx + 1 + wv, y0 - 5, 2, sleeve)
+				rect(cx + 1 + wv, y0 - 6, 2, 1, skin)
+			elif zombie:
 				rect(cx + 1, y0 + 1, 5, 2, sleeve)
 				rect(cx + 6, y0 + 1, 2, 2, skin)
 			elif armed:
@@ -362,6 +368,13 @@ class _Painter:
 			arm_x = [cx + 3] # el lejano queda oculto
 		for i in arm_x.size():
 			var ax: int = arm_x[i]
+			if s.get("panic", false):
+				var out := -1 if ax < cx else 1
+				var wv := (cur_frame + i) % 2
+				rect(ax, y0 - 4, 1, 5, sleeve)
+				px(ax + out * wv, y0 - 5, skin)
+				px(ax + out * wv, y0 - 6, skin)
+				continue
 			if zombie:
 				# brazos al frente: vistos de frente se acortan (manos a la altura del pecho)
 				rect(ax, y0, 1, 3, sleeve)
@@ -445,6 +458,8 @@ class _Painter:
 		elif style == "bald":
 			px(x0, y0 + 1, hair)
 			px(x0 + w - 1, y0 + 1, hair)
+		if s.get("panic", false) and not back and not side:
+			px(hx + (1 if three_q else 0), y0 + 4, Color("3a1c14"))
 		# cara del zombi: ojos oscuros y boca
 		if zombie and not back:
 			var eye := Color("2a1010")

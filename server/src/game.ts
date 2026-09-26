@@ -71,7 +71,8 @@ export class GameServer {
   private nextPack = 1;
   // Población civil: deambula por las aceras, huye de la horda (y de los tiros) y, si
   // la muerden, se convierte en zombi al cabo de unos segundos: la horda crece.
-  private civilians: Array<{ id: number; gx: number; gy: number; tx: number; ty: number; walk: number; run: number; panic: number; infected: number; v: number; wait: number }> = [];
+  private civilians: Array<{ id: number; gx: number; gy: number; tx: number; ty: number; walk: number; run: number; panic: number; infected: number; v: number; wait: number; fallen: number; helping: number; helpT: number; helped: boolean }> = [];
+  private sendTick = 0;
   private nextCivilianId = 1;
   private noises: Array<{ gx: number; gy: number; t: number; r: number }> = [];
   private static readonly CIVILIANS = 70;
@@ -579,7 +580,7 @@ export class GameServer {
   // aparecen en grupos en un anillo fuera de pantalla, caminan despacio
   // arrastrándose hacia el jugador más cercano, se empujan entre ellos para no
   // amontonarse en un punto, y muerden al contacto. Se descartan si quedan lejos de todos.
-  private static readonly HORDE_SIZE = 320;
+  private static readonly HORDE_SIZE = 600;
   private tickZombies(dt: number): void {
     const targets: Array<{ conn: Connection; player: PlayerPrivateState; gx: number; gy: number }> = [];
     for (const [username, conn] of this.connByUsername) {
@@ -753,11 +754,13 @@ export class GameServer {
 
     this.tickCivilians(dt);
 
+    this.sendTick = (this.sendTick + 1) % 2;
+    if (this.sendTick !== 0) return;
     for (const t of targets) {
       if (dead.has(t.conn)) continue;
       const civs: CivilianState[] = this.civilians
         .filter((c) => Math.abs(c.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(c.gy - t.gy) < ZOMBIE_VIEW_RANGE)
-        .map((c) => ({ id: c.id, gx: Math.round(c.gx * 100) / 100, gy: Math.round(c.gy * 100) / 100, s: c.infected > 0 ? 2 : c.panic > 0 ? 1 : 0, v: c.v }));
+        .map((c) => ({ id: c.id, gx: Math.round(c.gx * 100) / 100, gy: Math.round(c.gy * 100) / 100, s: c.infected > 0 ? 2 : c.fallen > 0 ? 3 : c.helpT > 0 ? 4 : c.panic > 0 ? 1 : 0, v: c.v }));
       send(t.conn.socket, { type: "civilians", civilians: civs });
       const list = this.zombies
         .filter((z) => Math.abs(z.gx - t.gx) < ZOMBIE_VIEW_RANGE && Math.abs(z.gy - t.gy) < ZOMBIE_VIEW_RANGE)
@@ -769,6 +772,17 @@ export class GameServer {
   /** ¿Se puede andar por ahí? */
   private walkable(gx: number, gy: number): boolean {
     return !this.isBlockedAt(0, 0, gx, gy);
+  }
+
+  /** ¿Es acera? (en la ciudad los paseantes van por la acera; fuera de ella, donde sea) */
+  private sidewalk(gx: number, gy: number): boolean {
+    const rsx = Math.floor(gx / SCREEN_WIDTH);
+    const rsy = Math.floor(gy / SCREEN_HEIGHT);
+    if (rsx < WORLD_MIN || rsx > WORLD_MAX || rsy < WORLD_MIN || rsy > WORLD_MAX) return false;
+    const { screen } = this.ensureScreenLoaded(rsx, rsy);
+    const t = screen.tiles[((Math.floor(gy) % SCREEN_HEIGHT) + SCREEN_HEIGHT) % SCREEN_HEIGHT][((Math.floor(gx) % SCREEN_WIDTH) + SCREEN_WIDTH) % SCREEN_WIDTH];
+    if (!screen.city) return !BLOCKING_TILES.has(t);
+    return t === TileType.Sidewalk;
   }
 
   private tickCivilianSpawns(targets: Array<{ gx: number; gy: number }>): void {
@@ -783,8 +797,8 @@ export class GameServer {
       const r = (near ? 5 : 26) + Math.random() * (near ? 30 : 14);
       const gx = t.gx + Math.cos(ang) * r;
       const gy = t.gy + Math.sin(ang) * r;
-      if (!this.walkable(gx, gy)) continue;
-      this.civilians.push({ id: this.nextCivilianId++, gx, gy, tx: gx, ty: gy, walk: 0.8 + Math.random() * 0.5, run: 3.0 + Math.random() * 1.3, panic: 0, infected: 0, v: Math.floor(Math.random() * 1000), wait: Math.random() * 3 });
+      if (!this.sidewalk(gx, gy)) continue;
+      this.civilians.push({ id: this.nextCivilianId++, gx, gy, tx: gx, ty: gy, walk: 0.8 + Math.random() * 0.5, run: 3.0 + Math.random() * 1.3, panic: 0, infected: 0, v: Math.floor(Math.random() * 1000), wait: Math.random() * 3, fallen: 0, helping: 0, helpT: 0, helped: false });
     }
   }
 
@@ -799,6 +813,8 @@ export class GameServer {
       cell.push(z);
     }
     const turned: Array<(typeof this.civilians)[number]> = [];
+    const byId = new Map<number, (typeof this.civilians)[number]>();
+    for (const c of this.civilians) byId.set(c.id, c);
     for (const c of this.civilians) {
       if (c.infected > 0) {
         // mordido: se tambalea y al cabo de unos segundos se levanta como zombi
@@ -845,7 +861,61 @@ export class GameServer {
       }
       if (threat) c.panic = 4 + Math.random() * 2;
       else c.panic = Math.max(0, c.panic - dt);
+      // caído en el suelo: no se mueve hasta levantarse (antes si alguien le ayuda)
+      if (c.fallen > 0) {
+        c.fallen -= dt;
+        if (c.fallen <= 0) c.helped = false;
+        continue;
+      }
+      // ayudando a alguien a levantarse: va hacia él y tira de él
+      if (c.helping > 0) {
+        const f = byId.get(c.helping);
+        if (!f || f.fallen <= 0 || f.infected > 0) {
+          c.helping = 0;
+          c.helpT = 0;
+        } else if (c.helpT > 0) {
+          c.helpT -= dt;
+          if (c.helpT <= 0) {
+            f.fallen = 0;
+            f.helped = false;
+            f.panic = Math.max(f.panic, 3);
+            c.helping = 0;
+          }
+          continue;
+        } else {
+          const hx = f.gx - c.gx;
+          const hy = f.gy - c.gy;
+          const hd = Math.hypot(hx, hy);
+          if (hd < 0.55) {
+            c.helpT = 0.9 + Math.random() * 0.6;
+            continue;
+          }
+          const nx = c.gx + (hx / hd) * c.run * dt;
+          const ny = c.gy + (hy / hd) * c.run * dt;
+          if (this.walkable(nx, ny)) {
+            c.gx = nx;
+            c.gy = ny;
+          } else c.helping = 0;
+          continue;
+        }
+      }
       if (c.panic > 0) {
+        // en desbandada se tropieza: cae al suelo un rato
+        if (Math.random() < dt * 0.06) {
+          c.fallen = 1.5 + Math.random() * 2.5;
+          continue;
+        }
+        // algunos se paran a ayudar a quien ha caído cerca
+        if (Math.random() < dt * 1.5) {
+          for (const f of this.civilians) {
+            if (f === c || f.fallen <= 0 || f.helped || f.infected > 0) continue;
+            if (Math.abs(f.gx - c.gx) > 3 || Math.abs(f.gy - c.gy) > 3) continue;
+            f.helped = true;
+            if (Math.random() < 0.4) c.helping = f.id;
+            break;
+          }
+          if (c.helping > 0) continue;
+        }
         // huida: lejos de la amenaza, corriendo; si choca, prueba a desviarse
         const fl = Math.hypot(fx, fy);
         let ang = fl > 1e-6 ? Math.atan2(fy, fx) : Math.atan2(c.gy - c.ty, c.gx - c.tx);
@@ -879,7 +949,10 @@ export class GameServer {
           const r = 3 + Math.random() * 7;
           const nx = c.gx + Math.cos(a) * r;
           const ny = c.gy + Math.sin(a) * r;
-          if (this.walkable(nx, ny) && this.walkable((c.gx + nx) / 2, (c.gy + ny) / 2)) {
+          // de paseo, por la acera (cruzan la calzada solo si al otro lado sigue la acera
+          // cerca: como por un paso de peatones, sin cruzar a media manzana)
+          const mid = this.sidewalk((c.gx + nx) / 2, (c.gy + ny) / 2);
+          if (this.sidewalk(nx, ny) && (mid || r < 5)) {
             c.tx = nx;
             c.ty = ny;
             break;
@@ -889,7 +962,7 @@ export class GameServer {
       }
       const nx = c.gx + (dx / d) * c.walk * dt;
       const ny = c.gy + (dy / d) * c.walk * dt;
-      if (this.walkable(nx, ny)) {
+      if (this.walkable(nx, ny) && (this.sidewalk(nx, ny) || this.sidewalk(c.tx, c.ty))) {
         c.gx = nx;
         c.gy = ny;
       } else {

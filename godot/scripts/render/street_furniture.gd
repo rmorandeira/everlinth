@@ -200,3 +200,68 @@ static func update_signals(time: float) -> void:
 		var flashing := u >= 13.5 and u < 15.5 and int(floorf(time * 2.0)) % 2 == 0
 		m.walk.albedo_color = ON.walk if walk else OFF.walk
 		m.hand.albedo_color = ON.hand if (not walk and not flashing) else OFF.hand
+
+
+# ------------------------------------------------------------------ más mobiliario (docs/reglas-calle.md)
+
+## Señal de STOP: octógono rojo de 0,75 m (0,25 u) con borde blanco en un poste de 2,1 m,
+## mirando a los coches que llegan (heading = su sentido de marcha).
+static func stop_sign(b: GeoBatch, x: float, z: float, hx: float, hz: float) -> void:
+	var g := Transform3D(Basis(Vector3.UP, atan2(-hx, -hz)), Vector3(x, 0.05, z))
+	part(b, g, "cyl", lambert(Color("8a8f96")), Vector3(0.018, 0.72, 0.018), Vector3.ZERO)
+	var oct := _octagon()
+	b.mesh(oct, g * Transform3D(Basis.from_scale(Vector3(0.135, 0.135, 1.0)), Vector3(0, 0.76, 0.012)), lambert(Color("f2f2ee")))
+	b.mesh(oct, g * Transform3D(Basis.from_scale(Vector3(0.122, 0.122, 1.0)), Vector3(0, 0.76, 0.016)), lambert(Color("c8141e")))
+	# dorso gris de la placa
+	b.mesh(oct, g * Transform3D(Basis(Vector3.UP, PI).scaled(Vector3(0.135, 0.135, 1.0)), Vector3(0, 0.76, 0.008)), lambert(Color("6b7078")))
+
+
+static var _oct: ArrayMesh
+static func _octagon() -> ArrayMesh:
+	if _oct:
+		return _oct
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_normal(Vector3.BACK)
+	for i in 8:
+		var a0 := TAU * (i + 0.5) / 8.0
+		var a1 := TAU * (i + 1.5) / 8.0
+		st.add_vertex(Vector3.ZERO)
+		st.add_vertex(Vector3(cos(a1), sin(a1), 0))
+		st.add_vertex(Vector3(cos(a0), sin(a0), 0))
+	_oct = st.commit()
+	return _oct
+
+
+## Hidrante de Nueva York (cuerpo rojo, capuchón y bocas plateadas), ~0,75 m de alto.
+static func hydrant(b: GeoBatch, x: float, z: float, rot: float) -> void:
+	var g := Transform3D(Basis(Vector3.UP, rot), Vector3(x, 0.05, z))
+	var red := lambert(Color("b3261e"))
+	var steel := lambert(Color("a8adb3"))
+	part(b, g, "cyl", steel, Vector3(0.05, 0.03, 0.05), Vector3.ZERO)
+	part(b, g, "cyl", red, Vector3(0.036, 0.17, 0.036), Vector3(0, 0.03, 0))
+	part(b, g, "cyl", red, Vector3(0.042, 0.02, 0.042), Vector3(0, 0.19, 0))
+	part(b, g, "sphere", steel, Vector3(0.034, 0.03, 0.034), Vector3(0, 0.215, 0))
+	part(b, g, "cyl", steel, Vector3(0.016, 0.07, 0.016), Vector3(0.0, 0.12, 0), Vector3(0, 0, PI / 2.0))
+	part(b, g, "cyl", steel, Vector3(0.02, 0.05, 0.02), Vector3(0, 0.12, 0.02), Vector3(PI / 2.0, 0, 0))
+
+
+## Papelera de rejilla verde (la típica de las esquinas de Nueva York), con algo de basura.
+static func litter_basket(b: GeoBatch, x: float, z: float) -> void:
+	var g := Transform3D(Basis(), Vector3(x, 0.05, z))
+	var green := lambert(Color("2e4a36"))
+	part(b, g, "cone", green, Vector3(0.075, 0.28, 0.075), Vector3.ZERO, Vector3(PI, 0, 0))
+	part(b, g, "cyl", lambert(Color("1f3326")), Vector3(0.078, 0.02, 0.078), Vector3(0, 0.27, 0))
+	part(b, g, "sphere", lambert(Color("d8d4c8")), Vector3(0.05, 0.03, 0.045), Vector3(0.01, 0.285, 0))
+	part(b, g, "sphere", lambert(Color("2b2b2e")), Vector3(0.035, 0.025, 0.04), Vector3(-0.02, 0.29, 0.015))
+
+
+## Montón de bolsas de basura negras y verdes junto al bordillo (rng: determinista).
+static func trash_bags(b: GeoBatch, x: float, z: float, r: RandomNumberGenerator) -> void:
+	var cols := [Color("141416"), Color("1b1c1f"), Color("233a26"), Color("101012"), Color("5b5f66")]
+	var n := 3 + r.randi() % 5
+	for i in n:
+		var p := Vector3(x + r.randf_range(-0.28, 0.28), 0.05, z + r.randf_range(-0.22, 0.22))
+		var s := Vector3(r.randf_range(0.09, 0.14), r.randf_range(0.07, 0.11), r.randf_range(0.08, 0.13))
+		var m := StandardMaterial3D.new() if false else lambert(cols[r.randi() % cols.size()])
+		part(b, Transform3D(), "sphere", m, s, p + Vector3(0, s.y * 0.8 + (0.06 if i >= 4 else 0.0), 0), Vector3(r.randf_range(-0.4, 0.4), r.randf() * TAU, 0))

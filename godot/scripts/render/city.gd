@@ -131,6 +131,11 @@ var solid := GeoBatch.new()    # semáforos y demás piezas sueltas: con sombra
 var chunks := {}               # "rx,ry" -> { clave de instancia -> [Transform3D | [Transform3D, Color]] }
 var segs: Array = []
 var cars: Array = []
+var props: Array = [] # [Vector2 (tiles globales), radio] ya colocados: nada se solapa
+var bpolys: Array = [] # [PackedVector2Array (tiles), Rect2] de los edificios
+var litter := GeoBatch.new() # basura del suelo (sin sombra)
+var hydrants: Array = [] # Vector2 (tiles): no se aparca a menos de 3 tiles
+var audit := {"prop": 0, "edificio": 0, "calzada": 0}
 var approaches: Array = [] # llegadas a cruces: { x, y, hx, hy, stop_dist, axis ("A"/"B"/"stop") } (tiles globales)
 var buildings := {} # id -> info para Destruction (pos, height, pts, refs, parts, xf, hp, max_hp)
 var crosses: Array = []
@@ -176,6 +181,42 @@ func _seg_dist(s: Dictionary, px: float, py: float) -> float:
 	var l2 := vx * vx + vy * vy
 	var t := clampf(((px - s.x0) * vx + (py - s.y0) * vy) / l2, 0.0, 1.0) if l2 > 0.0 else 0.0
 	return Vector2(px - (s.x0 + t * vx), py - (s.y0 + t * vy)).length()
+
+
+## ¿Hay sitio para un objeto de radio r en (px, py) (tiles)? Ni otro objeto, ni un
+## edificio (a menos de margin de su fachada), ni la calzada (si sidewalk).
+func _free(px: float, py: float, r: float, margin := 0.4, sidewalk := true) -> bool:
+	var p := Vector2(px, py)
+	for o in props:
+		if p.distance_to(o[0]) < r + o[1]:
+			audit.prop += 1
+			return false
+	for bp in bpolys:
+		var box: Rect2 = bp[1]
+		if not box.grow(r + margin).has_point(p):
+			continue
+		if Geometry2D.is_point_in_polygon(p, bp[0]) or _poly_dist(p, bp[0]) < r + margin:
+			audit.edificio += 1
+			return false
+	if sidewalk:
+		for sg in segs:
+			if _seg_dist(sg, px, py) < ROAD_HALF[sg.kind] + CURB_W + r * 0.5:
+				audit.calzada += 1
+				return false
+	return true
+
+
+func _claim(px: float, py: float, r: float) -> void:
+	props.append([Vector2(px, py), r])
+
+
+static func _poly_dist(p: Vector2, poly: PackedVector2Array) -> float:
+	var best := INF
+	for i in poly.size():
+		var a := poly[i]
+		var b := poly[(i + 1) % poly.size()]
+		best = minf(best, p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b)))
+	return best
 
 
 func _near_cross(px: float, py: float, extra: float) -> bool:
@@ -258,14 +299,28 @@ func _build(datas: Array) -> void:
 			c.max_half = maxf(c.max_half, ROAD_HALF[s.kind])
 		crosses.append(c)
 
+	for bd in building_defs.values():
+		if bd.has("hp") and float(bd.hp) <= 0.0:
+			continue
+		var poly := PackedVector2Array()
+		var box := Rect2()
+		for i in bd.pts.size():
+			var p := Vector2(bd.pts[i][0], bd.pts[i][1])
+			poly.append(p)
+			box = Rect2(p, Vector2.ZERO) if i == 0 else box.expand(p)
+		bpolys.append([poly, box])
 	_roadway()
-	_markings_and_furniture()
 	_crossings()
+	_corners()
+	_markings_and_furniture()
 	for bd in building_defs.values():
 		if not _kit_building(bd):
 			_polygon_building(bd)
 	flat.build(root, false)
+	litter.build(root, false)
 	solid.build(root, true)
+	if Config.bench:
+		print("reglas: descartados por solape=%d edificio=%d calzada=%d" % [audit.prop, audit.edificio, audit.calzada])
 	_instantiate_chunks()
 
 
@@ -405,54 +460,93 @@ func _markings_and_furniture() -> void:
 				var heading := ang if dir > 0 else ang + PI
 				_mark(arrow_s, px, py, 0.8, 2.2, heading + PI / 2.0)
 
-		# Farolas y árboles alternando lados; coches junto al bordillo; aceite; charcos.
-		var t := 5.0
-		while t < length - 2.0:
+		# Mobiliario, aparcamiento y basura a lo largo de la manzana (docs/reglas-calle.md):
+		# cada objeto reserva su sitio (_free/_claim): nada se solapa, nada invade un
+		# edificio ni la calzada.
+		var rng := RandomNumberGenerator.new()
+		rng.seed = _hash_int(str(s.id))
+		var t := 1.5
+		while t < length - 1.0:
 			var px: float = s.x0 + ux * t
 			var py: float = s.y0 + uy * t
-			t += 6.0
-			if _near_cross(px, py, 2.5):
-				continue
-			var k := int(jround((px * ux + py * uy) / 6.0))
-			var side := 1.0 if k % 2 == 0 else -1.0
+			var k := int(jround((float(s.s0) + t) / 3.0))
+			t += 3.0
 			var h := hash2(jround(px * 3.0), jround(py * 3.0))
-			var sx := px + nx * side * (half + 0.8)
-			var sy := py + ny * side * (half + 0.8)
-			if k % 3 == 0:
-				_place("streetlight", StreetFurniture.streetlight_xform(_L(sx), _Lz(sy), -nx * side, -ny * side))
-			elif h > 0.45:
-				var crown: int = CROWNS[int(floorf(h * 97.0)) % CROWNS.size()]
-				_kit_prop("suburban", "tree-large" if crown % 2 == 0 else "tree-small", _L(sx), _Lz(sy), 0.0, 1.0, 0.9 + (crown % 7) * 0.05)
-			elif h < 0.12:
+			_scatter_litter(px, py, ux, uy, nx, ny, half, rng)
+			if _near_cross(px, py, 1.0):
+				continue
+			var side := 1.0 if (k / 2) % 2 == 0 else -1.0
+			var fx := px + nx * side * (half + 0.8)
+			var fy := py + ny * side * (half + 0.8)
+			if k % 6 == 0 and not _near_cross(px, py, 4.0):
+				# farola cada ~27 m, alternando lados, fuera de los cruces
+				if _free(fx, fy, 0.3, 0.3):
+					_place("streetlight", StreetFurniture.streetlight_xform(_L(fx), _Lz(fy), -nx * side, -ny * side))
+					_claim(fx, fy, 1.2)
+			elif k % 3 == 1 and h > 0.3 and not _near_cross(px, py, 6.0):
+				# árbol en alcorque, lejos de los cruces y de farolas / hidrantes
+				if _free(fx, fy, 0.5, 0.4):
+					var crown: int = CROWNS[int(floorf(h * 97.0)) % CROWNS.size()]
+					_kit_prop("suburban", "tree-large" if crown % 2 == 0 else "tree-small", _L(fx), _Lz(fy), 0.0, 1.0, 0.9 + (crown % 7) * 0.05)
+					_claim(fx, fy, 0.8)
+			elif h < 0.07 and not _near_cross(px, py, 5.0):
 				var bx := px + nx * side * (half + 1.3)
 				var by := py + ny * side * (half + 1.3)
-				_kit_prop("retro", "detail-bench", _L(bx), _Lz(by), -nx * side, -ny * side, 0.5)
-			elif h < 0.17:
+				if _free(bx, by, 0.35, 0.3):
+					_kit_prop("retro", "detail-bench", _L(bx), _Lz(by), -nx * side, -ny * side, 0.5)
+					_claim(bx, by, 0.5)
+			elif h < 0.11 and not _near_cross(px, py, 5.0):
 				var ddx := px + nx * side * (half + 1.4)
 				var ddy := py + ny * side * (half + 1.4)
-				_kit_prop("retro", "detail-dumpster-closed" if h < 0.145 else "detail-dumpster-open", _L(ddx), _Lz(ddy), ux, uy, 0.55)
+				if _free(ddx, ddy, 0.55, 0.15):
+					_kit_prop("retro", "detail-dumpster-closed" if h < 0.09 else "detail-dumpster-open", _L(ddx), _Lz(ddy), ux, uy, 0.55)
+					_claim(ddx, ddy, 0.7)
+			elif h < 0.21 and not _near_cross(px, py, 4.0):
+				# bolsas de basura apiladas junto al bordillo (Nueva York)
+				var tx := px + nx * side * (half + 0.6)
+				var ty := py + ny * side * (half + 0.6)
+				if _free(tx, ty, 0.35, 0.3):
+					StreetFurniture.trash_bags(solid, _L(tx), _Lz(ty), rng)
+					_claim(tx, ty, 0.45)
+			elif h > 0.92 and not _near_cross(px, py, 4.0):
+				# bicicleta aparcada junto al bordillo, paralela a la calle
+				var cx2 := px + nx * side * (half + 0.75)
+				var cy2 := py + ny * side * (half + 0.75)
+				if _free(cx2, cy2, 0.35, 0.3):
+					var bs := Kenney.base_scale("transport/bicycle")
+					if not Kenney.model("transport/bicycle").is_empty():
+						_place("model:transport/bicycle", Transform3D(Basis(Vector3.UP, atan2(ux, uy)).scaled(Vector3(bs, bs, bs)), Vector3(_L(cx2), 0.05, _Lz(cy2))))
+						_claim(cx2, cy2, 0.45)
+			# Aparcamiento (reparto real de la calzada): calle pequeña de sentido único →
+			# junto al bordillo de un solo lado (+n); calle principal → en ambos lados;
+			# calle pequeña de doble sentido y avenidas → no. Nunca a menos de 4 tiles de
+			# un cruce ni de 3 de un hidrante.
 			var hc := hash2(jround(px * 5.0) + 1.0, jround(py * 5.0))
-			# Aparcamiento (reparto real de la calzada; ver docs/reglas-calle.md): calle
-			# pequeña de sentido único → junto al bordillo de un solo lado (+n); calle
-			# principal → en ambos lados; calle pequeña de doble sentido y avenidas → no.
 			var coff := 0.0
 			if s.kind == 0 and one_way:
 				coff = half - 0.65
 			elif s.kind == 1:
 				coff = (half - 0.55) * (-side)
-			else:
-				hc = 0.3 # sin aparcamiento: ni coches ni huecos con aceite
-			var cx := px + nx * coff
-			var cy := py + ny * coff
-			var car_color: Color = CAR_COLORS[int(floorf(h * 131.0)) % CAR_COLORS.size()]
-			if hc > 0.95:
-				var truck: String = ["truck-grey", "truck-green", "truck-flat"][int(floorf(h * 3.0)) % 3]
-				if not _kit_prop("retro", truck, _L(cx), _Lz(cy), ux, uy, 0.62):
+			if coff != 0.0 and not _near_cross(px, py, 4.0):
+				var cx := px + nx * coff
+				var cy := py + ny * coff
+				var near_hydrant := false
+				for hy in hydrants:
+					if Vector2(cx, cy).distance_to(hy) < 3.0:
+						near_hydrant = true
+				var car_color: Color = CAR_COLORS[int(floorf(h * 131.0)) % CAR_COLORS.size()]
+				if near_hydrant:
+					pass
+				elif hc > 0.95 and _free(cx, cy, 0.9, 0.0, false):
+					var truck: String = ["truck-grey", "truck-green", "truck-flat"][int(floorf(h * 3.0)) % 3]
+					if not _kit_prop("retro", truck, _L(cx), _Lz(cy), ux, uy, 0.62):
+						_add_car(_L(cx), _Lz(cy), ang, car_color)
+					_claim(cx, cy, 1.3)
+				elif hc > 0.55 and _free(cx, cy, 0.7, 0.0, false):
 					_add_car(_L(cx), _Lz(cy), ang, car_color)
-			elif hc > 0.55:
-				_add_car(_L(cx), _Lz(cy), ang, car_color)
-			elif hc < 0.14:
-				_mark(oil, cx, cy, 1.4, 1.0, ang + h * 2.0, Y_DECAL)
+					_claim(cx, cy, 0.8)
+				elif hc < 0.14:
+					_mark(oil, cx, cy, 1.4, 1.0, ang + h * 2.0, Y_DECAL)
 			var ho := hash2(jround(px * 7.0) + 3.0, jround(py * 7.0) + 1.0)
 			if ho > 0.9:
 				var lane := 0.0 if one_way else (1.0 if ho > 0.95 else -1.0) * half * 0.5
@@ -464,8 +558,9 @@ func _markings_and_furniture() -> void:
 			elif hw > 0.95:
 				_mark(puddle_mat(), px + nx * half * 0.4, py + ny * half * 0.4, 1.3, 1.0, ang + hw * 9.0, Y_DECAL + 0.002)
 			elif hw > 0.88:
+				# charco en la acera: por encima del suelo (0,05) y del bordillo (0,056)
 				var side_p := 1.0 if hw > 0.915 else -1.0
-				_mark(puddle_mat(), px + nx * side_p * (half + 1.0), py + ny * side_p * (half + 1.0), 1.4, 0.9, ang + hw * 4.0, 0.056)
+				_mark(puddle_mat(), px + nx * side_p * (half + 1.0), py + ny * side_p * (half + 1.0), 1.4, 0.9, ang + hw * 4.0, 0.059)
 
 
 ## Coche aparcado (los dibuja y destruye Cars; clave = posición global).
@@ -538,7 +633,7 @@ func _crossings() -> void:
 					continue
 				var w := -half + 0.4
 				while w <= half - 0.3:
-					_mark(white, cwx + nx * w, cwy + ny * w, 1.1, 0.38, ang)
+					_mark(white, cwx + nx * w, cwy + ny * w, 1.6, 0.4, ang)
 					w += 0.75
 				var hx: float = -th.ux * sgn
 				var hy: float = -th.uy * sgn
@@ -563,15 +658,22 @@ func _crossings() -> void:
 						lane_centers = [-half * 0.5, half * 0.5] if half >= 3.0 else [0.0]
 					else:
 						lane_centers = [half * 0.25, half * 0.75] if half >= 3.0 else [half * 0.5]
-					var q: Vector2 = at.call(other + 2.6, pole_off)
+					# lado lejano (MUTCD): esquina de la derecha una vez cruzado
+					var q: Vector2 = at.call(-(other + 2.1), pole_off)
+					_claim(q.x, q.y, 0.35)
 					var axis := "A" if absf(th.ux * c.through[0].ux + th.uy * c.through[0].uy) > 0.7 else "B"
 					StreetFurniture.traffic_signal(solid, _L(q.x), _Lz(q.y), hx, hy, lane_centers.map(func(lc: float) -> float: return (pole_off - lc) * T), axis)
 				var wz: Vector2 = at.call(other + 4.5, 0.0 if one_way else half * 0.5)
 				_mark(worn, wz.x, wz.y, 5.5, half * 1.8 if one_way else half * 1.1, hang, Y_DECAL - 0.0005)
+				# línea de detención (con semáforo o STOP), 1 tile antes del paso de peatones
+				var D := other + 2.35
+				var sp: Vector2 = at.call(D, mid)
+				_mark(white, sp.x, sp.y, band_w - 0.1, 0.4, hang + PI / 2.0)
 				if higher or all_way_stop:
-					var D := other + 2.35
-					var sp: Vector2 = at.call(D, mid)
-					_mark(white, sp.x, sp.y, band_w - 0.1, 0.4, hang + PI / 2.0)
+					# señal de STOP en la esquina derecha, a la altura de la línea
+					var ss: Vector2 = at.call(D + 0.2, half + 0.6)
+					StreetFurniture.stop_sign(solid, _L(ss.x), _Lz(ss.y), hx, hy)
+					_claim(ss.x, ss.y, 0.3)
 					var tp: Vector2 = at.call(D + 2.3, mid)
 					_mark(stop, tp.x, tp.y, minf(band_w * 0.92, 2.4), 3.4, hang + PI / 2.0)
 					if not one_way:
@@ -581,19 +683,104 @@ func _crossings() -> void:
 						var op: Vector2 = at.call(D + 1.9, mid + (rnd - 0.35) * 0.8)
 						_mark(oil, op.x, op.y, 1.5, 1.1, hang + rnd * 3.0, Y_DECAL)
 				if th.seg.kind == 2:
-					var D := other + 2.0
+					var DA := other + 2.0
 					for off in [half * 0.5, -half * 0.5]:
-						var lp: Vector2 = at.call(D + 4.5, off)
+						var lp: Vector2 = at.call(DA + 4.5, off)
 						_mark(white, lp.x, lp.y, 9.0, 0.12, ang)
-					var ip: Vector2 = at.call(D + 4.0, half * 0.25)
+					var ip: Vector2 = at.call(DA + 4.0, half * 0.25)
 					_mark(arrow_l, ip.x, ip.y, 0.95, 2.4, hang + PI / 2.0)
-					var o2: Vector2 = at.call(D + 4.0, half * 0.75)
+					var o2: Vector2 = at.call(DA + 4.0, half * 0.75)
 					_mark(arrow_s, o2.x, o2.y, 0.95, 2.4, hang + PI / 2.0)
 				if rnd > 0.72:
 					var L2 := 3.0 + (rnd - 0.72) * 14.0
 					var lane := (rnd - 0.86) * half if one_way else half * 0.5
 					var kp: Vector2 = at.call(other + 2.2 + L2 / 2.0, lane)
 					_mark(skid, kp.x, kp.y, L2, 1.1, hang + (rnd - 0.86) * 0.25, Y_DECAL)
+
+
+# ------------------------------------------------------------------ esquinas y basura
+
+## Esquinas de los cruces (docs/reglas-calle.md): papelera en cada esquina, hidrante en
+## esquinas alternas (pasado el paso de peatones) y farola en una diagonal de los cruces
+## con calles principales. Todo en la zona de mobiliario, sin invadir el paso.
+func _corners() -> void:
+	for c in crosses:
+		if c.through.size() < 2:
+			continue
+		var legs: Array = []
+		var major := false
+		for th in c.through:
+			if th.seg.kind >= 1:
+				major = true
+			var other := 0.0
+			for o in c.through:
+				if absf(o.ux * th.ux + o.uy * th.uy) < 0.9:
+					other = maxf(other, ROAD_HALF[o.seg.kind])
+			for sgn in [-1.0, 1.0]:
+				var u: Vector2 = Vector2(th.ux, th.uy) * sgn
+				if _seg_dist(th.seg, c.x + u.x * (other + 1.3), c.y + u.y * (other + 1.3)) > 0.5:
+					continue
+				legs.append([u.angle(), u, float(ROAD_HALF[th.seg.kind])])
+		if legs.size() < 2:
+			continue
+		legs.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+		var alt := int(hash_str("%.1f,%.1f" % [c.x, c.y]) * 10.0)
+		var center := Vector2(c.x, c.y)
+		for i in legs.size():
+			var la: Array = legs[i]
+			var lb: Array = legs[(i + 1) % legs.size()]
+			var da := wrapf(lb[0] - la[0], 0.0, TAU)
+			if da < 0.5 or da > 2.7:
+				continue # no es una esquina (calles casi alineadas o hueco enorme)
+			var ua: Vector2 = la[1]
+			var ub: Vector2 = lb[1]
+			var ha: float = la[2]
+			var hb: float = lb[2]
+			var corner := center + ua * (hb + 1.3) + ub * (ha + 1.3)
+			if _free(corner.x, corner.y, 0.25, 0.3):
+				StreetFurniture.litter_basket(solid, _L(corner.x), _Lz(corner.y))
+				_claim(corner.x, corner.y, 0.4)
+			if (i + alt) % 2 == 0:
+				var hp := center + ua * (hb + 3.6) + ub * (ha + 0.6)
+				if _free(hp.x, hp.y, 0.2, 0.3):
+					StreetFurniture.hydrant(solid, _L(hp.x), _Lz(hp.y), ua.angle())
+					_claim(hp.x, hp.y, 0.6)
+					hydrants.append(hp)
+			if major and i % 2 == 0:
+				var lp := center + ua * (hb + 3.0) + ub * (ha + 0.8)
+				if _free(lp.x, lp.y, 0.3, 0.3):
+					_place("streetlight", StreetFurniture.streetlight_xform(_L(lp.x), _Lz(lp.y), -ub.x, -ub.y))
+					_claim(lp.x, lp.y, 1.0)
+
+
+# Basura del suelo: celdas del atlas de StreetTextures y su tamaño real (unidades).
+const LITTER_SIZE := [0.1, 0.07, 0.14, 0.2, 0.04, 0.04, 0.05, 0.12, 0.1, 0.06, 0.09, 0.08, 0.07, 0.1, 0.06, 0.08]
+
+
+static func litter_mat() -> Material:
+	return _std("litter", func(m: StandardMaterial3D) -> void:
+		m.albedo_texture = StreetTextures.litter_atlas()
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		m.alpha_scissor_threshold = 0.5
+		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		m.roughness = 1.0)
+
+
+## Papeles, periódicos, latas, colillas, hojas… sobre todo en la cuneta (junto al
+## bordillo) y algo por la acera.
+func _scatter_litter(px: float, py: float, ux: float, uy: float, nx: float, ny: float, half: float, r: RandomNumberGenerator) -> void:
+	var n := r.randi() % 5
+	for i in n:
+		var side := 1.0 if r.randf() < 0.5 else -1.0
+		var gutter := r.randf() < 0.55
+		var off := (half - r.randf_range(0.05, 0.4)) if gutter else (half + CURB_W + r.randf_range(0.1, 1.3))
+		var along := r.randf_range(-1.5, 1.5)
+		var x := px + ux * along + nx * side * off
+		var y := py + uy * along + ny * side * off
+		var item := r.randi() % 16
+		var sz: float = LITTER_SIZE[item] * r.randf_range(0.8, 1.25)
+		var cell := Rect2((item % 4) * 0.25, (item / 4) * 0.25, 0.25, 0.25)
+		litter.quad_uv(litter_mat(), _p(x, y, 0.066 if gutter else 0.053), sz, sz, r.randf() * TAU, cell)
 
 
 # ------------------------------------------------------------------ edificios

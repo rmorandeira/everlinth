@@ -14,6 +14,9 @@ const ZOMBIE_VARIANTS := 32
 const ZOMBIE_BASE := 1 + OTHER_VARIANTS
 const CIVILIAN_VARIANTS := 24
 const CIVILIAN_BASE := ZOMBIE_BASE + ZOMBIE_VARIANTS
+const CIVILIAN_PANIC_BASE := CIVILIAN_BASE + CIVILIAN_VARIANTS # los mismos, huyendo con los brazos en alto
+## Filas del atlas de tumbados: zombis abatidos y después paseantes caídos.
+const FALLEN_BASE := ZOMBIE_VARIANTS
 
 ## Tipos (INSTANCE_CUSTOM.w; decide el color de la silueta).
 const KIND_ZOMBIE := 0
@@ -37,10 +40,16 @@ func _ready() -> void:
 	for i in ZOMBIE_VARIANTS:
 		zspecs.append(PixelPeople.random_spec(2000 + i * 13, true))
 	specs.append_array(zspecs)
+	var cspecs: Array = []
 	for i in CIVILIAN_VARIANTS:
-		specs.append(PixelPeople.random_spec(3000 + i * 17, false))
+		cspecs.append(PixelPeople.random_spec(3000 + i * 17, false))
+	specs.append_array(cspecs)
+	for c in cspecs:
+		var p: Dictionary = c.duplicate()
+		p.panic = true
+		specs.append(p)
 	var atlas := ImageTexture.create_from_image(PixelPeople.build_atlas(specs))
-	var corpse_atlas := ImageTexture.create_from_image(PixelPeople.build_corpse_atlas(zspecs))
+	var corpse_atlas := ImageTexture.create_from_image(PixelPeople.build_corpse_atlas(zspecs + cspecs))
 
 	var quad := QuadMesh.new()
 	var mat := ShaderMaterial.new()
@@ -60,7 +69,7 @@ func _ready() -> void:
 	var kmat := ShaderMaterial.new()
 	kmat.shader = mat.shader
 	kmat.set_shader_parameter("atlas", corpse_atlas)
-	kmat.set_shader_parameter("grid", Vector2(2, ZOMBIE_VARIANTS))
+	kmat.set_shader_parameter("grid", Vector2(2, ZOMBIE_VARIANTS + CIVILIAN_VARIANTS))
 	kmat.set_shader_parameter("cell_world", Vector2(PixelPeople.KW, PixelPeople.KH) * PX)
 	kmat.set_shader_parameter("feet_frac", float(PixelPeople.KH - PixelPeople.KFEET_ROW) / PixelPeople.KH)
 	_setup(_corpses, quad, kmat, MAX_CORPSES, true)
@@ -159,6 +168,7 @@ func update(entities: Array, corpses: Array, cam: Camera3D) -> void:
 		if k >= MAX_CORPSES:
 			break
 		km.set_instance_transform(k, Transform3D(Basis(), Vector3(c.x, 0.05, c.z)))
-		km.set_instance_custom_data(k, Color(c.pose, c.variant % ZOMBIE_VARIANTS, c.scale, 4))
+		var row: int = c.row if c.has("row") else int(c.variant) % ZOMBIE_VARIANTS
+		km.set_instance_custom_data(k, Color(c.pose, row, c.scale, 4))
 		k += 1
 	km.visible_instance_count = k

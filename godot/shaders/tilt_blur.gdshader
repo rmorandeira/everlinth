@@ -2,7 +2,8 @@
 // con la distancia vertical a la franja nítida (a la altura del personaje, 40 % desde
 // abajo). En vez de dos pasadas gaussianas se muestrean los mipmaps de la pantalla
 // (ya reducidos y filtrados) en un disco de pocas muestras: mismo aspecto, mucho más
-// barato. Después, los colores de juguete: saturación, contraste y viñeta.
+// barato. Después, gradación de color fotográfica (tono realista): saturación natural,
+// contraste suave, luces algo cálidas y sombras algo frías, viñeta y un grano muy leve.
 shader_type canvas_item;
 
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap, repeat_disable;
@@ -30,9 +31,15 @@ void fragment() {
 		col += textureLod(screen_tex, uv + vec2(r.x * 0.35, -r.y), lod).rgb * 0.18;
 	}
 	vec3 c = to_linear(col);
-	float lum = dot(c, vec3(0.299, 0.587, 0.114));
-	c = mix(vec3(lum), c, 1.35);
-	c = (c - 0.5) * 1.1 + 0.5;
-	c *= 1.0 - 0.32 * smoothstep(0.45, 0.95, length(uv - 0.5) * 1.3);
+	float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+	c = mix(vec3(lum), c, 0.9);
+	// contraste suave de película (sin cambiar la exposición) y "split toning"
+	c = pow(max(c, vec3(0.0)), vec3(1.1)) * 1.07;
+	c = mix(c, c * vec3(0.95, 0.98, 1.05), 1.0 - smoothstep(0.0, 0.35, lum));
+	c = mix(c, c * vec3(1.04, 1.01, 0.96), smoothstep(0.45, 1.0, lum));
+	c *= 1.0 - 0.22 * smoothstep(0.5, 1.0, length(uv - 0.5) * 1.3);
+	// grano
+	float g = fract(sin(dot(FRAGCOORD.xy + fract(TIME) * 91.0, vec2(12.9898, 78.233))) * 43758.5453);
+	c += (g - 0.5) * 0.018;
 	COLOR = vec4(to_srgb(c), 1.0);
 }

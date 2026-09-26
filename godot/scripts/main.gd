@@ -467,6 +467,7 @@ func _process_game(dt: float) -> void:
 	var zoy := sy * H
 	var ents: Array = []
 	var dots: Array = []
+	var ks: Array = []
 	var face = null
 	if firing or time < aim_active_until:
 		face = aim
@@ -499,10 +500,15 @@ func _process_game(dt: float) -> void:
 		d.x = lerp_towards(d.x, tp.x, dt, 12.0)
 		d.y = lerp_towards(d.y, tp.y, dt, 12.0)
 		civ_display[id] = d
-		ents.append({"id": "c%d" % id, "x": (d.x - zox) * T, "z": (d.y - zoy) * T, "variant": People.CIVILIAN_BASE + int(ct[2]) % People.CIVILIAN_VARIANTS,
-			"scale": 1.0, "kind": People.KIND_BITTEN if int(ct[1]) == 2 else People.KIND_CIVILIAN})
+		var st := int(ct[1])
+		var cv := int(ct[2]) % People.CIVILIAN_VARIANTS
+		if st == 3:
+			# caído en el suelo (tropezón): tumbado, sin sangre
+			ks.append({"x": (d.x - zox) * T, "z": (d.y - zoy) * T, "row": People.FALLEN_BASE + cv, "pose": id % 2, "scale": 1.0})
+		else:
+			ents.append({"id": "c%d" % id, "x": (d.x - zox) * T, "z": (d.y - zoy) * T, "variant": (People.CIVILIAN_PANIC_BASE if st == 1 else People.CIVILIAN_BASE) + cv,
+				"scale": 1.0, "kind": People.KIND_BITTEN if st == 2 else People.KIND_CIVILIAN})
 		dots.append([d, Color("f0f0e0") if int(ct[1]) == 0 else (Color("ffd84a") if int(ct[1]) == 1 else Color("8fd06a")), 0.8])
-	var ks: Array = []
 	for c in corpses:
 		var cx: float = c.gx - zox
 		var cz: float = c.gy - zoy

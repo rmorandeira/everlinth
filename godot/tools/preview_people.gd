@@ -6,7 +6,11 @@ func _init() -> void:
 	var specs: Array = [PixelPeople.player_spec()]
 	for i in 5:
 		specs.append(PixelPeople.random_spec(100 + i, false))
-	for i in 6:
+	for i in 3:
+		var p := PixelPeople.random_spec(3000 + i * 17, false)
+		p.panic = true
+		specs.append(p)
+	for i in 3:
 		specs.append(PixelPeople.random_spec(200 + i, true))
 	var img := PixelPeople.build_atlas(specs)
 	# solo fotograma 0 y 1 de cada variante, para que quepa

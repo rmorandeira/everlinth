@@ -20,6 +20,8 @@ var _key := ""
 var _floor := MultiMeshInstance3D.new()
 var _blocks := MeshInstance3D.new()
 var _block_mat := StandardMaterial3D.new()
+var _urban := MeshInstance3D.new() # salas de ciudad: acera de hormigón (shader)
+var _urban_mat := ShaderMaterial.new()
 
 
 func _ready() -> void:
@@ -37,6 +39,9 @@ func _ready() -> void:
 	_block_mat.vertex_color_is_srgb = true
 	_block_mat.roughness = 0.8
 	add_child(_blocks)
+	_urban_mat.shader = load("res://shaders/sidewalk.gdshader")
+	_urban.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_urban)
 
 
 func _new_multimesh(mesh: Mesh) -> MultiMesh:
@@ -63,11 +68,18 @@ func build(screen: Dictionary, neighbors: Array) -> void:
 	_key = key
 	var floor_cells: Array = []
 	var block_cells: Array = []
-	_collect(screen.tiles, 0, 0, sx, sy, floor_cells, block_cells, screen.has("city"))
+	var urban := GeoBatch.new()
+	if screen.has("city"):
+		_urban_room(urban, 0, 0)
+	else:
+		_collect(screen.tiles, 0, 0, sx, sy, floor_cells, block_cells, false)
 	for n in neighbors:
 		var nx := int(n.sx)
 		var ny := int(n.sy)
-		_collect(n.tiles, (nx - sx) * W, (ny - sy) * H, nx, ny, floor_cells, block_cells, n.has("city"))
+		if n.has("city"):
+			_urban_room(urban, (nx - sx) * W, (ny - sy) * H)
+		else:
+			_collect(n.tiles, (nx - sx) * W, (ny - sy) * H, nx, ny, floor_cells, block_cells, false)
 
 	var fm := _floor.multimesh
 	fm.instance_count = floor_cells.size()
@@ -77,6 +89,13 @@ func build(screen: Dictionary, neighbors: Array) -> void:
 		fm.set_instance_color(i, c[2])
 
 	_blocks.mesh = _merge_blocks(block_cells) if block_cells.size() > 0 else null
+	_urban.mesh = urban.to_mesh() if not urban.is_empty() else null
+
+
+## Sala de ciudad: un plano de acera (las calles y los edificios van encima).
+func _urban_room(b: GeoBatch, ox: int, oz: int) -> void:
+	var c := Vector3((ox + W * 0.5 - 0.5) * T, Y, (oz + H * 0.5 - 0.5) * T)
+	b.quad(_urban_mat, c, W * T, H * T, 0.0)
 
 
 ## Bloques fusionados en una sola malla, sin caras interiores: de cada celda solo

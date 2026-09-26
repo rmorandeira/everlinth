@@ -373,8 +373,8 @@ export interface CivilianState {
   id: number;
   gx: number;
   gy: number;
-  /** 0 tranquilo, 1 huyendo, 2 mordido (se está convirtiendo) */
-  s: 0 | 1 | 2;
+  /** 0 tranquilo, 1 huyendo, 2 mordido (se está convirtiendo), 3 caído, 4 ayudando a levantarse */
+  s: 0 | 1 | 2 | 3 | 4;
   /** variante de ropa */
   v: number;
 }
