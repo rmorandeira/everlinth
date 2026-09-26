@@ -28,15 +28,27 @@ global uniform float cut_keep;   // opacidad que conserva lo que tapa la franja
 // Plano de corte (derrumbes: la parte de arriba se parte y cae por separado): se
 // descarta lo que queda del lado positivo del plano (xyz = normal, w = distancia).
 instance uniform vec4 clip_plane = vec4(0.0);
+// Fachadas realistas (facades.gd): materiales PBR de ambientCG (CC0) en un array de
+// texturas; cada edificio usa uno (según su posición). Solo se sustituyen las paredes
+// lisas claras del modelo (no ventanas, marcos ni molduras) y las azoteas (grava).
+global uniform sampler2DArray fac_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray fac_normal : filter_linear_mipmap, repeat_enable;
+global uniform sampler2DArray fac_rough : filter_linear_mipmap, repeat_enable;
+global uniform float facade_on;
+const float FAC_WALLS = 6.0;   // capas 0-5: paredes
+const float FAC_ROOF = 6.0;    // capa 6: grava de azotea
+const float FAC_TILE = 0.9;    // unidades por repetición (≈2,7 m: algo mayor que el real para que se lea a esta distancia)
 
 varying float v_win;
 varying vec3 v_wpos;
 varying vec3 v_wnrm;
+varying float v_mat;
 
 void vertex() {
 	vec3 o = MODEL_MATRIX[3].xyz;
 	float shift = fract(sin(dot(floor(o.xz * 4.0), vec2(12.9898, 78.233))) * 43758.5453);
 	v_win = UV2.x > 0.0 ? fract(UV2.x + shift) + 0.0001 : 0.0;
+	v_mat = floor(fract(shift * 7.13 + 0.37) * FAC_WALLS);
 	v_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_wnrm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 }
@@ -80,9 +92,47 @@ void fragment() {
 		}
 	}
 	vec4 a = texture(albedo_tex, tex_mode == 0 ? UV : catalog_uv(UV)) * albedo_color;
-	ALBEDO = a.rgb;
+	ALBEDO = a.rgb * COLOR.rgb;
 	ROUGHNESS = 0.85;
 	SPECULAR = 0.3;
+	if (tex_mode == 0 && facade_on > 0.5 && v_win == 0.0) {
+		vec3 n = normalize(v_wnrm);
+		float lum = dot(a.rgb, vec3(0.299, 0.587, 0.114));
+		float sat = max(a.r, max(a.g, a.b)) - min(a.r, min(a.g, a.b));
+		bool wall = abs(n.y) < 0.35 && lum > 0.55 && sat < 0.14;
+		bool roof = n.y > 0.8 && sat < 0.14 && v_wpos.y > 0.35;
+		if (wall || roof) {
+			vec2 uv;
+			vec3 t;
+			vec3 bt;
+			float layer;
+			if (wall) {
+				uv = vec2(v_wpos.x * -n.z + v_wpos.z * n.x, v_wpos.y) / FAC_TILE;
+				t = normalize(vec3(-n.z, 0.0, n.x));
+				bt = vec3(0.0, 1.0, 0.0);
+				layer = v_mat;
+			} else {
+				uv = v_wpos.xz / (FAC_TILE * 1.5);
+				t = vec3(1.0, 0.0, 0.0);
+				bt = vec3(0.0, 0.0, -1.0);
+				layer = FAC_ROOF;
+			}
+			vec3 alb = texture(fac_albedo, vec3(uv, layer)).rgb;
+			// conserva algo del sombreado del modelo (esquinas, bandas)
+			alb *= mix(1.0, clamp(lum / 0.8, 0.6, 1.1), 0.35);
+			if (wall) {
+				// suciedad: más cerca del suelo, y chorretones verticales
+				float ground = 1.0 - smoothstep(0.05, 0.7, v_wpos.y);
+				float streak = fract(sin(floor(uv.x * 2.0) * 91.7) * 43758.5) * smoothstep(0.0, 3.0, fract(v_wpos.y * 0.35 + uv.x * 0.07));
+				alb *= 1.0 - 0.28 * ground - 0.1 * streak;
+			}
+			ALBEDO = alb * COLOR.rgb;
+			ROUGHNESS = texture(fac_rough, vec3(uv, layer)).r;
+			vec3 nt = texture(fac_normal, vec3(uv, layer)).xyz * 2.0 - 1.0;
+			vec3 wn = normalize(t * nt.x + bt * nt.y + n * max(nt.z, 0.2));
+			NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+		}
+	}
 	if (v_win > 0.0 && win_glow > 0.001) {
 		float on = step(1.0 - win_lit, v_win);
 		vec3 tone = mix(vec3(1.0, 0.74, 0.4), vec3(0.75, 0.85, 1.0), step(0.9, fract(v_win * 7.31)));

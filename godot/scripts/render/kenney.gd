@@ -116,7 +116,7 @@ static func size(key: String) -> Vector3:
 	return m.size if not m.is_empty() else Vector3.ZERO
 
 
-## Piezas del modelo: [[Mesh, Transform3D relativo a la base normalizada], ...].
+## Piezas del modelo: [[Mesh, Transform3D relativo a la base normalizada, nombre], ...].
 static func model(key: String) -> Dictionary:
 	if _models.has(key):
 		return _models[key]
@@ -139,7 +139,7 @@ static func model(key: String) -> Dictionary:
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, surf.arrays)
 			var tp: Dictionary = textures.get(surf.slot, {})
 			mesh.surface_set_material(mesh.get_surface_count() - 1, _material_for(surf.albedo, surf.color, tp))
-		parts.append([mesh, p[1]])
+		parts.append([mesh, p[1], p[2] if p.size() > 2 else ""])
 	_models[key] = {"parts": parts, "size": base.size}
 	return _models[key]
 
@@ -192,7 +192,7 @@ static func _collect(n: Node, parent: Transform3D, out: Array) -> void:
 	if n is Node3D:
 		xf = parent * (n as Node3D).transform
 	if n is MeshInstance3D and (n as MeshInstance3D).mesh:
-		out.append([_prepare_surfaces((n as MeshInstance3D).mesh), xf])
+		out.append([_prepare_surfaces((n as MeshInstance3D).mesh), xf, str(n.name)])
 	for c in n.get_children():
 		_collect(c, xf, out)
 

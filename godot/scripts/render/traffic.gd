@@ -25,6 +25,7 @@ var _veh: Array = []
 var _mm := {} # modelo -> [[MultiMeshInstance3D, Transform3D de la pieza], ...]
 var _lights: Array[OmniLight3D] = []
 var _obstacles: Array = [] # Vector2 en tiles globales (zombis, paseantes, jugador)
+var _focus := Vector3.ZERO # cámara (render): solo se dibujan los vehículos cercanos
 
 
 func _ready() -> void:
@@ -214,6 +215,7 @@ func _stop_distance(v: Dictionary, length: float, time: float) -> float:
 
 
 func update(dt: float, time: float, player: Vector2) -> void:
+	_focus = Vector3((player.x - origin_gx) * T, 0.0, (player.y - origin_gz) * T)
 	if segs.is_empty():
 		for k in _mm:
 			for p in _mm[k]:
@@ -292,6 +294,8 @@ func _draw(time: float) -> void:
 	var light := 0
 	for v in _veh:
 		var p := _pos_on(v.seg, v.fwd, v.d, v.lane)
+		if absf((p.x - origin_gx) * T - _focus.x) > 20.0 or absf((p.y - origin_gz) * T - _focus.z) > 20.0:
+			continue
 		var h := _dir_of(v.seg, v.fwd)
 		var s := Kenney.base_scale(v.model)
 		var xf := Transform3D(Basis(Vector3.UP, atan2(h.x, h.y)).scaled(Vector3(s, s, s)), Vector3((p.x - origin_gx) * T, 0.06, (p.y - origin_gz) * T))

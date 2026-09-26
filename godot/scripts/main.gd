@@ -61,6 +61,7 @@ var _bench_rcpu := 0.0
 
 
 func _ready() -> void:
+	Facades.setup()
 	if Config.bench:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 		quality.set_process(false)
@@ -516,6 +517,7 @@ func _process_game(dt: float) -> void:
 			continue
 		ks.append({"x": cx * T, "z": cz * T, "variant": c.variant, "pose": c.pose, "scale": c.scale})
 	people.update(ents, ks, cam)
+	cars.focus = Vector3(you_display.x * T, 0.0, you_display.y * T)
 	# tráfico: frena ante cualquiera que esté en la calzada (tiles globales)
 	var obst: Array = [Vector2(zox + you_display.x, zoy + you_display.y)]
 	for id in zombie_display:

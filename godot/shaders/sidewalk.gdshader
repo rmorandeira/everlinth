@@ -19,7 +19,7 @@ float noise(vec2 p) {
 float fbm(vec2 p) {
 	float v = 0.0;
 	float a = 0.5;
-	for (int i = 0; i < 4; i++) {
+	for (int i = 0; i < 2; i++) {
 		v += a * noise(p);
 		p *= 2.03;
 		a *= 0.5;
@@ -40,7 +40,7 @@ void fragment() {
 	vec3 col = base_color * (0.9 + 0.16 * h);
 	col = mix(col, col * vec3(1.03, 1.0, 0.95), step(0.8, hash(cell + 7.1)));
 	// grano del hormigón
-	col *= 0.93 + 0.1 * noise(p * 90.0) + 0.04 * noise(p * 260.0);
+	col *= 0.93 + 0.12 * noise(p * 90.0);
 	// suciedad y humedad (manchas grandes y suaves)
 	float dirt = smoothstep(0.55, 0.85, fbm(p * 1.3 + 3.0));
 	col *= 1.0 - 0.22 * dirt;
