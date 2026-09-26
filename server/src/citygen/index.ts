@@ -29,6 +29,7 @@ import Graph from "./graph.js";
 import PolygonFinder from "./polygon_finder.js";
 import PolygonUtil from "./polygon_util.js";
 import { highwaysIn, distToHw, type HwSeg, type HwPillar } from "./highways.js";
+import { osmAvailable, rasterRoomOSM, nearestRoadOSM } from "./osmcity.js";
 
 const DISTRICT_ROOMS = 15;
 const DISTRICT_W = DISTRICT_ROOMS * SCREEN_WIDTH; // 720
@@ -311,6 +312,8 @@ export interface RasterRoom {
 
 // Tiles + geometría vectorial de la sala (sx, sy).
 export function rasterRoom(sx: number, sy: number): RasterRoom {
+  // ciudad real (OpenStreetMap) si hay datos; si no, el generador procedural
+  if (osmAvailable()) return rasterRoomOSM(sx, sy);
   const dx = Math.floor((sx + ROOM_OFFSET) / DISTRICT_ROOMS);
   const dy = Math.floor((sy + ROOM_OFFSET) / DISTRICT_ROOMS);
   const d = getDistrict(dx, dy);
@@ -424,6 +427,7 @@ function round2(v: number): number {
 
 // Punto de la calzada más cercano a un punto (para colocar a un jugador nuevo).
 export function nearestRoadPoint(gx: number, gy: number): { x: number; y: number } | null {
+  if (osmAvailable()) return nearestRoadOSM(gx, gy);
   const dx = Math.floor((Math.floor(gx / SCREEN_WIDTH) + ROOM_OFFSET) / DISTRICT_ROOMS);
   const dy = Math.floor((Math.floor(gy / SCREEN_HEIGHT) + ROOM_OFFSET) / DISTRICT_ROOMS);
   const d = getDistrict(dx, dy);

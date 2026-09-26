@@ -142,6 +142,20 @@ export class GameServer {
         this.explode(msg.gx, msg.gy, 4, 120, { conn, player });
       }
     }
+    else if (msg.type === "debugTeleport") {
+      // pruebas (solo con DEBUG_WEAPONS=1): llevar al jugador a un tile global
+      if (process.env.DEBUG_WEAPONS?.trim() === "1" && Number.isFinite(msg.gx) && Number.isFinite(msg.gy)) {
+        const nsx = Math.floor(msg.gx / SCREEN_WIDTH);
+        const nsy = Math.floor(msg.gy / SCREEN_HEIGHT);
+        this.leaveScreenRoom(conn, screenKey({ sx: player.sx, sy: player.sy }));
+        this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username: conn.username }, conn);
+        player.sx = nsx;
+        player.sy = nsy;
+        player.x = msg.gx - nsx * SCREEN_WIDTH;
+        player.y = msg.gy - nsy * SCREEN_HEIGHT;
+        this.enterScreen(conn, player, nsx, nsy, false);
+      }
+    }
     else if (msg.type === "setZombies") {
       conn.zombiesOn = msg.enabled === true;
       if (!conn.zombiesOn) send(conn.socket, { type: "zombies", zombies: [] });
@@ -628,8 +642,8 @@ export class GameServer {
           // lentos, arrastrándose: 0,8-1,6 tiles/s (el jugador corre a más de 7); gigantes 0,5-0,7
           this.zombies.push(
             giant
-              ? { id: this.nextZombieId++, gx, gy, hp: GIANT_HP, speed: 0.5 + Math.random() * 0.2, hitCooldown: 0, giant: true, pack }
-              : { id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: packSpeed * (0.94 + Math.random() * 0.12), hitCooldown: 0, pack }
+              ? { id: this.nextZombieId++, gx, gy, hp: GIANT_HP, speed: (0.5 + Math.random() * 0.2) * 1.25, hitCooldown: 0, giant: true, pack }
+              : { id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: packSpeed * (0.94 + Math.random() * 0.12) * 1.25, hitCooldown: 0, pack }
           );
           break;
         }
@@ -804,7 +818,7 @@ export class GameServer {
       const gx = t.gx + Math.cos(ang) * r;
       const gy = t.gy + Math.sin(ang) * r;
       if (!this.sidewalk(gx, gy)) continue;
-      this.civilians.push({ id: this.nextCivilianId++, gx, gy, tx: gx, ty: gy, walk: 0.8 + Math.random() * 0.5, run: 3.0 + Math.random() * 1.3, panic: 0, infected: 0, v: Math.floor(Math.random() * 1000), wait: Math.random() * 3, fallen: 0, helping: 0, helpT: 0, helped: false });
+      this.civilians.push({ id: this.nextCivilianId++, gx, gy, tx: gx, ty: gy, walk: (0.8 + Math.random() * 0.5) * 1.2, run: (3.0 + Math.random() * 1.3) * 1.2, panic: 0, infected: 0, v: Math.floor(Math.random() * 1000), wait: Math.random() * 3, fallen: 0, helping: 0, helpT: 0, helped: false });
     }
   }
 
@@ -980,7 +994,7 @@ export class GameServer {
       const gone = new Set(turned);
       this.civilians = this.civilians.filter((c) => !gone.has(c));
       for (const c of turned) {
-        this.zombies.push({ id: this.nextZombieId++, gx: c.gx, gy: c.gy, hp: ZOMBIE_MAX_HP, speed: 0.9 + Math.random() * 0.6, hitCooldown: 1, pack: this.nextPack++ });
+        this.zombies.push({ id: this.nextZombieId++, gx: c.gx, gy: c.gy, hp: ZOMBIE_MAX_HP, speed: (0.9 + Math.random() * 0.6) * 1.25, hitCooldown: 1, pack: this.nextPack++ });
       }
     }
   }

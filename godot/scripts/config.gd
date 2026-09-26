@@ -9,6 +9,7 @@ extends Node
 ## - walk=NE: mantiene pulsadas esas direcciones de pantalla (pruebas).
 ## - bench=1: sin sincronía vertical, para medir los FPS reales.
 ## - aim=x,y / fire=1: apunta en esa dirección (tiles) y dispara sin parar (pruebas).
+## - tp=gx,gy: al entrar, lleva al personaje a ese tile global (servidor con DEBUG_WEAPONS=1).
 
 var server_url := "ws://localhost:3000"
 var server_from_args := false
@@ -23,6 +24,7 @@ var bench := false
 var zoom := 0.0 # depuración: mitad de alto visible (unidades) con la inclinación normal
 var cenital := 0.0 # depuración: vista desde arriba con esa mitad de alto (unidades)
 var boom := 0.0 # pruebas: explosiones a esa distancia (tiles) en la dirección de mira
+var tp := Vector2(INF, INF) # pruebas: tile global al que saltar al entrar
 var off: PackedStringArray = [] # efectos apagados para medir (ssao,msaa,glow,tilt,shadow,ghost)
 
 
@@ -46,6 +48,9 @@ func _init() -> void:
 			"aim":
 				var p := kv[1].split(",")
 				aim = Vector2(float(p[0]), float(p[1]))
+			"tp":
+				var q := kv[1].split(",")
+				tp = Vector2(float(q[0]), float(q[1]))
 			"off":
 				off = kv[1].split(",")
 			"boom":

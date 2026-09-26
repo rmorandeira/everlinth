@@ -44,7 +44,7 @@ export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
 
 // Movimiento continuo (no por casillas): el servidor simula a este tick fijo.
 export const TICK_MS = 50;
-export const PLAYER_SPEED = 8.9; // tiles/segundo
+export const PLAYER_SPEED = 10.2; // tiles/segundo
 export const ATTACK_RANGE = 1.8; // tiles
 export const PICKUP_RANGE = 1.5; // tiles
 
@@ -254,11 +254,16 @@ export interface CityRoad {
   y1: number;
   /** Distancia a lo largo de su calle (tiles) en (x0, y0): los discontinuos casan entre segmentos. */
   s0: number;
+  /** Sentido único real (OSM): 1 en el sentido x0→x1, -1 al revés. */
+  ow?: 1 | -1;
 }
 export interface CityBuilding {
   id: string;
   floors: number;
   pts: Array<[number, number]>;
+  /** Tipo de edificio de OSM (apartments, church…) y nombre, si lo tiene. */
+  t?: string;
+  name?: string;
   /** Daño (solo si ha recibido alguno): vida actual y máxima; 0 = derrumbado. */
   hp?: number;
   maxHp?: number;
@@ -286,6 +291,16 @@ export interface CityData {
   pillars?: Array<[number, number, number, number, number]>;
   /** Césped (círculos [x, y, radio]) en el interior de los enlaces. */
   greens?: Array<[number, number, number]>;
+  /** Ciudad real (OpenStreetMap): edificios con su planta, costa, playas, hitos. */
+  osm?: boolean;
+  /** Tramos de costa [x0, y0, x1, y1] (el mar queda a su derecha, con la y hacia el sur). */
+  coast?: Array<[number, number, number, number]>;
+  /** Playas (polígonos de arena). */
+  sand?: Array<Array<[number, number]>>;
+  /** Muelles y diques [x0, y0, x1, y1] (tierra transitable de ~2 tiles de semiancho sobre el mar). */
+  piers?: Array<[number, number, number, number]>;
+  /** Hitos modelados (estadio…): centro, largo y ancho (tiles), ángulo del eje largo. */
+  landmarks?: Array<{ kind: string; name: string; x: number; y: number; len: number; wid: number; ang: number }>;
   /** Cruces de calles (para pasos de cebra y cortar las marcas). */
   nodes: Array<[number, number]>;
 }
@@ -416,7 +431,8 @@ export type ClientMessage =
   // Interruptor de zombis del jugador (arriba a la derecha): sin zombis, la horda le ignora.
   | { type: "setZombies"; enabled: boolean }
   // Prueba de explosiones en (gx, gy) (tiles globales); el servidor solo la acepta con DEBUG_WEAPONS=1.
-  | { type: "debugExplode"; gx: number; gy: number };
+  | { type: "debugExplode"; gx: number; gy: number }
+  | { type: "debugTeleport"; gx: number; gy: number };
 
 // ---- Mensajes servidor -> cliente ----
 export type ServerMessage =

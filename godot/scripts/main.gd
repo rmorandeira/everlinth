@@ -166,6 +166,8 @@ func _on_message(msg: Dictionary) -> void:
 			hud.set_playing(true)
 			joined_at = time
 			Net.send({"type": "setZombies", "enabled": zombies_on})
+			if Config.tp.x != INF:
+				Net.send({"type": "debugTeleport", "gx": Config.tp.x, "gy": Config.tp.y})
 			hud.set_stats(you)
 		"screen":
 			var s: Dictionary = msg.screen
@@ -307,6 +309,21 @@ func _build_city() -> void:
 		return
 	city_root = City.build(datas, int(screen.sx) * W, int(screen.sy) * H)
 	add_child(city_root)
+	# ciudad real (OSM): suelo recortado por la costa, paseo marítimo, playas y mar
+	var coast_rooms: Array = []
+	for r in [screen] + neighbors:
+		if not r.has("city") or not r.city.get("osm", false):
+			continue
+		var water := 0
+		for row in r.tiles:
+			for t in row:
+				if int(t) == Protocol.TileType.Water:
+					water += 1
+		coast_rooms.append({"sx": r.sx, "sy": r.sy, "city": r.city, "tiles": r.tiles, "sea": r.city.get("coast", []).is_empty() and water > W * H / 2})
+	if not coast_rooms.is_empty():
+		Coast.build(city_root, coast_rooms, int(screen.sx) * W, int(screen.sy) * H)
+	else:
+		Coast.corners.clear()
 	cars.set_cars(city_root.get_meta("cars", []))
 	destruction.set_buildings(city_root.get_meta("buildings", {}))
 	traffic.set_city(city_root, int(screen.sx) * W, int(screen.sy) * H)

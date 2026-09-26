@@ -70,14 +70,14 @@ func build(screen: Dictionary, neighbors: Array) -> void:
 	var block_cells: Array = []
 	var urban := GeoBatch.new()
 	if screen.has("city"):
-		_urban_room(urban, 0, 0)
+		_urban_room(urban, 0, 0, screen.city.get("osm", false))
 	else:
 		_collect(screen.tiles, 0, 0, sx, sy, floor_cells, block_cells, false)
 	for n in neighbors:
 		var nx := int(n.sx)
 		var ny := int(n.sy)
 		if n.has("city"):
-			_urban_room(urban, (nx - sx) * W, (ny - sy) * H)
+			_urban_room(urban, (nx - sx) * W, (ny - sy) * H, n.city.get("osm", false))
 		else:
 			_collect(n.tiles, (nx - sx) * W, (ny - sy) * H, nx, ny, floor_cells, block_cells, false)
 
@@ -92,8 +92,11 @@ func build(screen: Dictionary, neighbors: Array) -> void:
 	_urban.mesh = urban.to_mesh() if not urban.is_empty() else null
 
 
-## Sala de ciudad: un plano de acera (las calles y los edificios van encima).
-func _urban_room(b: GeoBatch, ox: int, oz: int) -> void:
+## Sala de ciudad: un plano de acera (las calles y los edificios van encima). Las salas
+## de la ciudad real (OSM) llevan su propio suelo recortado por la costa (Coast).
+func _urban_room(b: GeoBatch, ox: int, oz: int, osm := false) -> void:
+	if osm:
+		return
 	var c := Vector3((ox + W * 0.5 - 0.5) * T, Y, (oz + H * 0.5 - 0.5) * T)
 	b.quad(_urban_mat, c, W * T, H * T, 0.0)
 

@@ -139,6 +139,7 @@ var audit := {"prop": 0, "edificio": 0, "calzada": 0}
 var approaches: Array = [] # llegadas a cruces: { x, y, hx, hy, stop_dist, axis ("A"/"B"/"stop") } (tiles globales)
 var buildings := {} # id -> info para Destruction (pos, height, pts, refs, parts, xf, hp, max_hp)
 var crosses: Array = []
+var osm := false # ciudad real (OpenStreetMap): plantas reales extruidas, sentido único real
 
 
 func _L(gx: float) -> float:
@@ -244,7 +245,11 @@ func _segs_info() -> Dictionary:
 
 
 func _line_info(sg: Dictionary) -> Dictionary:
+	if sg.has("ow"):
+		return {"one_way": int(sg.ow) != 0, "dir": 1 if int(sg.ow) > 0 else -1}
 	var key := _line_key(sg)
+	if osm:
+		return {"one_way": false, "dir": 1}
 	return {"one_way": int(sg.kind) == 0 and hash_str(key) < 0.5, "dir": 1 if hash_str(key + "d") < 0.5 else -1}
 
 
@@ -282,6 +287,8 @@ func _build(datas: Array) -> void:
 			building_defs[b.id] = b
 	if roads.is_empty() and building_defs.is_empty():
 		return
+	for d in datas:
+		osm = osm or d.get("osm", false)
 	segs = roads.values()
 	for s in segs:
 		s.kind = int(s.kind)
@@ -314,8 +321,17 @@ func _build(datas: Array) -> void:
 	_corners()
 	_markings_and_furniture()
 	for bd in building_defs.values():
-		if not _kit_building(bd):
+		if osm:
+			_osm_building(bd)
+		elif not _kit_building(bd):
 			_polygon_building(bd)
+	if osm:
+		var lms := {}
+		for d in datas:
+			for l in d.get("landmarks", []):
+				lms[l.name] = l
+		for l in lms.values():
+			Landmarks.build(root, l, origin_gx, origin_gz)
 	flat.build(root, false)
 	litter.build(root, false)
 	solid.build(root, true)
@@ -382,7 +398,7 @@ func _roadway() -> void:
 		# Rodaduras: dos bandas por carril.
 		var nx0 := -uy0
 		var ny0 := ux0
-		var one_way_s: bool = s.kind == 0 and hash_str(_line_key(s)) < 0.5
+		var one_way_s: bool = _line_info(s).one_way and s.kind == 0
 		var lanes: Array = [0.0] if one_way_s else ([-half * 0.75, -half * 0.25, half * 0.25, half * 0.75] if s.kind == 2 else [-half * 0.5, half * 0.5])
 		for lc in lanes:
 			for w in [-0.42, 0.42]:
@@ -990,6 +1006,30 @@ static func rubble_mesh(pts: PackedVector2Array, id: String, height := 3.0) -> A
 			var xf := Transform3D(Basis.from_euler(Vector3(r.randf_range(-0.5, 0.5), r.randf() * TAU, r.randf_range(-0.5, 0.5))).scaled(s), Vector3(p.x, 0.05 + s.y * 0.35, p.y))
 			b.mesh(box, xf, lambert(cols[r.randi() % cols.size()]))
 	return b.to_mesh()
+
+
+## Edificio real (OSM): su planta extruida con fachada procedural; algunos hitos con
+## nombre tienen modelo propio (Landmarks).
+func _osm_building(bd: Dictionary) -> void:
+	if bd.pts.size() < 3:
+		return
+	if bd.has("hp") and float(bd.hp) <= 0.0:
+		_add_rubble(bd)
+		return
+	var poly := _render_pts(bd)
+	var named: String = bd.get("name", "")
+	var built: Array = Landmarks.named_building(named, poly, int(bd.floors))
+	if built.is_empty():
+		var c := Vector2.ZERO
+		for p in bd.pts:
+			c += Vector2(p[0], p[1])
+		c /= bd.pts.size()
+		built = OsmBuilding.build(poly, int(bd.floors), str(bd.get("t", "yes")), str(bd.id), (c - Vector2(24, 13.5)).length())
+	var mesh: ArrayMesh = built[0]
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	root.add_child(mi)
+	_register(bd, Transform3D(), float(built[1]), [[mesh, Transform3D()]], [mi])
 
 
 ## Respaldo: planta poligonal extruida (parcelas donde no cabe ningún modelo).

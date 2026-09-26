@@ -9,7 +9,7 @@ const BASE_YAW := PI / 4.0
 const PITCH := deg_to_rad(21.0)
 const DIST := 50.0
 ## Mitad del alto visible, en unidades de render (1 unidad = 3 m).
-const VIEW_HALF_HEIGHT := 7.0
+const VIEW_HALF_HEIGHT := 7.7 # un 10 % más alejado
 ## Altura del personaje en pantalla, como fracción desde el borde inferior.
 const PLAYER_SCREEN_Y := 0.4
 

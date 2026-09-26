@@ -113,6 +113,19 @@ func _ready() -> void:
 	discovery.visible = false
 	add_child(discovery)
 
+	# atribución de los datos del mapa (licencia ODbL)
+	var osm := Label.new()
+	osm.text = "Mapa © colaboradores de OpenStreetMap"
+	osm.add_theme_font_size_override("font_size", 11)
+	osm.add_theme_color_override("font_color", Color(1, 1, 1, 0.75))
+	osm.add_theme_color_override("font_shadow_color", Color.BLACK)
+	osm.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	osm.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	osm.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	osm.position += Vector2(-10, -6)
+	osm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(osm)
+
 	minimap.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
 	minimap.position = Vector2(14, -184)
 	add_child(minimap)

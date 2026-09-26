@@ -151,10 +151,11 @@ func update(entities: Array, corpses: Array, cam: Camera3D) -> void:
 		# quieto unos fotogramas → de pie (fotograma 0)
 		var frame := 0 if st.still > 4 else int(floorf(fposmod(st.phase, TAU) / TAU * PixelPeople.FRAMES)) % PixelPeople.FRAMES
 		var row: int = e.variant * PixelPeople.FRAMES + frame
-		var pos := Vector3(e.x, 0.05, e.z)
+		var gy := Coast.height_at(e.x, e.z) # la playa queda más baja que el paseo
+		var pos := Vector3(e.x, gy, e.z)
 		mm.set_instance_transform(n, Transform3D(Basis(), pos))
 		mm.set_instance_custom_data(n, Color(d, row, s, e.kind))
-		sm.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(s, 1, s)), Vector3(e.x, 0.072, e.z)))
+		sm.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(s, 1, s)), Vector3(e.x, gy + 0.022, e.z)))
 		n += 1
 	mm.visible_instance_count = n
 	sm.visible_instance_count = n
@@ -167,7 +168,7 @@ func update(entities: Array, corpses: Array, cam: Camera3D) -> void:
 	for c in corpses:
 		if k >= MAX_CORPSES:
 			break
-		km.set_instance_transform(k, Transform3D(Basis(), Vector3(c.x, 0.05, c.z)))
+		km.set_instance_transform(k, Transform3D(Basis(), Vector3(c.x, Coast.height_at(c.x, c.z), c.z)))
 		var row: int = c.row if c.has("row") else int(c.variant) % ZOMBIE_VARIANTS
 		km.set_instance_custom_data(k, Color(c.pose, row, c.scale, 4))
 		k += 1
