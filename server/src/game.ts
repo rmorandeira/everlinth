@@ -65,8 +65,9 @@ export class GameServer {
   private screenRooms = new Map<string, Set<Connection>>();
   private connByUsername = new Map<string, Connection>();
   private screenCache = new Map<string, ScreenData>();
-  private zombies: Array<ZombieState & { speed: number; hitCooldown: number }> = [];
+  private zombies: Array<ZombieState & { speed: number; hitCooldown: number; pack: number; stun?: number }> = [];
   private nextZombieId = 1;
+  private nextPack = 1;
   private spawnTimer = 0;
 
   constructor() {
@@ -124,6 +125,14 @@ export class GameServer {
     else if (msg.type === "attack") this.handleAttack(conn, player);
     else if (msg.type === "pickup") this.handlePickup(conn, player);
     else if (msg.type === "shoot") this.handleShoot(conn, player, msg.dx, msg.dz);
+    else if (msg.type === "debugExplode") {
+      // tecla de prueba de explosiones (solo con DEBUG_WEAPONS=1, cerca del jugador)
+      const px = player.sx * SCREEN_WIDTH + player.x;
+      const py = player.sy * SCREEN_HEIGHT + player.y;
+      if (process.env.DEBUG_WEAPONS?.trim() === "1" && Number.isFinite(msg.gx) && Number.isFinite(msg.gy) && dist(px, py, msg.gx, msg.gy) < 40) {
+        this.explode(msg.gx, msg.gy, 4, 120, { conn, player });
+      }
+    }
     else if (msg.type === "setZombies") {
       conn.zombiesOn = msg.enabled === true;
       if (!conn.zombiesOn) send(conn.socket, { type: "zombies", zombies: [] });
@@ -422,6 +431,13 @@ export class GameServer {
     }
     if (hit) {
       hit.hp -= 1;
+      // el balazo lo frena un instante y lo empuja un poco hacia atrás (muy poco)
+      const push = hit.giant ? 0.03 : 0.12;
+      if (!this.isBlockedAt(0, 0, hit.gx + dx * push, hit.gy + dz * push)) {
+        hit.gx += dx * push;
+        hit.gy += dz * push;
+      }
+      hit.stun = hit.giant ? 0.05 : 0.18;
       if (hit.hp <= 0) {
         this.zombies = this.zombies.filter((z) => z !== hit);
         this.grantXp(player, hit.giant ? 20 : 2);
@@ -435,7 +451,6 @@ export class GameServer {
         }
       }
     }
-    if (!hit && wall < GUN_RANGE) this.shootBuilding(ox + dx * (wall + 0.15), oy + dz * (wall + 0.15));
     const shot: ServerMessage = { type: "shot", from: { gx: ox, gy: oy }, to: { gx: ox + dx * hitT, gy: oy + dz * hitT }, hit: hit ? "zombie" : wall < GUN_RANGE ? "wall" : "none" };
     for (const c of this.connections) {
       if (!c.username) continue;
@@ -446,25 +461,65 @@ export class GameServer {
 
   // ---- Edificios destructibles (ver buildings.ts) ----
 
-  /** Bala que acaba en (gx, gy) (tiles globales): daña el edificio que haya ahí. */
-  private shootBuilding(gx: number, gy: number): void {
-    const rsx = Math.floor(gx / SCREEN_WIDTH);
-    const rsy = Math.floor(gy / SCREEN_HEIGHT);
-    if (rsx < WORLD_MIN || rsx > WORLD_MAX || rsy < WORLD_MIN || rsy > WORLD_MAX) return;
-    const { screen } = this.ensureScreenLoaded(rsx, rsy);
-    if (!screen.city) return;
-    let best: CityBuilding | null = null;
-    let bestD = 0.8;
-    for (const b of screen.city.buildings) {
-      if (b.hp !== undefined && b.hp <= 0) continue;
-      const d = distanceToPolygon(gx, gy, b.pts);
-      if (d < bestD) {
-        bestD = d;
-        best = b;
+  /**
+   * Explosión en (gx, gy) (tiles globales): daña los edificios a su alcance (más cuanto
+   * más cerca) y mata o empuja a los zombis. Las balas no dañan edificios; esto es para
+   * las armas explosivas (granadas, cohetes…) y, de momento, la tecla de prueba.
+   */
+  explode(gx: number, gy: number, radius: number, power: number, by?: { conn: Connection; player: PlayerPrivateState }): void {
+    const seen = new Set<string>();
+    const R = Math.ceil(radius / SCREEN_WIDTH) + 1;
+    for (let ry = Math.floor(gy / SCREEN_HEIGHT) - R; ry <= Math.floor(gy / SCREEN_HEIGHT) + R; ry++) {
+      for (let rx = Math.floor(gx / SCREEN_WIDTH) - R; rx <= Math.floor(gx / SCREEN_WIDTH) + R; rx++) {
+        if (rx < WORLD_MIN || rx > WORLD_MAX || ry < WORLD_MIN || ry > WORLD_MAX) continue;
+        const { screen } = this.ensureScreenLoaded(rx, ry);
+        if (!screen.city) continue;
+        for (const b of screen.city.buildings) {
+          if (seen.has(b.id) || (b.hp !== undefined && b.hp <= 0)) continue;
+          const d = distanceToPolygon(gx, gy, b.pts);
+          if (d > radius) continue;
+          seen.add(b.id);
+          this.damageBuildingBy(b, power * (1 - (d / radius) * 0.7), gx, gy);
+        }
       }
     }
-    if (!best) return;
-    const r = damageBuilding(best, 1);
+    for (const z of this.zombies) {
+      const d = dist(z.gx, z.gy, gx, gy);
+      if (d > radius) continue;
+      z.hp -= Math.ceil(power * 0.2 * (1 - d / radius));
+      const push = (1 - d / radius) * 1.5;
+      if (d > 0.01) {
+        z.gx += ((z.gx - gx) / d) * push;
+        z.gy += ((z.gy - gy) / d) * push;
+      }
+      z.stun = 0.6;
+    }
+    const killed = this.zombies.filter((z) => z.hp <= 0);
+    if (killed.length > 0) {
+      this.zombies = this.zombies.filter((z) => z.hp > 0);
+      for (const z of killed) {
+        const died: ServerMessage = { type: "zombieDied", gx: z.gx, gy: z.gy, giant: z.giant === true };
+        this.sendNear(z.gx, z.gy, ZOMBIE_VIEW_RANGE, died);
+        if (by) {
+          this.grantXp(by.player, z.giant ? 20 : 2);
+          send(by.conn.socket, { type: "kill" });
+        }
+      }
+      if (by) send(by.conn.socket, { type: "youUpdate", you: by.player });
+    }
+    this.sendNear(gx, gy, ZOMBIE_VIEW_RANGE * 1.5, { type: "explosion", gx, gy, radius });
+  }
+
+  private sendNear(gx: number, gy: number, range: number, msg: ServerMessage): void {
+    for (const c of this.connections) {
+      if (!c.username) continue;
+      const p = this.players.get(c.username);
+      if (p && dist(p.sx * SCREEN_WIDTH + p.x, p.sy * SCREEN_HEIGHT + p.y, gx, gy) <= range) send(c.socket, msg);
+    }
+  }
+
+  private damageBuildingBy(best: CityBuilding, amount: number, gx: number, gy: number): void {
+    const r = damageBuilding(best, amount);
     if (!r.changedStage && !r.collapsed) return;
     // el mismo edificio aparece en la ciudad de cada sala que toca: se actualizan todas
     for (const sc of this.screenCache.values()) {
@@ -514,7 +569,7 @@ export class GameServer {
   // aparecen en grupos en un anillo fuera de pantalla, caminan despacio
   // arrastrándose hacia el jugador más cercano, se empujan entre ellos para no
   // amontonarse en un punto, y muerden al contacto. Se descartan si quedan lejos de todos.
-  private static readonly HORDE_SIZE = 180;
+  private static readonly HORDE_SIZE = 320;
   private tickZombies(dt: number): void {
     const targets: Array<{ conn: Connection; player: PlayerPrivateState; gx: number; gy: number }> = [];
     for (const [username, conn] of this.connByUsername) {
@@ -534,16 +589,19 @@ export class GameServer {
     if (this.spawnTimer <= 0 && this.zombies.length < GameServer.HORDE_SIZE * targets.length) {
       this.spawnTimer = 0.2;
       const t = targets[Math.floor(Math.random() * targets.length)];
-      // un grupo de 2-5 alrededor de un punto del anillo
+      // una manada de 8-20 muy junta alrededor de un punto del anillo, todos a un paso
+      // parecido (así no se estiran por el camino)
       const ang = Math.random() * Math.PI * 2;
       const r = 28 + Math.random() * 12;
       const cx = t.gx + Math.cos(ang) * r;
       const cy = t.gy + Math.sin(ang) * r;
-      const n = 3 + Math.floor(Math.random() * 6);
+      const n = 8 + Math.floor(Math.random() * 13);
+      const pack = this.nextPack++;
+      const packSpeed = 0.8 + Math.random() * 0.8;
       for (let i = 0; i < n; i++) {
         for (let attempt = 0; attempt < 5; attempt++) {
-          const gx = cx + (Math.random() - 0.5) * 6;
-          const gy = cy + (Math.random() - 0.5) * 6;
+          const gx = cx + (Math.random() - 0.5) * 3.5;
+          const gy = cy + (Math.random() - 0.5) * 3.5;
           if (this.isBlockedAt(0, 0, gx, gy)) continue;
           // De vez en cuando, si la horda alrededor del jugador ya es muy grande, un
           // gigante (máximo 2 a la vez por jugador): muy lento y muy resistente.
@@ -553,14 +611,29 @@ export class GameServer {
           // lentos, arrastrándose: 0,8-1,6 tiles/s (el jugador corre a más de 7); gigantes 0,5-0,7
           this.zombies.push(
             giant
-              ? { id: this.nextZombieId++, gx, gy, hp: GIANT_HP, speed: 0.5 + Math.random() * 0.2, hitCooldown: 0, giant: true }
-              : { id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: 0.8 + Math.random() * 0.8, hitCooldown: 0 }
+              ? { id: this.nextZombieId++, gx, gy, hp: GIANT_HP, speed: 0.5 + Math.random() * 0.2, hitCooldown: 0, giant: true, pack }
+              : { id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: packSpeed * (0.94 + Math.random() * 0.12), hitCooldown: 0, pack }
           );
           break;
         }
       }
     }
 
+    // Centro de cada manada (para que avancen juntas) y rejilla de vecinos (separación
+    // sin comparar todos con todos).
+    const packs = new Map<number, { x: number; y: number; n: number }>();
+    const grid = new Map<string, Array<(typeof this.zombies)[number]>>();
+    for (const z of this.zombies) {
+      const p = packs.get(z.pack) ?? { x: 0, y: 0, n: 0 };
+      p.x += z.gx;
+      p.y += z.gy;
+      p.n++;
+      packs.set(z.pack, p);
+      const k = `${Math.floor(z.gx)},${Math.floor(z.gy)}`;
+      let cell = grid.get(k);
+      if (!cell) grid.set(k, (cell = []));
+      cell.push(z);
+    }
     const dead = new Set<Connection>();
     this.zombies = this.zombies.filter((z) => {
       let near = targets[0];
@@ -574,6 +647,10 @@ export class GameServer {
       }
       if (nd > ZOMBIE_VIEW_RANGE * 1.6) return false;
       z.hitCooldown -= dt;
+      if (z.stun && z.stun > 0) {
+        z.stun -= dt;
+        return true;
+      }
       if (nd < (z.giant ? 1.9 : 0.9)) {
         if (z.hitCooldown <= 0 && !dead.has(near.conn)) {
           z.hitCooldown = 1;
@@ -589,16 +666,33 @@ export class GameServer {
       }
       let sx = ((near.gx - z.gx) / nd) * z.speed * dt;
       let sy = ((near.gy - z.gy) / nd) * z.speed * dt;
-      // separación: empuje suave contra los vecinos muy cercanos
-      for (const o of this.zombies) {
-        if (o === z) continue;
-        const ox = z.gx - o.gx;
-        const oy = z.gy - o.gy;
-        const d2 = ox * ox + oy * oy;
-        if (d2 > 0.0001 && d2 < 0.49) {
-          const d = Math.sqrt(d2);
-          sx += (ox / d) * (0.7 - d) * 0.8 * dt;
-          sy += (oy / d) * (0.7 - d) * 0.8 * dt;
+      // cohesión: hacia el centro de su manada si se ha quedado atrás o a un lado
+      const p = packs.get(z.pack);
+      if (p && p.n > 1) {
+        const px = p.x / p.n - z.gx;
+        const py = p.y / p.n - z.gy;
+        const pd = Math.hypot(px, py);
+        if (pd > 0.9) {
+          sx += (px / pd) * Math.min(1, pd - 0.9) * 0.45 * dt;
+          sy += (py / pd) * Math.min(1, pd - 0.9) * 0.45 * dt;
+        }
+      }
+      // separación: empuje suave solo contra los que casi se tocan (van hombro con hombro)
+      const cx0 = Math.floor(z.gx);
+      const cy0 = Math.floor(z.gy);
+      for (let gy = cy0 - 1; gy <= cy0 + 1; gy++) {
+        for (let gx = cx0 - 1; gx <= cx0 + 1; gx++) {
+          for (const o of grid.get(`${gx},${gy}`) ?? []) {
+            if (o === z) continue;
+            const ox = z.gx - o.gx;
+            const oy = z.gy - o.gy;
+            const d2 = ox * ox + oy * oy;
+            if (d2 > 0.0001 && d2 < 0.2) {
+              const d = Math.sqrt(d2);
+              sx += (ox / d) * (0.45 - d) * 1.1 * dt;
+              sy += (oy / d) * (0.45 - d) * 1.1 * dt;
+            }
+          }
         }
       }
       if (!this.isBlockedAt(0, 0, z.gx + sx, z.gy)) z.gx += sx;

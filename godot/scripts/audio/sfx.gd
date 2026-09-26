@@ -79,3 +79,9 @@ func gun_tail(volume := 1.0) -> void:
 
 func laugh(volume := 1.0) -> void:
 	_play(_laugh, 0.0, 0.0, volume, 1.3)
+
+
+## Explosión: la cola de eco de la ametralladora muy grave suena a estruendo.
+func boom(volume := 1.0) -> void:
+	_play(_gun, TAIL_START - 0.1, 0.0, volume, 0.45)
+	_play(_gun, GUN_SHOTS[0], 0.3, volume * 0.9, 0.35)

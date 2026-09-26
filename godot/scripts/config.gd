@@ -20,6 +20,7 @@ var walk := ""
 var aim := Vector2.ZERO
 var fire := false
 var bench := false
+var boom := 0.0 # pruebas: explosiones a esa distancia (tiles) en la dirección de mira
 var off: PackedStringArray = [] # efectos apagados para medir (ssao,msaa,glow,tilt,shadow,ghost)
 
 
@@ -45,6 +46,8 @@ func _init() -> void:
 				aim = Vector2(float(p[0]), float(p[1]))
 			"off":
 				off = kv[1].split(",")
+			"boom":
+				boom = float(kv[1])
 			"bench":
 				bench = kv[1] == "1"
 			"fire":

@@ -51,13 +51,44 @@ func on_damage(id: String, hp: float, max_hp: float) -> void:
 
 
 func _collapse(b: Dictionary) -> void:
-	# ocultar la instancia de la MultiMesh (o el nodo suelto) y animar una copia
+	# ocultar la instancia de la MultiMesh (o el nodo suelto) y animar copias sueltas
 	for r in b.refs:
 		if r is Node3D:
 			(r as Node3D).visible = false
 		else:
 			var mm: MultiMesh = r[0]
 			mm.set_instance_transform(r[1], Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -100, 0)))
+	var plan := City.collapse_plan(str(b.id), b.pts)
+	var h: float = b.height
+	var d2: Vector2 = plan.dir
+	var dir := Vector3(d2.x, 0, d2.y)
+	var c2: Vector2 = plan.center
+	var pieces: Array = []
+	match int(plan.mode):
+		0:
+			pieces.append(_piece(b, "sink", 0.0, Vector3.ZERO, Vector3.ZERO))
+		1:
+			var piv := Vector3(c2.x, 0.05, c2.y) + dir * float(plan.edge)
+			pieces.append(_piece(b, "topple", 0.0, piv, Vector3.ZERO))
+		2:
+			var cut_y: float = 0.05 + h * float(plan.cut)
+			var piv := Vector3(c2.x, cut_y, c2.y) + dir * float(plan.edge)
+			var cut_p := Vector3(c2.x, cut_y, c2.y)
+			var low := _piece(b, "sink", 0.7, Vector3.ZERO, Vector3.ZERO)
+			low.clip = [Vector3.UP, cut_p] # se quita lo de encima del corte
+			pieces.append(low)
+			var top := _piece(b, "top", 0.0, piv, Vector3.ZERO)
+			top.clip = [Vector3.DOWN, cut_p] # se quita lo de debajo del corte
+			top.cut_h = cut_y - 0.05
+			pieces.append(top)
+	_collapsing.append({"t": 0.0, "info": b, "plan": plan, "dir": dir, "pieces": pieces, "impact": false})
+	_dust(b, 26)
+	_spawn_debris(b, 20, Vector3.ZERO)
+	if fx:
+		fx.explosion(b.pos)
+
+
+func _piece(b: Dictionary, anim: String, delay: float, pivot: Vector3, _unused: Vector3) -> Dictionary:
 	var node := Node3D.new()
 	add_child(node)
 	for p in b.parts:
@@ -65,14 +96,38 @@ func _collapse(b: Dictionary) -> void:
 		mi.mesh = p[0]
 		mi.transform = p[1]
 		node.add_child(mi)
-	var base: Transform3D = b.xf
-	node.transform = base
-	_collapsing.append({"node": node, "t": 0.0, "height": b.height, "base": base, "info": b})
-	# primera nube de polvo y lluvia de cascotes
-	_dust(b, 26)
-	_spawn_debris(b, 26)
-	if fx:
-		fx.explosion(b.pos)
+	node.transform = b.xf
+	return {"node": node, "base": b.xf, "anim": anim, "delay": delay, "pivot": pivot, "clip": null, "cut_h": 0.0}
+
+
+## Transformación de una pieza en el instante t (y si ya ha terminado).
+func _piece_xf(p: Dictionary, t: float, h: float, dir: Vector3) -> Array:
+	var base: Transform3D = p.base
+	var tt := t - float(p.delay)
+	match p.anim:
+		"sink":
+			var shake := 0.035 * (1.0 - clampf(tt / SINK_TIME, 0.0, 1.0))
+			var k := clampf(tt / SINK_TIME, 0.0, 1.0)
+			var xf := base
+			xf.origin += Vector3(sin(t * 70.0) * shake, -k * k * h * 1.02, cos(t * 63.0) * shake)
+			return [xf, tt >= SINK_TIME]
+		"topple", "top":
+			var axis := Vector3.UP.cross(dir).normalized()
+			var fall_t := 1.6 if p.anim == "topple" else 1.3
+			var e := clampf(tt / fall_t, 0.0, 1.0)
+			var ang := (PI * 0.47 if p.anim == "topple" else PI * 0.62) * e * e
+			var piv: Vector3 = p.pivot
+			var rot := Transform3D(Basis(axis, ang), Vector3.ZERO)
+			var xf := Transform3D(Basis(), piv) * rot * Transform3D(Basis(), -piv) * base
+			if p.anim == "top":
+				# el trozo se desprende: además de girar, cae hasta el suelo
+				var drop := minf(float(p.cut_h), 6.0 * maxf(0.0, tt - 0.35) * maxf(0.0, tt - 0.35))
+				xf.origin.y -= drop
+			# ya tumbado: se hunde en el suelo (los escombros ocupan su lugar)
+			var s := clampf((tt - fall_t - 0.3) / 0.9, 0.0, 1.0)
+			xf.origin.y -= s * s * maxf(1.2, h * 0.5)
+			return [xf, tt >= fall_t + 1.2]
+	return [base, true]
 
 
 func _dust(b: Dictionary, n: int) -> void:
@@ -85,7 +140,7 @@ func _dust(b: Dictionary, n: int) -> void:
 		fx.emit(Vector3(p.x, 0.1 + up * 0.3, p.y), Vector3((randf() - 0.5) * 1.6, 0.3 + randf() * 0.6, (randf() - 0.5) * 1.6), 3.0 + randf() * 3.0, 0.6, 2.6 + randf() * 1.8, 0.7, 0, Color("b9b3a8"), false, 0.02)
 
 
-func _spawn_debris(b: Dictionary, n: int) -> void:
+func _spawn_debris(b: Dictionary, n: int, bias: Vector3) -> void:
 	var pts: PackedVector2Array = b.pts
 	for i in n:
 		var s := Vector3(0.08 + randf() * 0.22, 0.06 + randf() * 0.14, 0.08 + randf() * 0.2)
@@ -107,7 +162,7 @@ func _spawn_debris(b: Dictionary, n: int) -> void:
 		var out := (edge - c).normalized()
 		var h: float = randf() * b.height
 		body.position = Vector3(edge.x, 0.1 + h, edge.y)
-		body.linear_velocity = Vector3(out.x * (1.0 + randf() * 3.0), randf() * 3.0, out.y * (1.0 + randf() * 3.0))
+		body.linear_velocity = Vector3(out.x * (1.0 + randf() * 3.0), randf() * 3.0, out.y * (1.0 + randf() * 3.0)) + bias * (1.0 + randf() * 3.0)
 		body.angular_velocity = Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 12.0
 		add_child(body)
 		_debris.append({"body": body, "t": 0.0})
@@ -122,23 +177,41 @@ func _process(dt: float) -> void:
 	while i >= 0:
 		var c: Dictionary = _collapsing[i]
 		c.t += dt
-		var k := clampf(c.t / SINK_TIME, 0.0, 1.0)
-		var sink: float = k * k * (c.height * 1.02)
-		var shake: float = (1.0 - k) * 0.035
-		var base: Transform3D = c.base
-		var xf := base
-		xf.origin += Vector3(sin(c.t * 70.0) * shake, -sink, cos(c.t * 63.0) * shake)
-		xf.basis = Basis(Vector3(1, 0, 0), sin(c.t * 3.0) * 0.03 * k) * base.basis
-		c.node.transform = xf
+		var b: Dictionary = c.info
+		var h: float = b.height
+		var dir: Vector3 = c.dir
+		var all_done := true
+		for p in c.pieces:
+			var r := _piece_xf(p, c.t, h, dir)
+			var xf: Transform3D = r[0]
+			p.node.transform = xf
+			if not r[1]:
+				all_done = false
+			if p.clip != null:
+				var delta: Transform3D = xf * (p.base as Transform3D).affine_inverse()
+				var n: Vector3 = (delta.basis * (p.clip[0] as Vector3)).normalized()
+				var pw: Vector3 = delta * (p.clip[1] as Vector3)
+				for mi in p.node.get_children():
+					(mi as GeometryInstance3D).set_instance_shader_parameter("clip_plane", Vector4(n.x, n.y, n.z, n.dot(pw)))
+		# golpe contra el suelo de lo que cae de lado: polvo a lo largo y cascotes
+		if int(c.plan.mode) != 0 and not c.impact and c.t > (1.5 if int(c.plan.mode) == 1 else 1.2):
+			c.impact = true
+			var start: Vector2 = c.plan.center + c.plan.dir * float(c.plan.edge)
+			var length: float = h * (0.85 if int(c.plan.mode) == 1 else (1.0 - float(c.plan.cut)))
+			if fx:
+				for k in 30:
+					var q: Vector2 = start + c.plan.dir * (randf() * length)
+					fx.emit(Vector3(q.x, 0.15, q.y), Vector3((randf() - 0.5) * 2.0, 0.4 + randf() * 0.5, (randf() - 0.5) * 2.0), 3.0 + randf() * 3.0, 0.7, 3.0 + randf() * 1.5, 0.75, 0, Color("b9b3a8"), false, 0.02)
+			_spawn_debris(b, 18, dir * 1.5)
 		if randf() < dt * 20.0:
-			_dust(c.info, 2)
+			_dust(b, 2)
 		if randf() < dt * 8.0:
-			_spawn_debris(c.info, 1)
-		if k >= 1.0:
-			c.node.queue_free()
-			var rubble := City.rubble_mesh(c.info.pts, str(c.info.id))
+			_spawn_debris(b, 1, dir * (0.0 if int(c.plan.mode) == 0 else 0.8))
+		if all_done:
+			for p in c.pieces:
+				p.node.queue_free()
 			var mi := MeshInstance3D.new()
-			mi.mesh = rubble
+			mi.mesh = City.rubble_mesh(b.pts, str(b.id), h)
 			add_child(mi)
 			_collapsing.remove_at(i)
 		i -= 1

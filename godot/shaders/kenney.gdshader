@@ -25,6 +25,10 @@ global uniform vec4 cut_params; // x: línea (px desde arriba), y: centro x, z: 
 global uniform vec3 cut_cam_fwd; // eje de la cámara principal (en las pasadas de sombra no se recorta)
 global uniform float cut_keep;   // opacidad que conserva lo que tapa la franja
 
+// Plano de corte (derrumbes: la parte de arriba se parte y cae por separado): se
+// descarta lo que queda del lado positivo del plano (xyz = normal, w = distancia).
+instance uniform vec4 clip_plane = vec4(0.0);
+
 varying float v_win;
 varying vec3 v_wpos;
 varying vec3 v_wnrm;
@@ -56,6 +60,9 @@ vec2 catalog_uv(vec2 uv) {
 }
 
 void fragment() {
+	if (dot(clip_plane.xyz, clip_plane.xyz) > 0.25 && dot(v_wpos, clip_plane.xyz) > clip_plane.w) {
+		discard;
+	}
 	if (dot(INV_VIEW_MATRIX[2].xyz, cut_cam_fwd) > 0.999) {
 		vec3 wp = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
 		if (wp.y > 0.12) {

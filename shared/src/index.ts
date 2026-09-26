@@ -44,7 +44,7 @@ export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
 
 // Movimiento continuo (no por casillas): el servidor simula a este tick fijo.
 export const TICK_MS = 50;
-export const PLAYER_SPEED = 7.7; // tiles/segundo
+export const PLAYER_SPEED = 8.9; // tiles/segundo
 export const ATTACK_RANGE = 1.8; // tiles
 export const PICKUP_RANGE = 1.5; // tiles
 
@@ -384,7 +384,9 @@ export type ClientMessage =
   // Ametralladora: dirección de disparo en el plano del mundo (x = columna, z = fila).
   | { type: "shoot"; dx: number; dz: number }
   // Interruptor de zombis del jugador (arriba a la derecha): sin zombis, la horda le ignora.
-  | { type: "setZombies"; enabled: boolean };
+  | { type: "setZombies"; enabled: boolean }
+  // Prueba de explosiones en (gx, gy) (tiles globales); el servidor solo la acepta con DEBUG_WEAPONS=1.
+  | { type: "debugExplode"; gx: number; gy: number };
 
 // ---- Mensajes servidor -> cliente ----
 export type ServerMessage =
@@ -409,7 +411,9 @@ export type ServerMessage =
   // Un asset del catálogo se ha guardado o borrado desde /admin/assets: recargarlo.
   | { type: "assetsChanged"; id: string }
   // Un edificio ha cambiado de escalón de daño (cada 10 %) o se ha derrumbado (hp 0).
-  | { type: "buildingDamaged"; id: string; hp: number; maxHp: number };
+  | { type: "buildingDamaged"; id: string; hp: number; maxHp: number }
+  // Explosión (tiles globales): destello, onda y polvo en los clientes.
+  | { type: "explosion"; gx: number; gy: number; radius: number };
 
 // ---- Catálogo de assets (herramienta /admin/assets) ----
 // Un asset es cualquier cosa del juego con representación 3D: un modelo GLB (kits de

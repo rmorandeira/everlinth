@@ -118,6 +118,7 @@ func _build_post() -> void:
 
 
 var _pending_join := ""
+var _booms := 0
 
 
 ## Entrar: si se ha cambiado el servidor (o no hay conexión), se conecta primero.
@@ -215,6 +216,8 @@ func _on_message(msg: Dictionary) -> void:
 				sfx.laugh(0.9)
 		"shot":
 			_on_shot(msg)
+		"explosion":
+			_on_explosion(msg)
 		"buildingDamaged":
 			destruction.on_damage(str(msg.id), float(msg.hp), float(msg.maxHp))
 			if Config.bench:
@@ -250,6 +253,23 @@ func _on_shot(msg: Dictionary) -> void:
 			var d := Vector2(tx - fx0, tz - fz0).normalized()
 			fx.fire(fx0, fz0, d.x, d.y)
 			sfx.gunshot(maxf(0.08, 0.8 / (1.0 + dist / 12.0)))
+
+
+## Explosión (armas explosivas; de momento la tecla de prueba G): destello, bola de
+## fuego, onda de polvo a ras de suelo y estruendo atenuado con la distancia.
+func _on_explosion(msg: Dictionary) -> void:
+	if screen.is_empty():
+		return
+	var x: float = (msg.gx - int(screen.sx) * W) * T
+	var z: float = (msg.gy - int(screen.sy) * H) * T
+	var r: float = float(msg.radius) * T
+	fx.explosion(Vector3(x, 0.0, z))
+	for i in 28:
+		var a := randf() * TAU
+		var sp := 2.5 + randf() * 2.0
+		fx.emit(Vector3(x, 0.15, z), Vector3(cos(a) * sp, 0.3 + randf() * 0.4, sin(a) * sp), 1.6 + randf() * 1.4, 0.5, 1.6 + r, 0.6, 0, Color("a9a39a"), false, 0.02)
+	var dist := Vector2(msg.gx - (int(screen.sx) * W + you_display.x), msg.gy - (int(screen.sy) * H + you_display.y)).length()
+	sfx.boom(clampf(1.2 / (1.0 + dist / 15.0), 0.1, 1.0))
 
 
 ## Ciudad vectorial de la sala actual y sus vecinas (se rehace al cambiar de sala).
@@ -311,6 +331,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_R:
 				cam.rotate_step(1)
 				_send_dirs(last_dirs, true)
+			KEY_G:
+				# prueba de explosiones en el cursor (el servidor solo la acepta con DEBUG_WEAPONS=1)
+				var g := cam.screen_to_ground(get_viewport().get_mouse_position())
+				_debug_explode(g.x / T, g.z / T)
 	if ev is InputEventMouseMotion:
 		aim_active_until = time + 2.0
 
@@ -341,6 +365,11 @@ func _read_dirs() -> Dictionary:
 		"E": Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT) or ax > 0.4,
 		"W": Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT) or ax < -0.4,
 	}
+
+
+## Explosión de prueba en (x, z) (tiles locales de la sala actual).
+func _debug_explode(x: float, z: float) -> void:
+	Net.send({"type": "debugExplode", "gx": int(screen.sx) * W + x, "gy": int(screen.sy) * H + z})
 
 
 ## Mira: el cursor del ratón sobre el suelo, o el stick derecho (en círculo alrededor
@@ -404,6 +433,10 @@ func _process_game(dt: float) -> void:
 	_send_dirs(_read_dirs())
 	_update_aim()
 	_update_fire()
+	# pruebas: explosiones automáticas a boom tiles en la dirección de mira
+	if Config.boom > 0.0 and _booms < 3 and time - joined_at > 2.0 + _booms * 1.2:
+		_booms += 1
+		_debug_explode(you_display.x + aim.x * Config.boom, you_display.y + aim.y * Config.boom)
 
 	you_display.x = lerp_towards(you_display.x, float(you.x), dt)
 	you_display.y = lerp_towards(you_display.y, float(you.y), dt)

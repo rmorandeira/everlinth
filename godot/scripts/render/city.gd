@@ -691,14 +691,43 @@ func _register(bd: Dictionary, xf: Transform3D, height: float, parts: Array, ref
 
 func _add_rubble(bd: Dictionary) -> void:
 	var mi := MeshInstance3D.new()
-	mi.mesh = rubble_mesh(_render_pts(bd), str(bd.id))
+	mi.mesh = rubble_mesh(_render_pts(bd), str(bd.id), maxf(1.0, float(bd.floors)))
 	root.add_child(mi)
 
 
-## Montón de escombros dentro de la planta (determinista por edificio).
-static func rubble_mesh(pts: PackedVector2Array, id: String) -> ArrayMesh:
+## Cómo se derrumba cada edificio (determinista por su id, igual en todos los
+## clientes): 0 se hunde en su sitio, 1 se vuelca entero hacia un lado, 2 la parte de
+## arriba se parte y cae de lado mientras el resto se hunde. dir: hacia dónde cae;
+## edge: distancia del centro al borde de la planta en esa dirección; cut: altura del
+## corte (fracción) en el modo 2.
+static func collapse_plan(id: String, pts: PackedVector2Array) -> Dictionary:
+	var r := RandomNumberGenerator.new()
+	r.seed = _hash_int(id + "caida")
+	var u := r.randf()
+	var mode := 0 if u < 0.35 else (1 if u < 0.7 else 2)
+	var a := r.randf() * TAU
+	var dir := Vector2(cos(a), sin(a))
+	var c := Vector2.ZERO
+	for p in pts:
+		c += p
+	c /= maxf(1.0, pts.size())
+	var edge := 0.0
+	for p in pts:
+		edge = maxf(edge, (p - c).dot(dir))
+	return {"mode": mode, "dir": dir, "center": c, "edge": edge, "cut": r.randf_range(0.45, 0.7)}
+
+
+## Montón de escombros (determinista por edificio): en la planta y, si el edificio
+## cayó de lado, también a lo largo de donde cayó.
+static func rubble_mesh(pts: PackedVector2Array, id: String, height := 3.0) -> ArrayMesh:
 	var r := RandomNumberGenerator.new()
 	r.seed = _hash_int(id)
+	var plan := collapse_plan(id, pts)
+	var fall_len := 0.0
+	if plan.mode == 1:
+		fall_len = height * 0.85
+	elif plan.mode == 2:
+		fall_len = height * (1.0 - plan.cut) * 0.9
 	var b := GeoBatch.new()
 	var box := StreetFurniture.prim("box")
 	var cols := [Color("8f8f96"), Color("6b7080"), Color("4a4d57"), Color("a8a296"), Color("5c5650")]
@@ -730,6 +759,21 @@ static func rubble_mesh(pts: PackedVector2Array, id: String) -> ArrayMesh:
 		var xf := Transform3D(Basis.from_euler(Vector3(r.randf_range(-0.4, 0.4), r.randf() * TAU, r.randf_range(-0.4, 0.4))).scaled(s), Vector3(p.x, 0.05 + s.y * 0.35, p.y))
 		b.mesh(box, xf, lambert(cols[r.randi() % cols.size()]))
 		placed += 1
+	# lo que cayó de lado: cascotes en una franja desde el borde hacia fuera
+	if fall_len > 0.1:
+		var dir: Vector2 = plan.dir
+		var side := Vector2(-dir.y, dir.x)
+		var start: Vector2 = plan.center + dir * plan.edge
+		var width := 0.0
+		for p in pts:
+			width = maxf(width, absf((p - plan.center).dot(side)))
+		var m := int(fall_len * 7.0)
+		for i in m:
+			var t := r.randf()
+			var p := start + dir * (t * fall_len) + side * r.randf_range(-width, width) * (1.0 - t * 0.4)
+			var s := Vector3(r.randf_range(0.1, 0.4), r.randf_range(0.05, 0.2) * (1.0 - t * 0.5), r.randf_range(0.1, 0.35))
+			var xf := Transform3D(Basis.from_euler(Vector3(r.randf_range(-0.5, 0.5), r.randf() * TAU, r.randf_range(-0.5, 0.5))).scaled(s), Vector3(p.x, 0.05 + s.y * 0.35, p.y))
+			b.mesh(box, xf, lambert(cols[r.randi() % cols.size()]))
 	return b.to_mesh()
 
 
