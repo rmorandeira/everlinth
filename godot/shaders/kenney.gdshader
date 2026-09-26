@@ -7,6 +7,14 @@ shader_type spatial;
 
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec4 albedo_color : source_color = vec4(1.0);
+// Textura del catálogo (/admin/assets): 0 = la original del modelo; 1 = otra textura
+// con las UV del modelo; 2 = proyección por caras (fotos de fachada), en unidades de
+// mundo. Repetición, desplazamiento y giro como en three.js (centro 0,5).
+uniform int tex_mode = 0;
+uniform vec2 uv_repeat = vec2(1.0);
+uniform vec2 uv_offset = vec2(0.0);
+uniform float uv_rotation = 0.0;
+uniform float box_tile = 3.0;
 global uniform float win_glow; // 0 de día → ~0,45 de noche
 global uniform float win_lit;  // fracción de ventanas encendidas
 // Área del personaje sin obstrucciones (puerto de cutaway3d.ts): en pantalla, la
@@ -18,11 +26,33 @@ global uniform vec3 cut_cam_fwd; // eje de la cámara principal (en las pasadas 
 global uniform float cut_keep;   // opacidad que conserva lo que tapa la franja
 
 varying float v_win;
+varying vec3 v_wpos;
+varying vec3 v_wnrm;
 
 void vertex() {
 	vec3 o = MODEL_MATRIX[3].xyz;
 	float shift = fract(sin(dot(floor(o.xz * 4.0), vec2(12.9898, 78.233))) * 43758.5453);
 	v_win = UV2.x > 0.0 ? fract(UV2.x + shift) + 0.0001 : 0.0;
+	v_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	v_wnrm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+}
+
+vec2 catalog_uv(vec2 uv) {
+	if (tex_mode == 2) {
+		vec3 n = normalize(v_wnrm);
+		if (abs(n.y) > 0.6) {
+			uv = v_wpos.xz / box_tile;
+		} else {
+			uv = vec2(v_wpos.x * -n.z + v_wpos.z * n.x, v_wpos.y) / box_tile;
+		}
+	}
+	float c = cos(uv_rotation);
+	float s = sin(uv_rotation);
+	vec2 r;
+	r.x = uv_repeat.x * (c * uv.x + s * uv.y) - uv_repeat.x * (c * 0.5 + s * 0.5) + 0.5 + uv_offset.x;
+	r.y = uv_repeat.y * (-s * uv.x + c * uv.y) - uv_repeat.y * (-s * 0.5 + c * 0.5) + 0.5 + uv_offset.y;
+	// las texturas sueltas de three.js tienen el origen abajo (flipY)
+	return vec2(r.x, 1.0 - r.y);
 }
 
 void fragment() {
@@ -42,7 +72,7 @@ void fragment() {
 			}
 		}
 	}
-	vec4 a = texture(albedo_tex, UV) * albedo_color;
+	vec4 a = texture(albedo_tex, tex_mode == 0 ? UV : catalog_uv(UV)) * albedo_color;
 	ALBEDO = a.rgb;
 	ROUGHNESS = 0.85;
 	SPECULAR = 0.3;

@@ -164,7 +164,7 @@ func _kit_prop(kit: String, name: String, x: float, z: float, fx: float, fz: flo
 	var key := kit + "/" + name
 	if Kenney.model(key).is_empty():
 		return false
-	var s: float = Kenney.KIT_SCALE[kit] * k
+	var s: float = Kenney.base_scale(key) * k
 	_place("model:" + key, Transform3D(Basis(Vector3.UP, atan2(fx, fz)).scaled(Vector3(s, s, s)), Vector3(x, 0.05, z)))
 	return true
 
@@ -646,12 +646,11 @@ func _kit_building(bd: Dictionary) -> bool:
 	var floors := int(bd.floors)
 	var sets := Kenney.building_sets()
 	var set: Array = sets.house if floors <= 4 and r1 < 0.35 else (sets.tall if floors >= 14 else (sets.mid if floors >= 7 else sets.low))
-	var kit := "suburban" if set == sets.house else "commercial"
-	var ks: float = Kenney.KIT_SCALE[kit]
 	var fit := func(key: String) -> float:
 		var sz := Kenney.size(key)
 		if sz == Vector3.ZERO:
 			return 0.0
+		var ks := Kenney.base_scale(key)
 		return minf((frontage * 0.94) / (sz.x * ks), (depth * 0.94) / (sz.z * ks))
 	var options := set.filter(func(k: String) -> bool: return fit.call(k) >= 0.75)
 	if options.is_empty():
@@ -661,9 +660,9 @@ func _kit_building(bd: Dictionary) -> bool:
 	var key: String = options[int(floorf(r2 * options.size())) % options.size()]
 	var sz := Kenney.size(key)
 	var m := minf(1.45, fit.call(key))
-	var base := ks * m
+	var base := Kenney.base_scale(key) * m
 	var natural_h := sz.y * base
-	var stretch := 1.0 if kit == "suburban" else clampf((floors * 1.0) / natural_h, 0.85, 1.6)
+	var stretch := 1.0 if Kenney.is_house(key) else clampf((floors * 1.0) / natural_h, 0.85, 1.6)
 	var xf := Transform3D(Basis(Vector3.UP, atan2(fx, fy)) * Basis.from_scale(Vector3(base, base * stretch, base)), Vector3((cx - origin_gx) * T, 0.05, (cy - origin_gz) * T))
 	_place("model:" + key, xf, Color.WHITE, str(bd.id))
 	_register(bd, xf, sz.y * base * stretch, Kenney.model(key).parts, [])

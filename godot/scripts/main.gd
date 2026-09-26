@@ -93,6 +93,11 @@ func _ready() -> void:
 	hud.restore()
 	Net.message.connect(_on_message)
 	Net.opened.connect(_on_opened)
+	# catálogo del gestor web: al cambiar un asset se rehace la ciudad con él
+	Catalog.changed.connect(func(_id: String) -> void:
+		if not screen.is_empty():
+			city_key = ""
+			_build_city())
 	Net.closed.connect(func() -> void: hud.status_label.text = "Sin conexión con %s" % Config.server_url)
 	hud.status_label.text = "Conectando con %s…" % Config.server_url
 	Net.connect_to(Config.server_url)
