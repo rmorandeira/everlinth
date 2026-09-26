@@ -7,7 +7,7 @@ import { WORLD_MIN, WORLD_MAX, TileType, BIOME_CATALOG, BIOME_IDS, DEFAULT_VISIO
 import { GameServer } from "./game.js";
 import { listScreenCoords, getScreen, listPaint, paintCells, unpaintCells, deleteScreens, getSetting, setSetting } from "./db.js";
 import { treesRouter } from "./adminTrees.js";
-import { assetsRouter } from "./adminAssets.js";
+import { assetsRouter, assetEvents } from "./adminAssets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Secretos locales (p. ej. ANTHROPIC_API_KEY) en server/.env, fuera del repositorio.
@@ -20,6 +20,14 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 const app = express();
 app.use(express.json());
+// CORS de solo lectura para el catálogo y los recursos públicos: los necesita el
+// cliente Godot exportado a web (el nativo no aplica CORS).
+app.use((req, res, next) => {
+  if (req.method === "GET" && (req.path === "/assets.json" || req.path === "/settings.json" || /^\/(models|textures|sounds)\//.test(req.path))) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+  next();
+});
 app.use(treesRouter);
 app.use(assetsRouter);
 
@@ -718,6 +726,7 @@ const wss = new WebSocketServer({ server });
 const game = new GameServer();
 
 wss.on("connection", (socket) => game.handleConnection(socket));
+assetEvents.on("changed", (id: string) => game.broadcastAll({ type: "assetsChanged", id }));
 
 server.listen(PORT, () => {
   console.log(`EVERLINTH — servidor escuchando en http://localhost:${PORT}`);

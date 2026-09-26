@@ -402,7 +402,9 @@ export type ServerMessage =
   // Al tirador, cada vez que mata un zombi.
   | { type: "kill" }
   // A los jugadores cercanos: un zombi ha muerto ahí (su cadáver queda en el suelo).
-  | { type: "zombieDied"; gx: number; gy: number; giant: boolean };
+  | { type: "zombieDied"; gx: number; gy: number; giant: boolean }
+  // Un asset del catálogo se ha guardado o borrado desde /admin/assets: recargarlo.
+  | { type: "assetsChanged"; id: string };
 
 // ---- Catálogo de assets (herramienta /admin/assets) ----
 // Un asset es cualquier cosa del juego con representación 3D: un modelo GLB (kits de

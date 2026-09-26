@@ -3,6 +3,7 @@
 // como JSON en la tabla `assets`. Al arrancar se registran automáticamente los modelos
 // que haya en client/public/models (y los generadores procedurales conocidos) que aún
 // no estén en el catálogo: lo ya editado nunca se sobrescribe.
+import { EventEmitter } from "node:events";
 import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
@@ -128,6 +129,10 @@ function sanitize(input: unknown, id: string): AssetDef | null {
 
 export const assetsRouter = Router();
 
+// Avisa de cada asset guardado o borrado (index.ts lo reenvía a los clientes
+// conectados, así el juego Godot recarga ese asset en caliente).
+export const assetEvents = new EventEmitter();
+
 // Público: el juego lo lee para saber categoría, biomas, texturas y puntos de unión.
 assetsRouter.get("/assets.json", (_req, res) => {
   res.json(listAssets());
@@ -144,6 +149,7 @@ assetsRouter.put("/admin/assets/:id", (req, res) => {
     return;
   }
   saveAsset(def);
+  assetEvents.emit("changed", def.id);
   res.json(def);
 });
 
@@ -164,6 +170,7 @@ assetsRouter.post("/admin/assets", (req, res) => {
     return;
   }
   saveAsset(def);
+  assetEvents.emit("changed", def.id);
   res.json(def);
 });
 
@@ -178,6 +185,7 @@ assetsRouter.delete("/admin/assets/:id", (req, res) => {
     return;
   }
   deleteStmt.run(def.id);
+  assetEvents.emit("changed", def.id);
   res.json({ ok: true });
 });
 
