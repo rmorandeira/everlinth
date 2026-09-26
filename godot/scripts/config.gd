@@ -7,6 +7,7 @@ extends Node
 ##   (sirve para verificar el render sin mirar la pantalla).
 ## - hour: fija la hora del día (0-24).
 ## - walk=NE: mantiene pulsadas esas direcciones de pantalla (pruebas).
+## - bench=1: sin sincronía vertical, para medir los FPS reales.
 ## - aim=x,y / fire=1: apunta en esa dirección (tiles) y dispara sin parar (pruebas).
 
 var server_url := "ws://localhost:3000"
@@ -17,6 +18,8 @@ var hour := -1.0
 var walk := ""
 var aim := Vector2.ZERO
 var fire := false
+var bench := false
+var off: PackedStringArray = [] # efectos apagados para medir (ssao,msaa,glow,tilt,shadow,ghost)
 
 
 func _init() -> void:
@@ -38,6 +41,10 @@ func _init() -> void:
 			"aim":
 				var p := kv[1].split(",")
 				aim = Vector2(float(p[0]), float(p[1]))
+			"off":
+				off = kv[1].split(",")
+			"bench":
+				bench = kv[1] == "1"
 			"fire":
 				fire = kv[1] == "1"
 			"hour":

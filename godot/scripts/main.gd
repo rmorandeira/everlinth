@@ -49,7 +49,20 @@ var recent_kills: Array = []
 var last_laugh := -1e9
 
 
+var _bench_frames := 0
+var _bench_time := 0.0
+var _bench_cpu := 0.0
+var _bench_gpu := 0.0
+var _bench_rcpu := 0.0
+
+
 func _ready() -> void:
+	if Config.bench:
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		quality.set_process(false)
+		if "lowres" in Config.off:
+			quality.tier = 0
+		RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 	add_child(lighting)
 	add_child(cam)
 	cam.current = true
@@ -61,12 +74,19 @@ func _ready() -> void:
 	add_child(sfx)
 	quality.env = lighting.env
 	add_child(quality)
-	_build_post()
+	if not ("tilt" in Config.off):
+		_build_post()
 	add_child(hud)
 	hud.join_requested.connect(func(n: String) -> void: Net.send({"type": "join", "username": n}))
 	hud.zombies_toggled.connect(_on_zombies_toggled)
 	hud.hour_changed.connect(func(h: float) -> void: lighting.hour_override = h)
 	zombies_on = hud.zombie_toggle.button_pressed
+	if Config.bench:
+		lighting.env.ssao_enabled = not ("ssao" in Config.off)
+		lighting.env.glow_enabled = not ("glow" in Config.off)
+		if "msaa" in Config.off:
+			get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		lighting.sun.shadow_enabled = not ("shadow" in Config.off)
 	hud.restore()
 	Net.message.connect(_on_message)
 	Net.opened.connect(_on_opened)
@@ -80,20 +100,13 @@ func _build_post() -> void:
 	var post := CanvasLayer.new()
 	post.layer = 0
 	add_child(post)
-	var blur_shader: Shader = load("res://shaders/tilt_blur.gdshader")
-	for pass_dir in [Vector2(1, 0), Vector2(0, 1)]:
-		var bb := BackBufferCopy.new()
-		bb.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
-		post.add_child(bb)
-		var rect := ColorRect.new()
-		rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var mat := ShaderMaterial.new()
-		mat.shader = blur_shader
-		mat.set_shader_parameter("dir", pass_dir)
-		mat.set_shader_parameter("grade", pass_dir.y > 0.5)
-		rect.material = mat
-		post.add_child(rect)
+	var rect := ColorRect.new()
+	rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/tilt_blur.gdshader")
+	rect.material = mat
+	post.add_child(rect)
 
 
 func _on_opened() -> void:
@@ -338,11 +351,25 @@ func _update_fire() -> void:
 # ---------------------------------------------------------------- bucle
 
 func _process(dt: float) -> void:
+	var _t0 := Time.get_ticks_usec()
+	_process_game(dt)
+	if Config.bench and time - joined_at > 1.0:
+		_bench_cpu += (Time.get_ticks_usec() - _t0) / 1000.0
+
+
+func _process_game(dt: float) -> void:
 	time += dt
 	hud.fps_label.text = "%d FPS · calidad %d/%d" % [Engine.get_frames_per_second(), Quality.TIERS.size() - quality.tier, Quality.TIERS.size()]
 	hud.show_hour(lighting.get_hour())
 	if you.is_empty() or screen.is_empty():
 		return
+	if time - joined_at > 1.0:
+		_bench_frames += 1
+		_bench_time += dt
+		if Config.bench:
+			var vp := get_viewport().get_viewport_rid()
+			_bench_gpu += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+			_bench_rcpu += RenderingServer.viewport_get_measured_render_time_cpu(vp)
 	_send_dirs(_read_dirs())
 	_update_aim()
 	_update_fire()
@@ -409,8 +436,11 @@ func _process(dt: float) -> void:
 
 ## Franja de pantalla del personaje (desde su cabeza hacia abajo, 70 % del ancho).
 func _update_cutaway() -> void:
-	var size := get_viewport().get_visible_rect().size
-	var head := cam.unproject_position(Vector3(you_display.x * T, 0.8, you_display.y * T))
+	# en píxeles del render 3D (que puede ir a menor resolución que la ventana)
+	var vp := get_viewport()
+	var k := vp.scaling_3d_scale
+	var size := vp.get_visible_rect().size * k
+	var head := cam.unproject_position(Vector3(you_display.x * T, 0.8, you_display.y * T)) * k
 	RenderingServer.global_shader_parameter_set("cut_params", Vector4(head.y, size.x * 0.5, size.x * 0.7 * 0.5, size.y * 0.05))
 	RenderingServer.global_shader_parameter_set("cut_cam_fwd", cam.global_transform.basis.z)
 
@@ -426,5 +456,7 @@ func _maybe_capture() -> void:
 	if path.begins_with("res://") or path.begins_with("user://"):
 		path = ProjectSettings.globalize_path(path)
 	img.save_png(path)
-	print("captura guardada en %s · %d FPS · calidad %d" % [path, Engine.get_frames_per_second(), quality.tier])
+	if Config.bench and _bench_frames > 0:
+		print("BENCH scripts %.2f ms · render CPU %.2f ms · GPU %.2f ms · dibujos %d · primitivas %d" % [_bench_cpu / _bench_frames, _bench_rcpu / _bench_frames, _bench_gpu / _bench_frames, Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)])
+	print("captura guardada en %s · %d FPS (media %.1f) · calidad %d · %d zombis" % [path, Engine.get_frames_per_second(), _bench_frames / maxf(_bench_time, 0.001), quality.tier, zombie_display.size()])
 	get_tree().quit()

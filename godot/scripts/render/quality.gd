@@ -6,9 +6,9 @@ extends Node
 ## rendimiento un rato, se vuelve a subir. Así se mantienen los 30 FPS.
 
 const TIERS := [
-	{"scale": 1.0, "ssao": true, "glow": true, "shadow": 4096, "msaa": Viewport.MSAA_2X},
-	{"scale": 0.85, "ssao": true, "glow": true, "shadow": 4096, "msaa": Viewport.MSAA_2X},
-	{"scale": 0.85, "ssao": false, "glow": true, "shadow": 2048, "msaa": Viewport.MSAA_2X},
+	{"scale": 0.8, "ssao": true, "glow": true, "shadow": 4096, "msaa": Viewport.MSAA_2X},
+	{"scale": 0.72, "ssao": true, "glow": true, "shadow": 4096, "msaa": Viewport.MSAA_2X},
+	{"scale": 0.72, "ssao": false, "glow": true, "shadow": 2048, "msaa": Viewport.MSAA_2X},
 	{"scale": 0.72, "ssao": false, "glow": false, "shadow": 2048, "msaa": Viewport.MSAA_DISABLED},
 	{"scale": 0.6, "ssao": false, "glow": false, "shadow": 1024, "msaa": Viewport.MSAA_DISABLED},
 	{"scale": 0.5, "ssao": false, "glow": false, "shadow": 1024, "msaa": Viewport.MSAA_DISABLED},
@@ -24,6 +24,10 @@ var _cooldown := 0
 
 
 func _ready() -> void:
+	# Oclusión ambiental a media resolución y calidad baja; sombras de borde duro
+	# (el filtro suave apenas se nota a esta distancia y cuesta muchas muestras).
+	RenderingServer.environment_set_ssao_quality(RenderingServer.ENV_SSAO_QUALITY_LOW, true, 0.5, 2, 50.0, 300.0)
+	RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD)
 	_apply()
 
 

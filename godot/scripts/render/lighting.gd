@@ -57,12 +57,11 @@ func _ready() -> void:
 	sun.shadow_enabled = true
 	# Cámara ortográfica a CAMERA_DIST: las divisiones de sombra se concentran en el
 	# tramo de distancias donde está la escena visible (~35-80).
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	sun.directional_shadow_max_distance = 100.0
-	sun.directional_shadow_split_1 = 0.42
-	sun.directional_shadow_split_2 = 0.55
-	sun.directional_shadow_split_3 = 0.72
-	sun.directional_shadow_blend_splits = true
+	# Dos divisiones bastan (la mitad de pasadas de sombra que con cuatro).
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_max_distance = 88.0
+	sun.directional_shadow_split_1 = 0.6
+	sun.directional_shadow_blend_splits = false
 	sun.shadow_bias = 0.06
 	sun.shadow_normal_bias = 1.5
 	add_child(sun)
