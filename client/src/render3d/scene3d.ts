@@ -19,7 +19,7 @@ import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { applyCutaway, applyCutawayToMaterial, updateCutaway } from "./cutaway3d.js";
 import { createGunFx } from "./gunfx3d.js";
 import { createCarManager } from "./cars3d.js";
-import { createZombieSprites, type SpriteZombie } from "./zombieSprites3d.js";
+import { createZombieSprites, type SpriteZombie, type SpriteCorpse } from "./zombieSprites3d.js";
 import { updateSignals } from "./streetFurniture3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityLayer } from "./city3d.js";
@@ -86,8 +86,8 @@ export interface Scene3D {
   dispose(): void;
   /** Depuración: nº de mallas en escena y de instancias. */
   stats(): Record<string, number>;
-  /** Zombis lejanos dibujados como sprites (tiles locales a la sala). */
-  updateZombieSprites(list: SpriteZombie[]): void;
+  /** Zombis y cadáveres dibujados como sprites (tiles locales a la sala). */
+  updateZombieSprites(list: SpriteZombie[], corpses: SpriteCorpse[]): void;
   /** ¿Está listo el atlas de sprites de zombi? */
   zombieSpritesReady(): boolean;
   /** FPS medidos y nivel de calidad adaptativa (0 = máxima). */
@@ -112,6 +112,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const zombieSprites = createZombieSprites();
   scene.add(zombieSprites.group);
   let spriteList: SpriteZombie[] = [];
+  let corpseList: SpriteCorpse[] = [];
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
   let aspect = 1;
@@ -470,8 +471,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
       goodWindows = 0;
     }
   }
-  function updateZombieSprites(list: SpriteZombie[]): void {
+  function updateZombieSprites(list: SpriteZombie[], corpses: SpriteCorpse[]): void {
     spriteList = list.map((z) => ({ ...z, x: z.x * T, z: z.z * T }));
+    corpseList = corpses.map((c) => ({ ...c, x: c.x * T, z: c.z * T }));
   }
 
   function perf(): { fps: number; tier: number; tiers: number } {
@@ -605,7 +607,7 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     carMgr.update(dt, time);
     // Atlas de sprites de zombi: se hornea una vez, en el primer fotograma.
     if (!zombieSprites.ready()) zombieSprites.bake(renderer);
-    zombieSprites.update(spriteList, iso.camera, yaw, 1 - getDayNight().darkness * 0.55);
+    zombieSprites.update(spriteList, corpseList, iso.camera, yaw, 1 - getDayNight().darkness * 0.55);
     updateSignals(time);
     // Ventanas encendidas: aparecen al atardecer y a pleno de noche.
     const dn = getDayNight();

@@ -195,7 +195,7 @@ try {
 }
 setInterval(refreshTimeUi, 1000);
 
-// Contador de FPS y nivel de calidad adaptativa (F3).
+// Medidor de FPS y nivel de calidad adaptativa, siempre visible (F3 lo oculta).
 const fpsEl = document.getElementById("fps") as HTMLDivElement;
 window.addEventListener("keydown", (ev) => {
   if (ev.key === "F3") {
@@ -217,9 +217,6 @@ let lastLaugh = -1e9;
 const MAX_CORPSES = 350;
 const corpses: Array<{ id: number; gx: number; gy: number; giant: boolean; facing: number }> = [];
 let nextCorpse = 1;
-
-// Zombis que se dibujan en 3D (los más cercanos); el resto, como sprites.
-const NEAR_3D_ZOMBIES = 24;
 
 let lastLocalShot = 0;
 let tailPending = false;
@@ -645,8 +642,8 @@ function frame(now: number): void {
     }
     const zox = currentScreen.sx * SCREEN_WIDTH;
     const zoy = currentScreen.sy * SCREEN_HEIGHT;
-    // Zombis: los más cercanos al personaje (y los gigantes) en 3D; el resto de la
-    // horda como sprites generados a partir del 3D (mucho más baratos).
+    // Zombis: todos como sprites generados a partir del 3D (a lo Doom): 2 triángulos
+    // cada uno. En 3D solo mientras se hornea el atlas al arrancar.
     const near: Array<{ id: number; x: number; z: number; giant: boolean; d2: number }> = [];
     for (const [id, d] of zombieDisplay) {
       const t = zombieTargets.get(id);
@@ -661,14 +658,14 @@ function frame(now: number): void {
     near.sort((a, b) => a.d2 - b.d2);
     const sprites: Array<{ id: string; x: number; z: number; scale: number; variant: number }> = [];
     const useSprites = scene3d.zombieSpritesReady();
-    near.forEach((zz, i) => {
-      if (!useSprites || zz.giant || i < NEAR_3D_ZOMBIES) {
+    near.forEach((zz) => {
+      if (!useSprites) {
         entities.push({ id: `z${zz.id}`, x: zz.x, z: zz.z, color: ZOMBIE_COLOR, silhouette: zz.giant ? 0xff8a1a : 0xff3b3b, zombie: true, scale: zz.giant ? GIANT_SCALE : 1 });
       } else {
-        sprites.push({ id: `z${zz.id}`, x: zz.x, z: zz.z, scale: 1, variant: zz.id % 4 });
+        sprites.push({ id: `z${zz.id}`, x: zz.x, z: zz.z, scale: zz.giant ? GIANT_SCALE : 1, variant: zz.id % 4 });
       }
     });
-    scene3d.updateZombieSprites(sprites);
+    const corpseSprites: Array<{ x: number; z: number; scale: number; variant: number; pose: number; facing: number }> = [];
     for (const m of currentScreen.monsters) {
       if (!m.alive) continue;
       entities.push({ id: m.id, x: m.x, z: m.y, color: MONSTER_COLORS[m.kind] ?? MONSTER_COLOR_DEFAULT, label: m.kind });
@@ -676,8 +673,10 @@ function frame(now: number): void {
     // cadáveres al final: si hay que recortar, se pierden antes que los vivos
     for (const c of corpses) {
       if (Math.abs(c.gx - zox - youDisplay.x) > 70 || Math.abs(c.gy - zoy - youDisplay.y) > 50) continue;
-      entities.push({ id: `c${c.id}`, x: c.gx - zox, z: c.gy - zoy, color: ZOMBIE_COLOR, zombie: true, corpse: true, facing: c.facing, scale: c.giant ? GIANT_SCALE : 1 });
+      if (useSprites) corpseSprites.push({ x: c.gx - zox, z: c.gy - zoy, scale: c.giant ? GIANT_SCALE : 1, variant: c.id % 4, pose: (c.id * 7) % 4, facing: c.facing });
+      else entities.push({ id: `c${c.id}`, x: c.gx - zox, z: c.gy - zoy, color: ZOMBIE_COLOR, zombie: true, corpse: true, facing: c.facing, scale: c.giant ? GIANT_SCALE : 1 });
     }
+    scene3d.updateZombieSprites(sprites, corpseSprites);
     scene3d.updateFigures(entities, time);
 
     // Coordenadas normalizadas (-1..1, Y hacia arriba) del cursor para el

@@ -384,7 +384,7 @@ export function createFigureManager(): FigureManager {
 // Figura de zombi con mallas reales (no instanciadas) para renderizarla a un atlas:
 // setWalk(phase) la pone en el fotograma del andar correspondiente.
 export const ZOMBIE_SPRITE_VARIANTS = 4;
-export function createBakeZombie(variant: number): { root: THREE.Group; setWalk(phase: number): void; setFacing(angle: number): void } {
+export function createBakeZombie(variant: number): { root: THREE.Group; setWalk(phase: number): void; setFacing(angle: number): void; setCorpse(pose: number): void } {
   // semillas elegidas para que cada variante tenga camisa/pantalón/piel distintos
   const seed = [0, 5, 10, 15][variant % 4] + variant * 36;
   const rig = buildRig(0xffffff, undefined, false, undefined, true, seed, 1);
@@ -399,6 +399,9 @@ export function createBakeZombie(variant: number): { root: THREE.Group; setWalk(
     },
     setFacing(angle: number): void {
       rig.root.rotation.y = angle;
+    },
+    setCorpse(pose: number): void {
+      poseCorpse(rig, pose * 7 + 3);
     },
   };
 }
