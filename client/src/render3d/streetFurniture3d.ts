@@ -10,10 +10,10 @@
 // (cuando un eje está en verde, el otro está en rojo) sin tocar la geometría.
 import * as THREE from "three";
 
-const cyl = new THREE.CylinderGeometry(1, 1, 1, 10).translate(0, 0.5, 0);
-const cone = new THREE.CylinderGeometry(0.6, 1, 1, 10).translate(0, 0.5, 0); // se estrecha hacia arriba
+const cyl = new THREE.CylinderGeometry(1, 1, 1, 6).translate(0, 0.5, 0);
+const cone = new THREE.CylinderGeometry(0.6, 1, 1, 6).translate(0, 0.5, 0); // se estrecha hacia arriba
 const box = new THREE.BoxGeometry(1, 1, 1);
-const sphere = new THREE.SphereGeometry(1, 12, 8);
+const sphere = new THREE.SphereGeometry(1, 8, 5);
 const disc = new THREE.CircleGeometry(1, 12);
 
 const mats = new Map<number, THREE.MeshLambertMaterial>();
@@ -81,8 +81,8 @@ export function nycStreetlight(x: number, z: number, dx: number, dz: number): TH
   const top = 0.25 + H;
   let px = 0;
   let py = top - R;
-  for (let i = 1; i <= 5; i++) {
-    const a = (i / 5) * (Math.PI / 2);
+  for (let i = 1; i <= 3; i++) {
+    const a = (i / 3) * (Math.PI / 2);
     const nx = R - Math.cos(a) * R;
     const ny = top - R + Math.sin(a) * R;
     const len = Math.hypot(nx - px, ny - py);

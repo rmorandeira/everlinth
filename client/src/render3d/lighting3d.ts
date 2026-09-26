@@ -53,6 +53,8 @@ export interface Lighting3D {
     flashlight: FlashlightParams,
     camera: THREE.Camera
   ): void;
+  /** Resolución del mapa de sombras (0 = sin sombras). */
+  setShadowSize(size: number): void;
 }
 
 export function createLighting3D(scene: THREE.Scene): Lighting3D {
@@ -160,5 +162,14 @@ export function createLighting3D(scene: THREE.Scene): Lighting3D {
     }
   }
 
-  return { update };
+  function setShadowSize(size: number): void {
+    sun.castShadow = size > 0;
+    if (size > 0 && sun.shadow.mapSize.x !== size) {
+      sun.shadow.mapSize.set(size, size);
+      sun.shadow.map?.dispose();
+      sun.shadow.map = null;
+    }
+  }
+
+  return { update, setShadowSize };
 }

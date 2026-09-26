@@ -651,7 +651,14 @@ export function buildCityLayer(datas: CityData[], originGX: number, originGZ: nu
   }
 
   const group = b.build();
-  for (const m of group.children) m.receiveShadow = true;
+  for (const m of group.children) {
+    m.receiveShadow = true;
+    // Lo que está a ras de suelo (asfalto, bordillo, marcas, manchas, charcos) no
+    // proyecta sombra: fuera del pase de sombras (ahorra triángulos en cada fotograma).
+    const mat = (m as THREE.Mesh).material as THREE.Material;
+    const lam = mat as THREE.MeshLambertMaterial;
+    m.userData.flat = mat.transparent || mat.polygonOffset || mat === curbMat || (lam.isMeshLambertMaterial && lam.map !== null);
+  }
 
   const buildings: THREE.Group[] = [];
   for (const bd of buildingDefs.values()) {

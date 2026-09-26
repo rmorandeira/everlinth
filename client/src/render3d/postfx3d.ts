@@ -124,6 +124,8 @@ export interface PostFx3D {
   resize(width: number, height: number, pixelRatio: number): void;
   /** Renderiza la escena con todo el post-proceso. */
   render(scene: THREE.Scene, camera: THREE.Camera, time: number, aberration: number, heat: number): void;
+  /** Pases caros que la calidad adaptativa puede apagar. */
+  setQuality(q: { ao: boolean; bloom: boolean }): void;
 }
 
 export function createPostFx3D(renderer: THREE.WebGLRenderer): PostFx3D {
@@ -132,6 +134,9 @@ export function createPostFx3D(renderer: THREE.WebGLRenderer): PostFx3D {
   let fxPass: ShaderPass | null = null;
   let blurH: ShaderPass | null = null;
   let blurV: ShaderPass | null = null;
+  let aoPass: SceneAOPass | null = null;
+  let bloomPass: UnrealBloomPass | null = null;
+  let quality = { ao: true, bloom: true };
   let width = 1;
   let height = 1;
   let pixelRatio = 1;
@@ -148,7 +153,11 @@ export function createPostFx3D(renderer: THREE.WebGLRenderer): PostFx3D {
       ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
       ao.blendIntensity = 1.0;
       composer.addPass(ao);
-      composer.addPass(new UnrealBloomPass(new THREE.Vector2(width, height), 0.28, 0.6, 0.88));
+      aoPass = ao;
+      bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.28, 0.6, 0.88);
+      composer.addPass(bloomPass);
+      ao.enabled = quality.ao;
+      bloomPass.enabled = quality.bloom;
       blurH = new ShaderPass(tiltBlurShader([1, 0]));
       blurV = new ShaderPass(tiltBlurShader([0, 1]));
       composer.addPass(blurH);
@@ -189,5 +198,11 @@ export function createPostFx3D(renderer: THREE.WebGLRenderer): PostFx3D {
     c.render();
   }
 
-  return { resize, render };
+  function setQuality(q: { ao: boolean; bloom: boolean }): void {
+    quality = q;
+    if (aoPass) aoPass.enabled = q.ao;
+    if (bloomPass) bloomPass.enabled = q.bloom;
+  }
+
+  return { resize, render, setQuality };
 }

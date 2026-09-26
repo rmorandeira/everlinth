@@ -61,7 +61,11 @@ function addWindowLights(mat: THREE.MeshStandardMaterial): void {
         "#include <project_vertex>",
         `#include <project_vertex>
   {
+#ifdef USE_INSTANCING
+    vec3 o = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+#else
     vec3 o = vec3(modelMatrix[3][0], modelMatrix[3][1], modelMatrix[3][2]);
+#endif
     float shift = fract(sin(dot(floor(o.xz * 4.0), vec2(12.9898, 78.233))) * 43758.5453);
     vWin = aWin > 0.0 ? fract(aWin + shift) + 0.0001 : 0.0;
   }`

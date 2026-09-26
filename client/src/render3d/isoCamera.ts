@@ -11,6 +11,7 @@ export const BASE_YAW = Math.PI / 4;
 // Depuración: ?cenital=1 en la URL mira desde arriba (para revisar calles y cruces).
 const TOP_DOWN = typeof location !== "undefined" && new URLSearchParams(location.search).has("cenital");
 const PITCH = THREE.MathUtils.degToRad(TOP_DOWN ? 89 : 21);
+export const ISO_PITCH = PITCH;
 // Distancia fija cámara↔jugador: exportada porque THREE.Fog mide "cerca/lejos"
 // como distancia a la CÁMARA, no al jugador (ver lighting3d.ts) — sin este
 // desplazamiento, la niebla se calcularía centrada en 0 en vez de aquí.

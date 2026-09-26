@@ -74,7 +74,6 @@ function resizeCanvases(): void {
   const dpr = window.devicePixelRatio || 1;
   const w = Math.round(window.innerWidth * dpr);
   const h = Math.round(window.innerHeight * dpr);
-  scene3d.renderer.setPixelRatio(dpr);
   scene3d.resize(window.innerWidth, window.innerHeight);
   weatherCanvas.width = w;
   weatherCanvas.height = h;
@@ -196,6 +195,20 @@ try {
 }
 setInterval(refreshTimeUi, 1000);
 
+// Contador de FPS y nivel de calidad adaptativa (F3).
+const fpsEl = document.getElementById("fps") as HTMLDivElement;
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "F3") {
+    ev.preventDefault();
+    fpsEl.classList.toggle("hidden");
+  }
+});
+setInterval(() => {
+  if (fpsEl.classList.contains("hidden")) return;
+  const p = scene3d.perf();
+  fpsEl.textContent = `${p.fps} FPS · calidad ${p.tiers - p.tier}/${p.tiers}`;
+}, 500);
+
 // Racha de muertes: 4 zombis en 8 s → risa (como mucho una cada 12 s).
 const recentKills: number[] = [];
 let lastLaugh = -1e9;
@@ -204,6 +217,9 @@ let lastLaugh = -1e9;
 const MAX_CORPSES = 350;
 const corpses: Array<{ id: number; gx: number; gy: number; giant: boolean; facing: number }> = [];
 let nextCorpse = 1;
+
+// Zombis que se dibujan en 3D (los más cercanos); el resto, como sprites.
+const NEAR_3D_ZOMBIES = 24;
 
 let lastLocalShot = 0;
 let tailPending = false;
@@ -629,15 +645,30 @@ function frame(now: number): void {
     }
     const zox = currentScreen.sx * SCREEN_WIDTH;
     const zoy = currentScreen.sy * SCREEN_HEIGHT;
+    // Zombis: los más cercanos al personaje (y los gigantes) en 3D; el resto de la
+    // horda como sprites generados a partir del 3D (mucho más baratos).
+    const near: Array<{ id: number; x: number; z: number; giant: boolean; d2: number }> = [];
     for (const [id, d] of zombieDisplay) {
       const t = zombieTargets.get(id);
       if (t) {
         d.gx = lerpTowards(d.gx, t.gx, dt, 14);
         d.gy = lerpTowards(d.gy, t.gy, dt, 14);
       }
-      const giant = t?.giant === true;
-      entities.push({ id: `z${id}`, x: d.gx - zox, z: d.gy - zoy, color: ZOMBIE_COLOR, silhouette: giant ? 0xff8a1a : 0xff3b3b, zombie: true, scale: giant ? GIANT_SCALE : 1 });
+      const x = d.gx - zox;
+      const z = d.gy - zoy;
+      near.push({ id, x, z, giant: t?.giant === true, d2: (x - youDisplay.x) ** 2 + (z - youDisplay.y) ** 2 });
     }
+    near.sort((a, b) => a.d2 - b.d2);
+    const sprites: Array<{ id: string; x: number; z: number; scale: number; variant: number }> = [];
+    const useSprites = scene3d.zombieSpritesReady();
+    near.forEach((zz, i) => {
+      if (!useSprites || zz.giant || i < NEAR_3D_ZOMBIES) {
+        entities.push({ id: `z${zz.id}`, x: zz.x, z: zz.z, color: ZOMBIE_COLOR, silhouette: zz.giant ? 0xff8a1a : 0xff3b3b, zombie: true, scale: zz.giant ? GIANT_SCALE : 1 });
+      } else {
+        sprites.push({ id: `z${zz.id}`, x: zz.x, z: zz.z, scale: 1, variant: zz.id % 4 });
+      }
+    });
+    scene3d.updateZombieSprites(sprites);
     for (const m of currentScreen.monsters) {
       if (!m.alive) continue;
       entities.push({ id: m.id, x: m.x, z: m.y, color: MONSTER_COLORS[m.kind] ?? MONSTER_COLOR_DEFAULT, label: m.kind });
@@ -684,3 +715,21 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// Depuración de rendimiento: __bench(n) ejecuta n fotogramas seguidos y devuelve el
+// tiempo medio por fotograma (ms) y las llamadas de dibujo del último.
+(window as unknown as { __bench: (n: number) => unknown }).__bench = (n: number) => {
+  const r = scene3d.renderer;
+  r.info.autoReset = false;
+  const t0 = performance.now();
+  let t = t0;
+  for (let i = 0; i < n; i++) {
+    r.info.reset();
+    t += 16;
+    frame(t);
+  }
+  scene3d.renderer.getContext().finish();
+  const ms = (performance.now() - t0) / n;
+  r.info.autoReset = true;
+  return { msPerFrame: +ms.toFixed(1), fps: +(1000 / ms).toFixed(1), calls: r.info.render.calls, triangles: r.info.render.triangles, programs: r.info.programs?.length };
+};

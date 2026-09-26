@@ -379,3 +379,27 @@ export function createFigureManager(): FigureManager {
 
   return { group, update };
 }
+
+// ---- Para hornear sprites (ver zombieSprites3d.ts) ----
+// Figura de zombi con mallas reales (no instanciadas) para renderizarla a un atlas:
+// setWalk(phase) la pone en el fotograma del andar correspondiente.
+export const ZOMBIE_SPRITE_VARIANTS = 4;
+export function createBakeZombie(variant: number): { root: THREE.Group; setWalk(phase: number): void; setFacing(angle: number): void } {
+  // semillas elegidas para que cada variante tenga camisa/pantalón/piel distintos
+  const seed = [0, 5, 10, 15][variant % 4] + variant * 36;
+  const rig = buildRig(0xffffff, undefined, false, undefined, true, seed, 1);
+  for (const p of rig.parts) {
+    p.anchor.add(new THREE.Mesh(PART_GEOS[p.kind], new THREE.MeshLambertMaterial({ color: p.color, flatShading: true })));
+  }
+  return {
+    root: rig.root,
+    setWalk(phase: number): void {
+      rig.phase = phase / 0.6; // animate() usa phase * 0.6 para los zombis
+      animate(rig, 0.05);
+    },
+    setFacing(angle: number): void {
+      rig.root.rotation.y = angle;
+    },
+  };
+}
+export const SPRITE_FIGURE_SCALE = FIGURE_SCALE;

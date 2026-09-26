@@ -19,6 +19,7 @@ import { createLighting3D, type FlashlightParams } from "./lighting3d.js";
 import { applyCutaway, applyCutawayToMaterial, updateCutaway } from "./cutaway3d.js";
 import { createGunFx } from "./gunfx3d.js";
 import { createCarManager } from "./cars3d.js";
+import { createZombieSprites, type SpriteZombie } from "./zombieSprites3d.js";
 import { updateSignals } from "./streetFurniture3d.js";
 import { createPostFx3D } from "./postfx3d.js";
 import { buildCityLayer } from "./city3d.js";
@@ -85,6 +86,12 @@ export interface Scene3D {
   dispose(): void;
   /** Depuración: nº de mallas en escena y de instancias. */
   stats(): Record<string, number>;
+  /** Zombis lejanos dibujados como sprites (tiles locales a la sala). */
+  updateZombieSprites(list: SpriteZombie[]): void;
+  /** ¿Está listo el atlas de sprites de zombi? */
+  zombieSpritesReady(): boolean;
+  /** FPS medidos y nivel de calidad adaptativa (0 = máxima). */
+  perf(): { fps: number; tier: number; tiers: number };
 }
 
 export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
@@ -102,6 +109,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   const cutBuf = new THREE.Vector2();
   const gunFx = createGunFx(scene);
   const carMgr = createCarManager(scene);
+  const zombieSprites = createZombieSprites();
+  scene.add(zombieSprites.group);
+  let spriteList: SpriteZombie[] = [];
   const T = TILE_SIZE;
   const postfx = createPostFx3D(renderer);
   let aspect = 1;
@@ -223,6 +233,72 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
   void initBuildingTextures();
   void initModels();
 
+// Instancias de edificios con descarte por cámara: cada fotograma solo se suben las
+  // instancias cuyo volumen (con margen para sus sombras) cae en el encuadre.
+  interface CulledSet {
+    im: THREE.InstancedMesh;
+    matrices: THREE.Matrix4[];
+    spheres: THREE.Sphere[];
+  }
+  let culledSets: CulledSet[] = [];
+  const frustum = new THREE.Frustum();
+  const projView = new THREE.Matrix4();
+  const tmpSphere = new THREE.Sphere();
+  const CULL_MARGIN = 5; // unidades: edificios algo fuera de cuadro aún proyectan sombra dentro
+  function cullInstances(): void {
+    projView.multiplyMatrices(iso.camera.projectionMatrix, iso.camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(projView);
+    for (const c of culledSets) {
+      let n = 0;
+      for (let i = 0; i < c.matrices.length; i++) {
+        tmpSphere.copy(c.spheres[i]);
+        tmpSphere.radius += CULL_MARGIN;
+        if (!frustum.intersectsSphere(tmpSphere)) continue;
+        c.im.setMatrixAt(n++, c.matrices[i]);
+      }
+      c.im.count = n;
+      c.im.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  function instanceRepeated(parent: THREE.Group, groups: THREE.Group[]): void {
+    parent.updateMatrixWorld(true);
+    const buckets = new Map<string, THREE.Mesh[]>();
+    for (const g of groups) {
+      g.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || (m as THREE.InstancedMesh).isInstancedMesh || Array.isArray(m.material)) return;
+        const k = m.geometry.uuid + "|" + (m.material as THREE.Material).uuid;
+        let l = buckets.get(k);
+        if (!l) buckets.set(k, (l = []));
+        l.push(m);
+      });
+    }
+    const inv = new THREE.Matrix4().copy(parent.matrixWorld).invert();
+    culledSets = [];
+    for (const list of buckets.values()) {
+      if (list.length < 2) continue;
+      const im = new THREE.InstancedMesh(list[0].geometry, list[0].material as THREE.Material, list.length);
+      const geo = list[0].geometry;
+      if (!geo.boundingSphere) geo.computeBoundingSphere();
+      const matrices: THREE.Matrix4[] = [];
+      const spheres: THREE.Sphere[] = [];
+      list.forEach((m, i) => {
+        const mat = new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld);
+        matrices.push(mat);
+        spheres.push(geo.boundingSphere!.clone().applyMatrix4(m.matrixWorld));
+        im.setMatrixAt(i, mat);
+        m.parent?.remove(m);
+      });
+      im.instanceMatrix.needsUpdate = true;
+      im.castShadow = true;
+      im.receiveShadow = true;
+      im.frustumCulled = false; // el descarte se hace por instancia (cullInstances)
+      parent.add(im);
+      culledSets.push({ im, matrices, spheres });
+    }
+  }
+
   function updateGround(screen: ScreenData, neighbors: NeighborTiles[], treeDefs: Map<string, TreeDef>): void {
     // Sin el manifest de texturas los edificios saldrían vacíos: se reintenta en el siguiente frame.
     if (!buildingTexturesReady() || !modelsReady()) return;
@@ -289,11 +365,20 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     for (const grp of [obstacles, trees]) {
       grp.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) {
-          o.castShadow = true;
+          o.castShadow = !o.userData.flat;
           o.receiveShadow = true;
         }
       });
     }
+    // Edificios de Kenney repetidos (misma geometría y material) → un InstancedMesh por
+    // pieza: una llamada de dibujo por tipo en vez de una por edificio (y por pase:
+    // sombras, oclusión ambiental y escena).
+    if (cityLayer) instanceRepeated(obstacles, cityLayer.buildings);
+    // Todo lo de este grupo es estático: se calculan sus matrices una vez y ya.
+    obstacles.updateMatrixWorld(true);
+    obstacles.traverse((o) => {
+      o.matrixAutoUpdate = false;
+    });
     scene.add(mesh);
     scene.add(obstacles);
     scene.add(trees);
@@ -318,9 +403,85 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     groundMesh.instanceColor.needsUpdate = true;
   }
 
+  // ---- Calidad adaptativa ----
+  // Se miden los FPS reales (tiempo entre fotogramas). Si bajan de ~30, se pasa al
+  // siguiente escalón (menos resolución interna, sin oclusión ambiental, sin bloom,
+  // sombras más pequeñas y menos frecuentes); si sobra rendimiento durante un rato,
+  // se vuelve a subir. Así se mantienen los 30 FPS dibuje lo que se dibuje.
+  const QUALITY = [
+    { scale: 1.0, ao: true, bloom: true, shadow: 2048, shadowEvery: 1 },
+    { scale: 0.85, ao: true, bloom: true, shadow: 2048, shadowEvery: 1 },
+    { scale: 0.85, ao: false, bloom: true, shadow: 1024, shadowEvery: 1 },
+    { scale: 0.72, ao: false, bloom: false, shadow: 1024, shadowEvery: 2 },
+    { scale: 0.6, ao: false, bloom: false, shadow: 1024, shadowEvery: 3 },
+    { scale: 0.5, ao: false, bloom: false, shadow: 512, shadowEvery: 4 },
+  ];
+  let tier = 0;
+  let viewW = 1;
+  let viewH = 1;
+  let frameNo = 0;
+  let lastFrameAt = 0;
+  let winFrames = 0;
+  let winTime = 0;
+  let goodWindows = 0;
+  let cooldown = 0;
+  let measuredFps = 60;
+  const MAX_DPR = 1.5; // más allá, el coste de relleno no compensa en esta vista
+  function applyQuality(): void {
+    const q = QUALITY[tier];
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_DPR) * q.scale);
+    renderer.setSize(viewW, viewH, false);
+    postfx.resize(viewW, viewH, renderer.getPixelRatio());
+    postfx.setQuality({ ao: q.ao, bloom: q.bloom });
+    lighting.setShadowSize(q.shadow);
+  }
+  function trackFps(): void {
+    const now = performance.now();
+    if (lastFrameAt > 0) {
+      const d = now - lastFrameAt;
+      if (d < 500) {
+        // pausas largas (pestaña oculta) no cuentan
+        winFrames++;
+        winTime += d;
+      }
+    }
+    lastFrameAt = now;
+    if (winTime < 1000) return;
+    measuredFps = (winFrames * 1000) / winTime;
+    winFrames = 0;
+    winTime = 0;
+    if (cooldown > 0) {
+      cooldown--;
+      return;
+    }
+    if (measuredFps < 31 && tier < QUALITY.length - 1) {
+      tier++;
+      goodWindows = 0;
+      cooldown = 1;
+      applyQuality();
+    } else if (measuredFps > 52 && tier > 0) {
+      if (++goodWindows >= 5) {
+        tier--;
+        goodWindows = 0;
+        cooldown = 2;
+        applyQuality();
+      }
+    } else {
+      goodWindows = 0;
+    }
+  }
+  function updateZombieSprites(list: SpriteZombie[]): void {
+    spriteList = list.map((z) => ({ ...z, x: z.x * T, z: z.z * T }));
+  }
+
+  function perf(): { fps: number; tier: number; tiers: number } {
+    return { fps: Math.round(measuredFps), tier, tiers: QUALITY.length };
+  }
+
   function resize(width: number, height: number): void {
-    renderer.setSize(width, height, false);
-    postfx.resize(width, height, renderer.getPixelRatio());
+    viewW = width;
+    viewH = height;
+    applyQuality();
     aspect = width / height;
   }
 
@@ -442,6 +603,9 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     updateTracers(dt);
     gunFx.update(dt);
     carMgr.update(dt, time);
+    // Atlas de sprites de zombi: se hornea una vez, en el primer fotograma.
+    if (!zombieSprites.ready()) zombieSprites.bake(renderer);
+    zombieSprites.update(spriteList, iso.camera, yaw, 1 - getDayNight().darkness * 0.55);
     updateSignals(time);
     // Ventanas encendidas: aparecen al atardecer y a pleno de noche.
     const dn = getDayNight();
@@ -451,6 +615,12 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     // Área del personaje sin obstrucciones (ver cutaway3d.ts).
     renderer.getDrawingBufferSize(cutBuf);
     updateCutaway(iso.camera, playerX, playerZ, cutBuf.x, cutBuf.y, CHAR_AREA_WIDTH);
+    cullInstances();
+    trackFps();
+    frameNo++;
+    const every = QUALITY[tier].shadowEvery;
+    renderer.shadowMap.autoUpdate = every === 1;
+    if (every > 1) renderer.shadowMap.needsUpdate = frameNo % every === 0;
     postfx.render(scene, iso.camera, time, vision.chromaticAberration, heat);
   }
 
@@ -480,5 +650,5 @@ export function createScene3D(canvas: HTMLCanvasElement): Scene3D {
     tileMat.dispose();
   }
 
-  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, cursorToGround, addTracer, gunFire, gunImpact, gunRicochet, bulletCars, render, dispose, stats };
+  return { renderer, resize, updateGround, updateFigures, rotateCamera, cameraStep, cameraYaw, perf, updateZombieSprites, zombieSpritesReady: () => zombieSprites.ready(), cursorToGround, addTracer, gunFire, gunImpact, gunRicochet, bulletCars, render, dispose, stats };
 }

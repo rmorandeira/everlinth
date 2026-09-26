@@ -278,3 +278,14 @@ html, body {
   color: #111;
   border-color: #e8b400;
 }
+
+#fps {
+  position: absolute;
+  top: 70px;
+  right: 14px;
+  color: #9f9;
+  font-size: 12px;
+  text-shadow: 1px 1px 0 #000;
+  font-variant-numeric: tabular-nums;
+  z-index: 5;
+}
