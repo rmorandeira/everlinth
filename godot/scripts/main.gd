@@ -1,102 +1,82 @@
 extends Node3D
-## Escena principal del cliente Godot (fase 1 de docs/migracion-godot.md):
-## login, conexión, suelo de la sala y vecinas, personaje, otros jugadores,
-## horda provisional y cámara isométrica. Coordenadas como en el cliente web:
-## "tiles locales" relativos a la sala actual; render = tiles × TILE_SIZE.
+## Escena principal del cliente Godot (ver docs/migracion-godot.md): conexión, ciudad,
+## personaje y horda como sprites de pixel art, disparo con ratón o mando, efectos,
+## coches destructibles, sonido, HUD y calidad adaptativa. Coordenadas como en el
+## cliente web: "tiles locales" relativos a la sala actual; render = tiles × TILE_SIZE.
 
 const W := Protocol.SCREEN_WIDTH
 const H := Protocol.SCREEN_HEIGHT
 const T := Protocol.TILE_SIZE
 const DIR_CYCLE := ["N", "E", "S", "W"]
-const MAX_ZOMBIES := 1024
+const MAX_CORPSES := 350
+const STRIDE := 1.1 # tiles entre pisadas
+const AIM_RADIUS := 6.0 # tiles: punto de mira del stick derecho alrededor del personaje
 
 var cam := IsoCamera.new()
 var ground := Ground.new()
 var lighting := Lighting.new()
+var people := People.new()
+var fx := Fx.new()
+var cars := Cars.new()
+var sfx := Sfx.new()
+var quality := Quality.new()
+var hud := Hud.new()
 var city_root: Node3D
 var city_key := ""
-var player_node: Node3D
-var others := {} # username -> { node, x, y }
-var zombie_mm := MultiMeshInstance3D.new()
 
 var you: Dictionary = {}
 var screen: Dictionary = {}
 var neighbors: Array = []
 var you_display := Vector2.ZERO
+var others := {} # username -> { p, x, y, label, variant }
 var zombie_targets := {} # id -> Vector3(gx, gy, giant)
 var zombie_display := {} # id -> Vector2(gx, gy)
+var corpses: Array = [] # { gx, gy, variant, pose, scale }
 var last_dirs := {"N": false, "S": false, "E": false, "W": false}
 var time := 0.0
 var joined_at := -1.0
 var capturing := false
+var zombies_on := true
 
-var login_panel: PanelContainer
-var name_edit: LineEdit
-var status_label: Label
-var hud_label: Label
-var fps_label: Label
+# disparo y apuntado
+var aim := Vector2(0, 1) # dirección de mira (tiles; x = columna, y = fila)
+var aim_active_until := 0.0
+var firing := false
+var last_shot := 0.0
+var stride_acc := 0.0
+var last_you := Vector2.ZERO
+var recent_kills: Array = []
+var last_laugh := -1e9
 
 
 func _ready() -> void:
-	_build_world()
-	_build_ui()
-	Net.message.connect(_on_message)
-	Net.opened.connect(_on_opened)
-	Net.closed.connect(func() -> void: status_label.text = "Sin conexión con %s" % Config.server_url)
-	status_label.text = "Conectando con %s…" % Config.server_url
-	Net.connect_to(Config.server_url)
-
-
-# ---------------------------------------------------------------- escena
-
-func _build_world() -> void:
-	if Config.hour >= 0.0:
-		lighting.hour_override = Config.hour
 	add_child(lighting)
-
-
 	add_child(cam)
 	cam.current = true
 	add_child(ground)
-
-	player_node = _make_figure(Color("f0f0f0"))
-	add_child(player_node)
-
-	var capsule := CapsuleMesh.new()
-	capsule.radius = 0.07
-	capsule.height = 0.55
-	var zmat := StandardMaterial3D.new()
-	zmat.albedo_color = Color("5b8f45")
-	capsule.material = zmat
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = capsule
-	mm.instance_count = MAX_ZOMBIES
-	mm.visible_instance_count = 0
-	zombie_mm.multimesh = mm
-	add_child(zombie_mm)
-
-
-## Figura provisional (fase 3 la sustituye por el personaje estilizado): 1,8 m = 0,6 unidades.
-func _make_figure(color: Color) -> Node3D:
-	var root := Node3D.new()
-	var body := MeshInstance3D.new()
-	var capsule := CapsuleMesh.new()
-	capsule.radius = 0.08
-	capsule.height = 0.6
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	capsule.material = mat
-	body.mesh = capsule
-	body.position.y = 0.3
-	root.add_child(body)
-	return root
+	add_child(people)
+	add_child(fx)
+	cars.fx = fx
+	add_child(cars)
+	add_child(sfx)
+	quality.env = lighting.env
+	add_child(quality)
+	_build_post()
+	add_child(hud)
+	hud.join_requested.connect(func(n: String) -> void: Net.send({"type": "join", "username": n}))
+	hud.zombies_toggled.connect(_on_zombies_toggled)
+	hud.hour_changed.connect(func(h: float) -> void: lighting.hour_override = h)
+	zombies_on = hud.zombie_toggle.button_pressed
+	hud.restore()
+	Net.message.connect(_on_message)
+	Net.opened.connect(_on_opened)
+	Net.closed.connect(func() -> void: hud.status_label.text = "Sin conexión con %s" % Config.server_url)
+	hud.status_label.text = "Conectando con %s…" % Config.server_url
+	Net.connect_to(Config.server_url)
 
 
-# ---------------------------------------------------------------- interfaz
-
-func _build_ui() -> void:
-	# Posproceso de pantalla (tilt-shift + color): debajo del HUD, que no se desenfoca.
+## Posproceso de pantalla (tilt-shift + color): debajo del HUD, que no se desenfoca.
+func _build_post() -> void:
 	var post := CanvasLayer.new()
 	post.layer = 0
 	add_child(post)
@@ -115,67 +95,19 @@ func _build_ui() -> void:
 		rect.material = mat
 		post.add_child(rect)
 
-	var layer := CanvasLayer.new()
-	layer.layer = 1
-	add_child(layer)
-
-	login_panel = PanelContainer.new()
-	login_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(320, 0)
-	var title := Label.new()
-	title.text = "EVERLINTH"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 32)
-	box.add_child(title)
-	name_edit = LineEdit.new()
-	name_edit.placeholder_text = "Nombre del personaje"
-	name_edit.text_submitted.connect(func(_t: String) -> void: _join(name_edit.text))
-	box.add_child(name_edit)
-	var btn := Button.new()
-	btn.text = "Entrar"
-	btn.pressed.connect(func() -> void: _join(name_edit.text))
-	box.add_child(btn)
-	status_label = Label.new()
-	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	box.add_child(status_label)
-	login_panel.add_child(box)
-	layer.add_child(login_panel)
-
-	hud_label = Label.new()
-	hud_label.position = Vector2(14, 10)
-	hud_label.add_theme_color_override("font_shadow_color", Color.BLACK)
-	layer.add_child(hud_label)
-
-	fps_label = Label.new()
-	fps_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	fps_label.position += Vector2(-150, 70)
-	fps_label.add_theme_color_override("font_color", Color("99ff99"))
-	fps_label.add_theme_color_override("font_shadow_color", Color.BLACK)
-	layer.add_child(fps_label)
-
 
 func _on_opened() -> void:
-	status_label.text = ""
+	hud.status_label.text = ""
 	if Config.auto_user != "":
-		_join(Config.auto_user)
-	else:
-		name_edit.grab_focus()
+		Net.send({"type": "join", "username": Config.auto_user})
 
 
-func _join(username: String) -> void:
-	username = username.strip_edges()
-	if username == "":
-		status_label.text = "Escribe un nombre."
-		return
-	Net.send({"type": "join", "username": username})
-
-
-func _update_hud() -> void:
-	if you.is_empty():
-		return
-	hud_label.text = "%s · Nv %d · XP %d · Vida %d/%d · (%d,%d)" % [
-		you.username, int(you.level), int(you.xp), int(you.hp), int(you.maxHp), int(you.sx), int(you.sy)]
+func _on_zombies_toggled(on: bool) -> void:
+	zombies_on = on
+	Net.send({"type": "setZombies", "enabled": on})
+	if not on:
+		zombie_targets.clear()
+		zombie_display.clear()
 
 
 # ---------------------------------------------------------------- red
@@ -185,35 +117,40 @@ func _on_message(msg: Dictionary) -> void:
 		"joined":
 			you = msg.you
 			you_display = Vector2(you.x, you.y)
-			login_panel.visible = false
+			last_you = you_display
+			hud.set_playing(true)
 			joined_at = time
-			Net.send({"type": "setZombies", "enabled": true})
-			_update_hud()
+			Net.send({"type": "setZombies", "enabled": zombies_on})
+			hud.set_stats(you)
 		"screen":
 			var s: Dictionary = msg.screen
 			if not screen.is_empty() and (int(screen.sx) != int(s.sx) or int(screen.sy) != int(s.sy)):
 				# El mundo se re-basa en la sala nueva: se desplaza la posición suavizada
 				# lo mismo, así personaje y cámara siguen donde estaban.
-				you_display.x += (int(screen.sx) - int(s.sx)) * W
-				you_display.y += (int(screen.sy) - int(s.sy)) * H
+				var d := Vector2((int(screen.sx) - int(s.sx)) * W, (int(screen.sy) - int(s.sy)) * H)
+				you_display += d
+				last_you += d
 			screen = s
 			neighbors = msg.neighbors
 			for u in others.keys():
-				others[u].node.queue_free()
+				others[u].label.queue_free()
 			others.clear()
 			for p in msg.players:
 				_set_other(p)
 			ground.build(screen, neighbors)
 			_build_city()
+			hud.minimap.set_rooms(screen, neighbors)
 		"playerUpdate":
 			_set_other(msg.player)
 		"playerLeft":
 			if others.has(msg.username):
-				others[msg.username].node.queue_free()
+				others[msg.username].label.queue_free()
 				others.erase(msg.username)
 		"youUpdate":
 			you = msg.you
-			_update_hud()
+			hud.set_stats(you)
+		"discovery":
+			hud.show_discovery(str(msg.tier), int(msg.xp))
 		"zombies":
 			zombie_targets.clear()
 			for z in msg.zombies:
@@ -224,12 +161,52 @@ func _on_message(msg: Dictionary) -> void:
 			for id in zombie_display.keys():
 				if not zombie_targets.has(id):
 					zombie_display.erase(id)
+		"zombieDied":
+			corpses.append({"gx": float(msg.gx), "gy": float(msg.gy), "variant": randi() % People.ZOMBIE_VARIANTS, "pose": randi() % 2, "scale": Protocol.GIANT_SCALE if msg.giant else 1.0})
+			if corpses.size() > MAX_CORPSES:
+				corpses.pop_front()
+		"kill":
+			var now := time
+			recent_kills.append(now)
+			while not recent_kills.is_empty() and now - recent_kills[0] > 8.0:
+				recent_kills.pop_front()
+			if recent_kills.size() >= 4 and now - last_laugh > 12.0:
+				last_laugh = now
+				recent_kills.clear()
+				sfx.laugh(0.9)
+		"shot":
+			_on_shot(msg)
 		"died":
 			you = {}
-			login_panel.visible = true
-			status_label.text = "Has muerto. Tu personaje se ha perdido para siempre."
+			hud.set_playing(false)
+			hud.status_label.text = "Has muerto. Tu personaje se ha perdido para siempre."
 		"error":
-			status_label.text = str(msg.message)
+			hud.status_label.text = str(msg.message)
+
+
+func _on_shot(msg: Dictionary) -> void:
+	if screen.is_empty():
+		return
+	var ox := int(screen.sx) * W
+	var oy := int(screen.sy) * H
+	var fx0: float = (msg.from.gx - ox) * T
+	var fz0: float = (msg.from.gy - oy) * T
+	var tx: float = (msg.to.gx - ox) * T
+	var tz: float = (msg.to.gy - oy) * T
+	fx.tracer(fx0, fz0, tx, tz)
+	fx.impact(tx, tz)
+	cars.hit(fx0, fz0, tx, tz)
+	if msg.hit == "wall" and randf() < 0.18:
+		var shot_len := Vector2(msg.to.gx - msg.from.gx, msg.to.gy - msg.from.gy).length()
+		var d := Vector2(tx - fx0, tz - fz0).normalized()
+		fx.ricochet(tx, tz, d.x, d.y, shot_len > 14.0)
+	if not you.is_empty():
+		# disparo de otro jugador: su fogonazo y su sonido, atenuado con la distancia
+		var dist := Vector2(msg.from.gx - (ox + you_display.x), msg.from.gy - (oy + you_display.y)).length()
+		if dist > 1.5:
+			var d := Vector2(tx - fx0, tz - fz0).normalized()
+			fx.fire(fx0, fz0, d.x, d.y)
+			sfx.gunshot(maxf(0.08, 0.8 / (1.0 + dist / 12.0)))
 
 
 ## Ciudad vectorial de la sala actual y sus vecinas (se rehace al cambiar de sala).
@@ -248,31 +225,41 @@ func _build_city() -> void:
 		if n.has("city"):
 			datas.append(n.city)
 	if datas.is_empty():
+		cars.set_cars([])
 		return
-	var t0 := Time.get_ticks_msec()
 	city_root = City.build(datas, int(screen.sx) * W, int(screen.sy) * H)
 	add_child(city_root)
-	print("ciudad construida en %d ms (%d nodos)" % [Time.get_ticks_msec() - t0, city_root.get_child_count()])
+	cars.set_cars(city_root.get_meta("cars", []))
 
 
 func _set_other(p: Dictionary) -> void:
 	if not you.is_empty() and p.username == you.username:
 		return
 	if not others.has(p.username):
-		var node := _make_figure(Color("3ba0e0"))
-		add_child(node)
-		others[p.username] = {"node": node, "x": float(p.x), "y": float(p.y)}
+		var label := Label3D.new()
+		label.text = p.username
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.pixel_size = 0.004
+		label.font_size = 28
+		label.outline_size = 8
+		label.no_depth_test = true
+		label.modulate = Color("cfe8ff")
+		add_child(label)
+		var h := 0
+		for i in p.username.length():
+			h = (h * 31 + p.username.unicode_at(i)) & 0x7fffffff
+		others[p.username] = {"x": float(p.x), "y": float(p.y), "label": label, "variant": 1 + h % People.OTHER_VARIANTS}
 	others[p.username].p = p
 
 
-# ---------------------------------------------------------------- bucle
+# ---------------------------------------------------------------- entrada
 
 static func lerp_towards(current: float, target: float, dt: float, rate := 18.0) -> float:
 	return current + (target - current) * (1.0 - exp(-rate * dt))
 
 
 func _unhandled_input(ev: InputEvent) -> void:
-	if ev is InputEventKey and ev.pressed and not ev.echo and not login_panel.visible:
+	if not hud.login_panel.visible and ev is InputEventKey and ev.pressed and not ev.echo:
 		match ev.physical_keycode:
 			KEY_Q:
 				cam.rotate_step(-1)
@@ -280,8 +267,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_R:
 				cam.rotate_step(1)
 				_send_dirs(last_dirs, true)
-			KEY_F3:
-				fps_label.visible = not fps_label.visible
+	if ev is InputEventMouseMotion:
+		aim_active_until = time + 2.0
 
 
 ## Las direcciones son relativas a la PANTALLA; con la cámara girada k cuartos de
@@ -298,7 +285,7 @@ func _send_dirs(dirs: Dictionary, force := false) -> void:
 
 
 func _read_dirs() -> Dictionary:
-	if login_panel.visible:
+	if hud.login_panel.visible:
 		return {"N": false, "S": false, "E": false, "W": false}
 	if Config.walk != "":
 		return {"N": "N" in Config.walk, "S": "S" in Config.walk, "E": "E" in Config.walk, "W": "W" in Config.walk}
@@ -312,58 +299,118 @@ func _read_dirs() -> Dictionary:
 	}
 
 
+## Mira: el cursor del ratón sobre el suelo, o el stick derecho (en círculo alrededor
+## del personaje, relativo a la pantalla). Devuelve la dirección en tiles.
+func _update_aim() -> void:
+	var rx := Input.get_joy_axis(0, JOY_AXIS_RIGHT_X)
+	var ry := Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
+	if Vector2(rx, ry).length() > 0.3:
+		var r := cam.global_transform.basis.x
+		var f := -cam.global_transform.basis.z
+		var d := Vector2(r.x, r.z).normalized() * rx + Vector2(f.x, f.z).normalized() * -ry
+		aim = d.normalized()
+		aim_active_until = time + 2.0
+		return
+	if Config.aim != Vector2.ZERO:
+		aim = Config.aim.normalized()
+		return
+	var g := cam.screen_to_ground(get_viewport().get_mouse_position())
+	var d := Vector2(g.x / T - you_display.x, g.z / T - you_display.y)
+	if d.length() > 0.2:
+		aim = d.normalized()
+
+
+func _update_fire() -> void:
+	var want := false
+	if not hud.login_panel.visible:
+		want = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.get_joy_axis(0, JOY_AXIS_TRIGGER_RIGHT) > 0.25 or Config.fire
+	if want and time - last_shot >= Protocol.GUN_FIRE_MS / 1000.0:
+		last_shot = time
+		Net.send({"type": "shoot", "dx": aim.x, "dz": aim.y})
+		fx.fire(you_display.x * T, you_display.y * T, aim.x, aim.y)
+		sfx.gunshot(0.8)
+		aim_active_until = time + 2.0
+	if firing and not want:
+		sfx.gun_tail(0.8)
+	firing = want
+
+
+# ---------------------------------------------------------------- bucle
+
 func _process(dt: float) -> void:
 	time += dt
-	fps_label.text = "%d FPS" % Engine.get_frames_per_second()
+	hud.fps_label.text = "%d FPS · calidad %d/%d" % [Engine.get_frames_per_second(), Quality.TIERS.size() - quality.tier, Quality.TIERS.size()]
+	hud.show_hour(lighting.get_hour())
 	if you.is_empty() or screen.is_empty():
 		return
 	_send_dirs(_read_dirs())
+	_update_aim()
+	_update_fire()
 
 	you_display.x = lerp_towards(you_display.x, float(you.x), dt)
 	you_display.y = lerp_towards(you_display.y, float(you.y), dt)
-	player_node.position = Vector3(you_display.x * T, 0.05, you_display.y * T)
+	stride_acc += you_display.distance_to(last_you)
+	last_you = you_display
+	if stride_acc >= STRIDE:
+		stride_acc = 0.0
+		sfx.step(0.6)
 
 	var sx := int(screen.sx)
 	var sy := int(screen.sy)
+	var zox := sx * W
+	var zoy := sy * H
+	var ents: Array = []
+	var dots: Array = []
+	var face = null
+	if firing or time < aim_active_until:
+		face = aim
+	var me := {"id": "you", "x": you_display.x * T, "z": you_display.y * T, "variant": 0, "scale": 1.0, "kind": People.KIND_PLAYER}
+	if face != null:
+		me.face = face
+	ents.append(me)
 	for u in others:
 		var o: Dictionary = others[u]
 		var p: Dictionary = o.p
-		var tx := (int(p.sx) - sx) * W + float(p.x)
-		var ty := (int(p.sy) - sy) * H + float(p.y)
-		o.x = lerp_towards(o.x, tx, dt)
-		o.y = lerp_towards(o.y, ty, dt)
-		o.node.position = Vector3(o.x * T, 0.0, o.y * T)
-
-	_update_zombies(dt, sx * W, sy * H)
-	lighting.update(you_display.x * T, you_display.y * T)
-	StreetFurniture.update_signals(time)
-	cam.follow(you_display.x * T, you_display.y * T, time, dt)
-	_update_cutaway()
-	_maybe_capture()
-
-
-func _update_zombies(dt: float, zox: int, zoy: int) -> void:
-	var mm := zombie_mm.multimesh
-	var n := 0
+		o.x = lerp_towards(o.x, (int(p.sx) - sx) * W + float(p.x), dt)
+		o.y = lerp_towards(o.y, (int(p.sy) - sy) * H + float(p.y), dt)
+		ents.append({"id": "p:" + u, "x": o.x * T, "z": o.y * T, "variant": o.variant, "scale": 1.0, "kind": People.KIND_OTHER})
+		o.label.position = Vector3(o.x * T, 0.85, o.y * T)
+		dots.append([Vector2(zox + o.x, zoy + o.y), Color("3ba0e0"), 1.6])
 	for id in zombie_display:
-		if n >= MAX_ZOMBIES:
-			break
 		var d: Vector2 = zombie_display[id]
 		var t: Vector3 = zombie_targets.get(id, Vector3(d.x, d.y, 0.0))
 		d.x = lerp_towards(d.x, t.x, dt, 14.0)
 		d.y = lerp_towards(d.y, t.y, dt, 14.0)
 		zombie_display[id] = d
-		var s := Protocol.GIANT_SCALE if t.z > 0.5 else 1.0
-		var basis := Basis.from_scale(Vector3(s, s, s))
-		mm.set_instance_transform(n, Transform3D(basis, Vector3((d.x - zox) * T, 0.275 * s, (d.y - zoy) * T)))
-		n += 1
-	mm.visible_instance_count = n
+		var giant := t.z > 0.5
+		ents.append({"id": "z%d" % id, "x": (d.x - zox) * T, "z": (d.y - zoy) * T, "variant": People.ZOMBIE_BASE + id % People.ZOMBIE_VARIANTS,
+			"scale": Protocol.GIANT_SCALE if giant else 1.0, "kind": People.KIND_GIANT if giant else People.KIND_ZOMBIE})
+		dots.append([d, Color("ff8a1a") if giant else Color("e04040"), 2.2 if giant else 1.0])
+	var ks: Array = []
+	for c in corpses:
+		var cx: float = c.gx - zox
+		var cz: float = c.gy - zoy
+		if absf(cx - you_display.x) > 70.0 or absf(cz - you_display.y) > 50.0:
+			continue
+		ks.append({"x": cx * T, "z": cz * T, "variant": c.variant, "pose": c.pose, "scale": c.scale})
+	people.update(ents, ks, cam)
+
+	var dn := lighting.day_night()
+	RenderingServer.global_shader_parameter_set("sprite_light", 1.0 - dn.x * 0.55)
+	RenderingServer.global_shader_parameter_set("sprite_flash", fx.flash_uniform())
+	lighting.update(you_display.x * T, you_display.y * T)
+	StreetFurniture.update_signals(time)
+	cam.follow(you_display.x * T, you_display.y * T, time, dt)
+	_update_cutaway()
+	var facing := atan2(aim.x, aim.y)
+	hud.minimap.update_view(zox + you_display.x, zoy + you_display.y, facing, cam.yaw, dots)
+	_maybe_capture()
 
 
 ## Franja de pantalla del personaje (desde su cabeza hacia abajo, 70 % del ancho).
 func _update_cutaway() -> void:
 	var size := get_viewport().get_visible_rect().size
-	var head := cam.unproject_position(player_node.position + Vector3(0, 0.75, 0))
+	var head := cam.unproject_position(Vector3(you_display.x * T, 0.8, you_display.y * T))
 	RenderingServer.global_shader_parameter_set("cut_params", Vector4(head.y, size.x * 0.5, size.x * 0.7 * 0.5, size.y * 0.05))
 	RenderingServer.global_shader_parameter_set("cut_cam_fwd", cam.global_transform.basis.z)
 
@@ -379,5 +426,5 @@ func _maybe_capture() -> void:
 	if path.begins_with("res://") or path.begins_with("user://"):
 		path = ProjectSettings.globalize_path(path)
 	img.save_png(path)
-	print("captura guardada en ", path)
+	print("captura guardada en %s · %d FPS · calidad %d" % [path, Engine.get_frames_per_second(), quality.tier])
 	get_tree().quit()

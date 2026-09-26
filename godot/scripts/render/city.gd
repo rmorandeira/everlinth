@@ -130,6 +130,7 @@ var flat := GeoBatch.new()     # a ras de suelo: sin sombra
 var solid := GeoBatch.new()    # semáforos y demás piezas sueltas: con sombra
 var chunks := {}               # "rx,ry" -> { clave de instancia -> [Transform3D | [Transform3D, Color]] }
 var segs: Array = []
+var cars: Array = []
 var crosses: Array = []
 
 
@@ -209,6 +210,7 @@ static func build(datas: Array, ogx: int, ogz: int) -> Node3D:
 	c.origin_gx = ogx
 	c.origin_gz = ogz
 	c._build(datas)
+	c.root.set_meta("cars", c.cars)
 	return c.root
 
 
@@ -443,8 +445,9 @@ func _markings_and_furniture() -> void:
 				_mark(puddle_mat(), px + nx * side_p * (half + 1.0), py + ny * side_p * (half + 1.0), 1.4, 0.9, ang + hw * 4.0, 0.056)
 
 
+## Coche aparcado (los dibuja y destruye Cars; clave = posición global).
 func _add_car(x: float, z: float, ang: float, color: Color) -> void:
-	_place("car", Transform3D(Basis(Vector3.UP, -ang), Vector3(x, 0.05, z)), color)
+	cars.append({"key": "%.1f,%.1f" % [x / T + origin_gx, z / T + origin_gz], "x": x, "z": z, "ang": ang, "color": color})
 
 
 ## Coche aparcado provisional (la fase 4 trae los destructibles): la carrocería toma
