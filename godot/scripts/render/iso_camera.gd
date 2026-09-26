@@ -20,7 +20,7 @@ var yaw := BASE_YAW
 func _ready() -> void:
 	projection = PROJECTION_ORTHOGONAL
 	keep_aspect = KEEP_HEIGHT
-	size = VIEW_HALF_HEIGHT * 2.0
+	size = (Config.cenital if Config.cenital > 0.0 else VIEW_HALF_HEIGHT) * 2.0
 	near = 0.1
 	far = 500.0
 
@@ -42,11 +42,13 @@ func follow(px: float, pz: float, t: float, dt: float) -> void:
 	var y := yaw + sin(t * 0.13) * 0.018 + sin(t * 0.071 + 1.3) * 0.012
 	var drift_x := sin(t * 0.11 + 0.4) * 0.22 + sin(t * 0.043) * 0.12
 	var drift_z := cos(t * 0.093 + 2.1) * 0.22 + sin(t * 0.057 + 0.7) * 0.12
-	var dir := Vector3(cos(PITCH) * cos(y), sin(PITCH), cos(PITCH) * sin(y))
+	var pitch := deg_to_rad(89.0) if Config.cenital > 0.0 else PITCH
+	var dir := Vector3(cos(pitch) * cos(y), sin(pitch), cos(pitch) * sin(y))
 	var target := Vector3(px + drift_x, 0.0, pz + drift_z)
 	global_position = target + dir * DIST
 	look_at(target, Vector3.UP)
-	global_position += global_transform.basis.y * (0.5 - PLAYER_SCREEN_Y) * 2.0 * VIEW_HALF_HEIGHT
+	if Config.cenital <= 0.0:
+		global_position += global_transform.basis.y * (0.5 - PLAYER_SCREEN_Y) * 2.0 * VIEW_HALF_HEIGHT
 
 
 ## Punto del suelo (y = 0) bajo una posición de pantalla, en unidades de render.

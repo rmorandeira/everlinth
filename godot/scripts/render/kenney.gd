@@ -11,7 +11,9 @@ class_name Kenney
 ## Claves: "kit/nombre" (modelo de Kenney, asset "kenney.kit.nombre") o "asset:<id>".
 
 ## Escala de cada kit a unidades de render (1 unidad = 3 m).
-const KIT_SCALE := {"commercial": 2.9, "suburban": 2.7, "retro": 2.1}
+const KIT_SCALE := {"commercial": 2.9, "suburban": 2.7, "retro": 2.1, "cars": 0.59}
+## Modelos sueltos con su propia escala (vehículos de Poly Pizza: 12 m y 1,8 m).
+const MODEL_SCALE := {"transport/bus": 0.0254, "transport/bicycle": 0.000366}
 
 const COMMERCIAL_LOW := ["building-a", "building-b", "building-c", "building-d", "building-e", "building-h", "building-k"]
 const COMMERCIAL_MID := ["building-f", "building-g", "building-i", "building-j", "building-l", "building-m", "building-n"]
@@ -53,6 +55,8 @@ static func base_scale(key: String) -> float:
 		if def.get("source", {}).get("type", "") == "glb":
 			s *= KIT_SCALE.get(str(def.source.path).split("/")[0], 1.0)
 		return s
+	if MODEL_SCALE.has(key):
+		return MODEL_SCALE[key] * s
 	return KIT_SCALE.get(key.split("/")[0], 1.0) * s
 
 

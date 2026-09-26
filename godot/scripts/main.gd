@@ -19,6 +19,7 @@ var people := People.new()
 var fx := Fx.new()
 var cars := Cars.new()
 var destruction := Destruction.new()
+var traffic := Traffic.new()
 var sfx := Sfx.new()
 var quality := Quality.new()
 var hud := Hud.new()
@@ -76,6 +77,7 @@ func _ready() -> void:
 	add_child(cars)
 	destruction.fx = fx
 	add_child(destruction)
+	add_child(traffic)
 	add_child(sfx)
 	quality.env = lighting.env
 	add_child(quality)
@@ -306,6 +308,7 @@ func _build_city() -> void:
 	add_child(city_root)
 	cars.set_cars(city_root.get_meta("cars", []))
 	destruction.set_buildings(city_root.get_meta("buildings", {}))
+	traffic.set_city(city_root, int(screen.sx) * W, int(screen.sy) * H)
 
 
 func _set_other(p: Dictionary) -> void:
@@ -507,6 +510,14 @@ func _process_game(dt: float) -> void:
 			continue
 		ks.append({"x": cx * T, "z": cz * T, "variant": c.variant, "pose": c.pose, "scale": c.scale})
 	people.update(ents, ks, cam)
+	# tráfico: frena ante cualquiera que esté en la calzada (tiles globales)
+	var obst: Array = [Vector2(zox + you_display.x, zoy + you_display.y)]
+	for id in zombie_display:
+		obst.append(zombie_display[id])
+	for id in civ_display:
+		obst.append(civ_display[id])
+	traffic.set_obstacles(obst)
+	traffic.update(dt, time, Vector2(zox + you_display.x, zoy + you_display.y))
 
 	var dn := lighting.day_night()
 	RenderingServer.global_shader_parameter_set("sprite_light", 1.0 - dn.x * 0.55)

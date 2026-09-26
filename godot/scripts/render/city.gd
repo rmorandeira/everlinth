@@ -131,6 +131,7 @@ var solid := GeoBatch.new()    # semáforos y demás piezas sueltas: con sombra
 var chunks := {}               # "rx,ry" -> { clave de instancia -> [Transform3D | [Transform3D, Color]] }
 var segs: Array = []
 var cars: Array = []
+var approaches: Array = [] # llegadas a cruces: { x, y, hx, hy, stop_dist, axis ("A"/"B"/"stop") } (tiles globales)
 var buildings := {} # id -> info para Destruction (pos, height, pts, refs, parts, xf, hp, max_hp)
 var crosses: Array = []
 
@@ -193,6 +194,14 @@ func _tone_of(sg: Dictionary) -> Color:
 	return ASPHALT_TONES[int(floorf(hash_str(_line_key(sg) + "t") * ASPHALT_TONES.size())) % ASPHALT_TONES.size()]
 
 
+## Sentido de cada segmento para el tráfico: { one_way, dir } por id.
+func _segs_info() -> Dictionary:
+	var out := {}
+	for s in segs:
+		out[s.id] = _line_info(s)
+	return out
+
+
 func _line_info(sg: Dictionary) -> Dictionary:
 	var key := _line_key(sg)
 	return {"one_way": int(sg.kind) == 0 and hash_str(key) < 0.5, "dir": 1 if hash_str(key + "d") < 0.5 else -1}
@@ -212,6 +221,9 @@ static func build(datas: Array, ogx: int, ogz: int) -> Node3D:
 	c.origin_gz = ogz
 	c._build(datas)
 	c.root.set_meta("cars", c.cars)
+	c.root.set_meta("segs", c.segs)
+	c.root.set_meta("approaches", c.approaches)
+	c.root.set_meta("info", c._segs_info())
 	c.root.set_meta("buildings", c.buildings)
 	return c.root
 
@@ -420,9 +432,18 @@ func _markings_and_furniture() -> void:
 				var ddy := py + ny * side * (half + 1.4)
 				_kit_prop("retro", "detail-dumpster-closed" if h < 0.145 else "detail-dumpster-open", _L(ddx), _Lz(ddy), ux, uy, 0.55)
 			var hc := hash2(jround(px * 5.0) + 1.0, jround(py * 5.0))
-			var cside := -side
-			var cx := px + nx * cside * (half - 0.65)
-			var cy := py + ny * cside * (half - 0.65)
+			# Aparcamiento (reparto real de la calzada; ver docs/reglas-calle.md): calle
+			# pequeña de sentido único → junto al bordillo de un solo lado (+n); calle
+			# principal → en ambos lados; calle pequeña de doble sentido y avenidas → no.
+			var coff := 0.0
+			if s.kind == 0 and one_way:
+				coff = half - 0.65
+			elif s.kind == 1:
+				coff = (half - 0.55) * (-side)
+			else:
+				hc = 0.3 # sin aparcamiento: ni coches ni huecos con aceite
+			var cx := px + nx * coff
+			var cy := py + ny * coff
 			var car_color: Color = CAR_COLORS[int(floorf(h * 131.0)) % CAR_COLORS.size()]
 			if hc > 0.95:
 				var truck: String = ["truck-grey", "truck-green", "truck-flat"][int(floorf(h * 3.0)) % 3]
@@ -534,6 +555,7 @@ func _crossings() -> void:
 				var at := func(dist: float, off: float) -> Vector2:
 					return Vector2(c.x - hx * dist + rx * off, c.y - hy * dist + ry * off)
 				var rnd := hash_str(ckey + str(int(sgn)) + str(th.seg.id))
+				approaches.append({"x": c.x, "y": c.y, "hx": hx, "hy": hy, "stop_dist": other + 2.35, "axis": "stop" if (higher or all_way_stop) else ("A" if absf(th.ux * c.through[0].ux + th.uy * c.through[0].uy) > 0.7 else "B")})
 				if not higher and not all_way_stop:
 					var pole_off := half + 0.7
 					var lane_centers: Array
