@@ -368,7 +368,9 @@ func _draw(time: float) -> void:
 			continue
 		var h := _dir_of(v.seg, v.fwd)
 		var s := Kenney.base_scale(v.model)
-		var xf := Transform3D(Basis(Vector3.UP, atan2(h.x, h.y)).scaled(Vector3(s, s, s)), Vector3((p.x - origin_gx) * T, 0.06, (p.y - origin_gz) * T))
+		# cabeceo en las cuestas: pendiente del terreno a lo largo del sentido de la marcha
+		var climb := atan2(Terrain.h(p.x + h.x * 1.5, p.y + h.y * 1.5) - Terrain.h(p.x - h.x * 1.5, p.y - h.y * 1.5), 3.0 * T)
+		var xf := Transform3D((Basis(Vector3.UP, atan2(h.x, h.y)) * Basis(Vector3.RIGHT, -climb)).scaled(Vector3(s, s, s)), Vector3((p.x - origin_gx) * T, 0.06 + Terrain.h(p.x, p.y), (p.y - origin_gz) * T))
 		var parts := _model_parts(v.model)
 		var n: int = counts.get(v.model, 0)
 		if n >= CAP_PER_MODEL:
@@ -392,7 +394,7 @@ func _draw(time: float) -> void:
 			continue
 		var h: Vector2 = r[1]
 		var s := Kenney.base_scale(v.model)
-		var xf := Transform3D(Basis(Vector3.UP, atan2(h.x, h.y)).scaled(Vector3(s, s, s)), Vector3((p.x - origin_gx) * T, p.z + 0.01, (p.y - origin_gz) * T))
+		var xf := Transform3D(Basis(Vector3.UP, atan2(h.x, h.y)).scaled(Vector3(s, s, s)), Vector3((p.x - origin_gx) * T, p.z + 0.01 + Terrain.h(p.x, p.y), (p.y - origin_gz) * T))
 		var n: int = counts.get(v.model, 0)
 		if n >= CAP_PER_MODEL:
 			continue

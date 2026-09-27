@@ -26,14 +26,26 @@ static func _hash(s: String, k: int) -> float:
 
 
 ## poly: planta en unidades de render (x, z). Devuelve [malla, altura].
-static func build(poly: PackedVector2Array, floors: int, t: String, id: String, center_dist: float) -> Array:
+## grounded: apoyado en el relieve (la base sigue la parte baja del solar y los muros
+## bajan un poco bajo tierra; la cornisa, sobre la parte alta).
+static func build(poly: PackedVector2Array, floors: int, t: String, id: String, center_dist: float, grounded := false) -> Array:
 	if Geometry2D.is_polygon_clockwise(poly):
 		poly.reverse()
 	var r1 := _hash(id, 1)
 	var r2 := _hash(id, 2)
 	var r3 := _hash(id, 3)
-	var top := Y0 + maxf(1.0, float(floors)) * 1.0
-	var h := top - Y0
+	var lo := 0.0
+	var hi := 0.0
+	if grounded and not Terrain.is_flat():
+		lo = INF
+		hi = -INF
+		for p in poly:
+			var e := Terrain.at(p.x, p.y)
+			lo = minf(lo, e)
+			hi = maxf(hi, e)
+	var base := Y0 + lo
+	var top := Y0 + hi + maxf(1.0, float(floors)) * 1.0
+	var h := top - base
 	# material: 0-2 ladrillo, 3 hormigón claro, 4 estuco, 5 hormigón viejo (granito)
 	var layer := 4.0
 	if r1 > 0.62:
@@ -71,8 +83,8 @@ static func build(poly: PackedVector2Array, floors: int, t: String, id: String, 
 		var mid := (a + b) * 0.5 + Vector2(nrm.x, nrm.z) * 0.01
 		if Geometry2D.is_point_in_polygon(mid, poly):
 			nrm = -nrm
-		var v := [Vector3(a.x, Y0, a.y), Vector3(b.x, Y0, b.y), Vector3(b.x, top, b.y), Vector3(a.x, top, a.y)]
-		var uvs := [Vector2(0, 0), Vector2(len, 0), Vector2(len, h), Vector2(0, h)]
+		var v := [Vector3(a.x, base - 0.15, a.y), Vector3(b.x, base - 0.15, b.y), Vector3(b.x, top, b.y), Vector3(a.x, top, a.y)]
+		var uvs := [Vector2(0, -0.15), Vector2(len, -0.15), Vector2(len, h), Vector2(0, h)]
 		var order := [0, 1, 2, 0, 2, 3]
 		if (v[1] - v[0]).cross(v[2] - v[0]).dot(nrm) > 0.0:
 			order = [0, 2, 1, 0, 3, 2]
@@ -108,7 +120,7 @@ static func build(poly: PackedVector2Array, floors: int, t: String, id: String, 
 				st.add_vertex(vv)
 	var mesh := st.commit()
 	mesh.surface_set_material(0, material())
-	return [mesh, h + (0.4 if hip else 0.0)]
+	return [mesh, h + (0.4 if hip else 0.0), top]
 
 
 ## Tejado a cuatro aguas sobre una planta de cuatro lados: cumbrera por el eje largo.

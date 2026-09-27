@@ -115,8 +115,8 @@ static func _stadium(root: Node3D, l: Dictionary, ogx: int, ogz: int) -> void:
 		var o_j: Vector3 = to3.call(outer[j], H_TOP + 0.4)
 		_quad(b, conc, p_top_i, p_top_j, o_j, o_i, Vector2(acc, 0), Vector2(acc + seg, 0), Vector2(acc + seg, 1), Vector2(acc, 1), Vector3.UP)
 		# fachada exterior: zócalo azul y chapa clara
-		var og_i: Vector3 = to3.call(outer[i], 0.05)
-		var og_j: Vector3 = to3.call(outer[j], 0.05)
+		var og_i: Vector3 = to3.call(outer[i], -3.0)
+		var og_j: Vector3 = to3.call(outer[j], -3.0)
 		var om_i: Vector3 = to3.call(outer[i], 1.2)
 		var om_j: Vector3 = to3.call(outer[j], 1.2)
 		var ow := -inward
@@ -146,6 +146,7 @@ static func _stadium(root: Node3D, l: Dictionary, ogx: int, ogz: int) -> void:
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if pair[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.position.y = Terrain.h(c.x, c.y) # el estadio, en su explanada
 		root.add_child(mi)
 
 
@@ -160,9 +161,9 @@ static func named_building(name: String, poly: PackedVector2Array, floors: int) 
 ## Pabellón con muros acristalados y cúpula rebajada de chapa sobre su planta real.
 static func _dome_hall(poly: PackedVector2Array, id: String) -> Array:
 	var walls := 4
-	var built := OsmBuilding.build(poly, walls, "commercial", id, 0.0)
+	var built := OsmBuilding.build(poly, walls, "commercial", id, 0.0, true)
 	var mesh: ArrayMesh = built[0]
-	var base := 0.05 + walls
+	var base: float = built[2]
 	var c := Vector2.ZERO
 	for p in poly:
 		c += p

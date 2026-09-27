@@ -184,6 +184,7 @@ func _on_message(msg: Dictionary) -> void:
 			others.clear()
 			for p in msg.players:
 				_set_other(p)
+			Terrain.set_rooms([screen] + neighbors, int(screen.sx) * W, int(screen.sy) * H)
 			ground.build(screen, neighbors)
 			_build_city()
 			hud.minimap.set_rooms(screen, neighbors)
@@ -280,11 +281,11 @@ func _on_explosion(msg: Dictionary) -> void:
 	var x: float = (msg.gx - int(screen.sx) * W) * T
 	var z: float = (msg.gy - int(screen.sy) * H) * T
 	var r: float = float(msg.radius) * T
-	fx.explosion(Vector3(x, 0.0, z))
+	fx.explosion(Vector3(x, Terrain.at(x, z), z))
 	for i in 28:
 		var a := randf() * TAU
 		var sp := 2.5 + randf() * 2.0
-		fx.emit(Vector3(x, 0.15, z), Vector3(cos(a) * sp, 0.3 + randf() * 0.4, sin(a) * sp), 1.6 + randf() * 1.4, 0.5, 1.6 + r, 0.6, 0, Color("a9a39a"), false, 0.02)
+		fx.emit(Vector3(x, 0.15 + Terrain.at(x, z), z), Vector3(cos(a) * sp, 0.3 + randf() * 0.4, sin(a) * sp), 1.6 + randf() * 1.4, 0.5, 1.6 + r, 0.6, 0, Color("a9a39a"), false, 0.02)
 	var dist := Vector2(msg.gx - (int(screen.sx) * W + you_display.x), msg.gy - (int(screen.sy) * H + you_display.y)).length()
 	sfx.boom(clampf(1.2 / (1.0 + dist / 15.0), 0.1, 1.0))
 
@@ -307,7 +308,10 @@ func _build_city() -> void:
 	if datas.is_empty():
 		cars.set_cars([])
 		return
+	var t_build := Time.get_ticks_msec()
 	city_root = City.build(datas, int(screen.sx) * W, int(screen.sy) * H)
+	if Config.bench:
+		print("ciudad: %d ms" % (Time.get_ticks_msec() - t_build))
 	add_child(city_root)
 	# ciudad real (OSM): suelo recortado por la costa, paseo marítimo, playas y mar
 	var coast_rooms: Array = []
@@ -321,7 +325,10 @@ func _build_city() -> void:
 					water += 1
 		coast_rooms.append({"sx": r.sx, "sy": r.sy, "city": r.city, "tiles": r.tiles, "sea": r.city.get("coast", []).is_empty() and water > W * H / 2})
 	if not coast_rooms.is_empty():
+		var t_coast := Time.get_ticks_msec()
 		Coast.build(city_root, coast_rooms, int(screen.sx) * W, int(screen.sy) * H)
+		if Config.bench:
+			print("costa: %d ms" % (Time.get_ticks_msec() - t_coast))
 	else:
 		Coast.corners.clear()
 	cars.set_cars(city_root.get_meta("cars", []))
@@ -499,7 +506,7 @@ func _process_game(dt: float) -> void:
 		o.x = lerp_towards(o.x, (int(p.sx) - sx) * W + float(p.x), dt)
 		o.y = lerp_towards(o.y, (int(p.sy) - sy) * H + float(p.y), dt)
 		ents.append({"id": "p:" + u, "x": o.x * T, "z": o.y * T, "variant": o.variant, "scale": 1.0, "kind": People.KIND_OTHER})
-		o.label.position = Vector3(o.x * T, 0.85, o.y * T)
+		o.label.position = Vector3(o.x * T, 0.85 + Terrain.at(o.x * T, o.y * T), o.y * T)
 		dots.append([Vector2(zox + o.x, zoy + o.y), Color("3ba0e0"), 1.6])
 	for id in zombie_display:
 		var d: Vector2 = zombie_display[id]
@@ -562,7 +569,7 @@ func _update_cutaway() -> void:
 	var vp := get_viewport()
 	var k := vp.scaling_3d_scale
 	var size := vp.get_visible_rect().size * k
-	var head := cam.unproject_position(Vector3(you_display.x * T, 0.8, you_display.y * T)) * k
+	var head := cam.unproject_position(Vector3(you_display.x * T, 0.8 + Coast.height_at(you_display.x * T, you_display.y * T), you_display.y * T)) * k
 	RenderingServer.global_shader_parameter_set("cut_params", Vector4(head.y, size.x * 0.5, size.x * 0.7 * 0.5, size.y * 0.05))
 	RenderingServer.global_shader_parameter_set("cut_cam_fwd", cam.global_transform.basis.z)
 

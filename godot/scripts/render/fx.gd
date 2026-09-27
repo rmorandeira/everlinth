@@ -99,14 +99,14 @@ func emit(p: Vector3, v: Vector3, life: float, s0: float, s1: float, alpha: floa
 
 ## Disparo desde (x, z) hacia (dx, dz) unitario (unidades de render).
 func fire(x: float, z: float, dx: float, dz: float) -> void:
-	var m := Vector3(x + dx * 0.38, MUZZLE_H, z + dz * 0.38)
+	var m := Vector3(x + dx * 0.38, MUZZLE_H + Terrain.at(x, z), z + dz * 0.38)
 	_flash_t = FLASH_TIME
 	_flash_power = 0.75 + randf() * 0.5
 	_flash_pos = m
 	emit(m, Vector3.ZERO, FLASH_TIME, 0.5, 0.35, 1.0, 2, Color("ffd890"), true, 0.0)
 	muzzle.position = m + Vector3(0, 0.1, 0)
 	spot.position = m + Vector3(-dx * 0.3, 0.35, -dz * 0.3)
-	var target := Vector3(x + dx * 8.0, 0.0, z + dz * 8.0)
+	var target := Vector3(x + dx * 8.0, Terrain.at(x + dx * 8.0, z + dz * 8.0), z + dz * 8.0)
 	if not spot.position.is_equal_approx(target):
 		spot.look_at(target, Vector3.UP)
 	var n := 1 if randf() < 0.6 else 2
@@ -117,10 +117,11 @@ func fire(x: float, z: float, dx: float, dz: float) -> void:
 
 func impact(x: float, z: float) -> void:
 	_hit_t = FLASH_TIME * 1.4
-	hit_light.position = Vector3(x, 0.3, z)
-	emit(Vector3(x, 0.25, z), Vector3.ZERO, FLASH_TIME * 1.4, 0.25, 0.2, 1.0, 2, Color("ffe0a0"), true, 0.0)
+	var gy := Terrain.at(x, z)
+	hit_light.position = Vector3(x, 0.3 + gy, z)
+	emit(Vector3(x, 0.25 + gy, z), Vector3.ZERO, FLASH_TIME * 1.4, 0.25, 0.2, 1.0, 2, Color("ffe0a0"), true, 0.0)
 	if randf() < 0.5:
-		emit(Vector3(x, 0.15, z), Vector3((randf() - 0.5) * 0.2, 0.2, (randf() - 0.5) * 0.2), 1.0 + randf() * 0.6, 0.12, 0.6, 0.35, 0, Color("cfcac2"), false)
+		emit(Vector3(x, 0.15 + gy, z), Vector3((randf() - 0.5) * 0.2, 0.2, (randf() - 0.5) * 0.2), 1.0 + randf() * 0.6, 0.12, 0.6, 0.35, 0, Color("cfcac2"), false)
 
 
 ## Trazadora (una de cada TRACER_EVERY balas), en unidades de render.
@@ -132,7 +133,7 @@ func tracer(x0: float, z0: float, x1: float, z1: float) -> void:
 	var l := d.length()
 	if l < 0.05:
 		return
-	_tracers.append({"o": Vector3(x0, 0.4, z0), "u": d / l, "len": l, "d": 0.35, "streak": 0.45 + randf() * 0.3, "color": TRACER_COLORS[randi() % TRACER_COLORS.size()]})
+	_tracers.append({"o": Vector3(x0, 0.4 + Terrain.at(x0, z0), z0), "u": d / l, "len": l, "d": 0.35, "streak": 0.45 + randf() * 0.3, "color": TRACER_COLORS[randi() % TRACER_COLORS.size()]})
 
 
 ## Rebote de trazadora en (x, z) viniendo en (dx, dz); far: impacto lejano (parábola).
@@ -144,7 +145,7 @@ func ricochet(x: float, z: float, dx: float, dz: float, far: bool) -> void:
 	var r := Vector2(dx - 2.0 * dot * nx, dz - 2.0 * dot * nz).normalized()
 	var speed := 7.0 + randf() * 4.0 if far else 16.0 + randf() * 8.0
 	var k := 0.6 if far else 1.0
-	_bounces.append({"p": Vector3(x, 0.4 + randf() * 0.4, z), "v": Vector3(r.x * speed * k, 5.0 + randf() * 4.0 if far else 0.5 + randf() * 1.5, r.y * speed * k),
+	_bounces.append({"p": Vector3(x, 0.4 + randf() * 0.4 + Terrain.at(x, z), z), "v": Vector3(r.x * speed * k, 5.0 + randf() * 4.0 if far else 0.5 + randf() * 1.5, r.y * speed * k),
 		"age": 0.0, "life": 1.1 + randf() * 0.5 if far else 0.22 + randf() * 0.15, "color": RICO_COLORS[randi() % RICO_COLORS.size()]})
 
 

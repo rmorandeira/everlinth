@@ -180,6 +180,67 @@ function load(): void {
   console.log(`Ciudad real (OSM): ${segs.length} tramos de calle, ${blds.length} edificios, ${coast.length} tramos de costa`);
 }
 
+// Relieve (tools/osm/build-dem.mjs): rejilla en tiles globales, alisada para quitar el
+// ruido de edificios y árboles del modelo de superficie.
+const DEM_FILE = FILE.replace(/\.json\.gz$/, "-dem.bin.gz");
+let dem: { x0: number; y0: number; step: number; w: number; h: number; z: Float32Array } | null = null;
+function loadDem(): void {
+  if (dem || !existsSync(DEM_FILE)) return;
+  const b = gunzipSync(readFileSync(DEM_FILE));
+  const hl = b.readUInt32LE(0);
+  const head = JSON.parse(b.subarray(4, 4 + hl).toString("utf8"));
+  const raw = new Int16Array(b.buffer.slice(b.byteOffset + 4 + hl, b.byteOffset + b.length));
+  const { w, h } = head;
+  let z = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) z[i] = Math.max(0, raw[i] * head.unit);
+  // desenfoque separable (radio 3 muestras ≈ 18 m), dos pasadas
+  const k = [1, 6, 15, 20, 15, 6, 1].map((v) => v / 64);
+  for (let pass = 0; pass < 2; pass++) {
+    const t = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let s = 0;
+      for (let i = -3; i <= 3; i++) s += k[i + 3] * z[y * w + Math.max(0, Math.min(w - 1, x + i))];
+      t[y * w + x] = s;
+    }
+    const u = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let s = 0;
+      for (let i = -3; i <= 3; i++) s += k[i + 3] * t[Math.max(0, Math.min(h - 1, y + i)) * w + x];
+      u[y * w + x] = s;
+    }
+    z = u;
+  }
+  dem = { x0: head.x0, y0: head.y0, step: head.step, w, h, z };
+  console.log(`Relieve: ${w}×${h} muestras cada ${head.step} tiles`);
+}
+
+/** Altura del terreno (m) en un punto (tiles globales). */
+export function elevationAt(gx: number, gy: number): number {
+  loadDem();
+  if (!dem) return 0;
+  const fx = Math.max(0, Math.min(dem.w - 1.001, (gx - dem.x0) / dem.step));
+  const fy = Math.max(0, Math.min(dem.h - 1.001, (gy - dem.y0) / dem.step));
+  const i = Math.floor(fx);
+  const j = Math.floor(fy);
+  const a = fx - i;
+  const b = fy - j;
+  const z = dem.z;
+  const w = dem.w;
+  return (z[j * w + i] * (1 - a) + z[j * w + i + 1] * a) * (1 - b) + (z[(j + 1) * w + i] * (1 - a) + z[(j + 1) * w + i + 1] * a) * b;
+}
+
+const ELEV_STEP = 3; // tiles entre muestras de relieve que se mandan por sala
+/** Relieve de una sala en unidades de render (1 = 3 m), esquinas incluidas. */
+function roomElevation(gx0: number, gy0: number): CityData["elev"] {
+  loadDem();
+  if (!dem) return undefined;
+  const w = SCREEN_WIDTH / ELEV_STEP + 1;
+  const h = SCREEN_HEIGHT / ELEV_STEP + 1;
+  const z: number[] = [];
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) z.push(Math.round((elevationAt(gx0 + i * ELEV_STEP, gy0 + j * ELEV_STEP) / 3) * 100) / 100);
+  return { step: ELEV_STEP, w, h, z };
+}
+
 export function osmAvailable(): boolean {
   load();
   return ok;
@@ -387,7 +448,7 @@ export function rasterRoomOSM(sx: number, sy: number): { tiles: TileType[][]; ci
     }
   }
   const lms = landmarks.filter((l) => l.x + l.len > gx0 - 60 && l.x - l.len < gx0 + SCREEN_WIDTH + 60 && l.y + l.len > gy0 - 60 && l.y - l.len < gy0 + SCREEN_HEIGHT + 60);
-  return { tiles, city: { roads, buildings, nodes: nodeList, highways, pillars, osm: true, coast: coastOut, sand: sandOut, piers: pierOut, landmarks: lms } };
+  return { tiles, city: { roads, buildings, nodes: nodeList, highways, pillars, osm: true, coast: coastOut, sand: sandOut, piers: pierOut, landmarks: lms, elev: roomElevation(gx0, gy0) } };
 }
 
 /** Punto de calle más cercano (para colocar a un jugador). */

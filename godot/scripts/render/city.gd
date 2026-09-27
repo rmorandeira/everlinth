@@ -26,10 +26,10 @@ const CAR_COLORS := [Color("2f6d9a"), Color("c0392b"), Color("e9e8e3"), Color("1
 const CROWNS := [0x4f8a3a, 0x6aa04a, 0x3f7a4a, 0x86a94a]
 
 # Alturas de las capas de la calle (el suelo de tiles está en y=0.05).
-const Y_CURB := 0.056
-const Y_ASPHALT := 0.062
-const Y_DECAL := 0.065
-const Y_PAINT := 0.068
+const Y_CURB := 0.058
+const Y_ASPHALT := 0.068
+const Y_DECAL := 0.074
+const Y_PAINT := 0.08
 const CURB_W := 0.22
 const ASPHALT_UV := 4.0
 const PAINT_UV := 1.6
@@ -156,6 +156,7 @@ func _p(gx: float, gz: float, y: float) -> Vector3:
 
 ## Registra una instancia (modelo o malla compartida) en la sala que la contiene.
 func _place(kind: String, xf: Transform3D, color := Color.WHITE, building_id := "") -> void:
+	xf.origin.y += Terrain.at(xf.origin.x, xf.origin.z)
 	var gx := xf.origin.x / T + origin_gx
 	var gz := xf.origin.z / T + origin_gz
 	var ck := "%d,%d" % [floori(gx / W), floori(gz / H)]
@@ -289,6 +290,14 @@ func _build(datas: Array) -> void:
 		return
 	for d in datas:
 		osm = osm or d.get("osm", false)
+	# todo lo que se apoya en el suelo sigue el relieve (ciudad real)
+	flat.terrain = true
+	solid.terrain = true
+	litter.terrain = true
+	# todo lo que se apoya en el suelo sigue el relieve (ciudad real)
+	flat.terrain = true
+	solid.terrain = true
+	litter.terrain = true
 	segs = roads.values()
 	for s in segs:
 		s.kind = int(s.kind)
@@ -332,6 +341,8 @@ func _build(datas: Array) -> void:
 				lms[l.name] = l
 		for l in lms.values():
 			Landmarks.build(root, l, origin_gx, origin_gz)
+	if Config.bench:
+		print("vértices: calle %d · piezas %d · basura %d" % [flat.vertex_count(), solid.vertex_count(), litter.vertex_count()])
 	flat.build(root, false)
 	litter.build(root, false)
 	solid.build(root, true)
@@ -802,7 +813,7 @@ func _scatter_litter(px: float, py: float, ux: float, uy: float, nx: float, ny: 
 		var item := r.randi() % 16
 		var sz: float = LITTER_SIZE[item] * r.randf_range(0.8, 1.25)
 		var cell := Rect2((item % 4) * 0.25, (item / 4) * 0.25, 0.25, 0.25)
-		litter.quad_uv(litter_mat(), _p(x, y, 0.066 if gutter else 0.053), sz, sz, r.randf() * TAU, cell)
+		litter.quad_uv(litter_mat(), _p(x, y, 0.071 if gutter else 0.053), sz, sz, r.randf() * TAU, cell)
 
 
 # ------------------------------------------------------------------ edificios
@@ -913,7 +924,7 @@ func _register(bd: Dictionary, xf: Transform3D, height: float, parts: Array, ref
 	for p in pts:
 		c += p
 	c /= pts.size()
-	var info := {"id": str(bd.id), "pos": Vector3(c.x, 0.05, c.y), "height": height, "pts": pts, "refs": refs, "parts": parts, "xf": xf}
+	var info := {"id": str(bd.id), "pos": Vector3(c.x, 0.05 + Terrain.at(c.x, c.y), c.y), "height": height, "pts": pts, "refs": refs, "parts": parts, "xf": xf}
 	if bd.has("hp"):
 		info.hp = float(bd.hp)
 		info.max_hp = float(bd.maxHp)
@@ -922,7 +933,13 @@ func _register(bd: Dictionary, xf: Transform3D, height: float, parts: Array, ref
 
 func _add_rubble(bd: Dictionary) -> void:
 	var mi := MeshInstance3D.new()
-	mi.mesh = rubble_mesh(_render_pts(bd), str(bd.id), maxf(1.0, float(bd.floors)))
+	var pts := _render_pts(bd)
+	mi.mesh = rubble_mesh(pts, str(bd.id), maxf(1.0, float(bd.floors)))
+	var c := Vector2.ZERO
+	for p in pts:
+		c += p
+	c /= maxf(1.0, pts.size())
+	mi.position.y = Terrain.at(c.x, c.y)
 	root.add_child(mi)
 
 
@@ -1024,7 +1041,7 @@ func _osm_building(bd: Dictionary) -> void:
 		for p in bd.pts:
 			c += Vector2(p[0], p[1])
 		c /= bd.pts.size()
-		built = OsmBuilding.build(poly, int(bd.floors), str(bd.get("t", "yes")), str(bd.id), (c - Vector2(24, 13.5)).length())
+		built = OsmBuilding.build(poly, int(bd.floors), str(bd.get("t", "yes")), str(bd.id), (c - Vector2(24, 13.5)).length(), true)
 	var mesh: ArrayMesh = built[0]
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh

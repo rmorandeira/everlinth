@@ -152,7 +152,7 @@ static func sea_mat() -> Material:
 ## Altura del suelo en (x, z) (unidades de render de la escena actual).
 static func height_at(x: float, z: float) -> float:
 	if corners.is_empty():
-		return Y
+		return Y + Terrain.at(x, z)
 	var gx := x / T + origin.x
 	var gy := z / T + origin.y
 	var ix := floori(gx)
@@ -165,7 +165,7 @@ static func height_at(x: float, z: float) -> float:
 	var fy := gy - iy
 	var g := lerpf(lerpf(c00.x, c10.x, fx), lerpf(c01.x, c11.x, fx), fy)
 	if g > 0.0:
-		return Y
+		return Y + Terrain.h(gx, gy)
 	return maxf(SEA_Y, lerpf(lerpf(c00.y, c10.y, fx), lerpf(c01.y, c11.y, fx), fy))
 
 
@@ -181,6 +181,7 @@ static func build(root: Node3D, rooms: Array, ogx: int, ogz: int) -> void:
 	corners.clear()
 	origin = Vector2i(ogx, ogz)
 	var ground := GeoBatch.new()
+	ground.terrain = true # el paseo y los parques siguen el relieve
 	var walls := GeoBatch.new()
 	var beach := GeoBatch.new()
 	var any_water := false
@@ -482,10 +483,13 @@ class _Room:
 			var probe := field(mid.x + nm.x * 1.5, mid.y + nm.y * 1.5)
 			var to_beach := probe.z > -1.5
 			var bottom: float = Coast.beach_height(probe.y) - 0.08 if to_beach else SEA_FLOOR
-			var drop := Y - bottom
+			var ya := Y + Terrain.h(a.x, a.y)
+			var ye := Y + Terrain.h(e.x, e.y)
+			var ym := (ya + ye) * 0.5
+			var drop := ym - bottom
 			var batter := 0.0 if to_beach else 0.22 # talud de la coraza (horizontal por vertical)
-			var ta := _L(a.x, a.y, Y)
-			var te := _L(e.x, e.y, Y)
+			var ta := _L(a.x, a.y, ya)
+			var te := _L(e.x, e.y, ye)
 			var ba := _L(a.x + na.x * drop * batter / T, a.y + na.y * drop * batter / T, bottom)
 			var be := _L(e.x + ne.x * drop * batter / T, e.y + ne.y * drop * batter / T, bottom)
 			var face_n := Vector3(nm.x, batter, nm.y).normalized()
@@ -494,14 +498,14 @@ class _Room:
 			# albardilla: losa que vuela un poco sobre el muro
 			var dir := (e - a) / len
 			var ang := atan2(dir.y, dir.x)
-			var c3 := _L(mid.x + nm.x * 0.12, mid.y + nm.y * 0.12, Y + 0.035)
+			var c3 := _L(mid.x + nm.x * 0.12, mid.y + nm.y * 0.12, ym + 0.035)
 			b.mesh(box, Transform3D(Basis(Vector3.UP, -ang).scaled(Vector3(len * T + 0.02, 0.07, 0.34 * T)), c3), cp)
 			# barandilla (no en los muelles del puerto)
 			if not piers.is_empty() and pier_value(mid.x, mid.y) > -1.0:
 				continue
 			var rail_c := _L(mid.x + nm.x * 0.12, mid.y + nm.y * 0.12, 0.0)
 			for hy in [RAIL_H, RAIL_H * 0.5]:
-				b.mesh(box, Transform3D(Basis(Vector3.UP, -ang).scaled(Vector3(len * T + 0.01, 0.022, 0.022)), rail_c + Vector3(0, Y + 0.07 + hy, 0)), white)
+				b.mesh(box, Transform3D(Basis(Vector3.UP, -ang).scaled(Vector3(len * T + 0.01, 0.022, 0.022)), rail_c + Vector3(0, ym + 0.07 + hy, 0)), white)
 			# postes y farolas donde el tramo cruza múltiplos fijos (en tiles globales) de su
 			# eje dominante: el mismo reparto en todas las salas y clientes
 			var ax := 0 if absf(dir.x) >= absf(dir.y) else 1
@@ -515,9 +519,9 @@ class _Room:
 					var t := (k * step - u0) / (u1 - u0) if absf(u1 - u0) > 0.0001 else 0.5
 					var p := a.lerp(e, clampf(t, 0.0, 1.0))
 					if step < 2.0:
-						b.mesh(box, Transform3D(Basis().scaled(Vector3(0.028, RAIL_H, 0.028)), _L(p.x + nm.x * 0.12, p.y + nm.y * 0.12, Y + 0.07 + RAIL_H * 0.5)), white)
+						b.mesh(box, Transform3D(Basis().scaled(Vector3(0.028, RAIL_H, 0.028)), _L(p.x + nm.x * 0.12, p.y + nm.y * 0.12, Y + Terrain.h(p.x, p.y) + 0.07 + RAIL_H * 0.5)), white)
 					else:
-						Coast._lamp(b, _L(p.x - nm.x * 0.6, p.y - nm.y * 0.6, Y))
+						Coast._lamp(b, _L(p.x - nm.x * 0.6, p.y - nm.y * 0.6, Y + Terrain.h(p.x, p.y)))
 					k += 1.0
 			# escollera al pie de la coraza
 			if not to_beach:

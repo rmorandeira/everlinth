@@ -32,6 +32,7 @@ varying vec3 v_wpos;
 varying vec3 v_wnrm;
 varying vec4 v_info;
 varying vec2 v_face;
+varying float v_hgt; // altura sobre la base del edificio (UV.y)
 
 float h13(vec3 p) {
 	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -44,6 +45,7 @@ void vertex() {
 	v_wnrm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	v_info = CUSTOM0;
 	v_face = vec2(UV.x, UV2.x);
+	v_hgt = UV.y;
 }
 
 void fragment() {
@@ -103,7 +105,7 @@ void fragment() {
 		ROUGHNESS = 0.8;
 	} else {
 
-	float y = v_wpos.y - 0.05;
+	float y = v_hgt;
 	float top = UV2.y;
 	float elen = v_face.y;
 	float u_face = v_face.x;
@@ -137,7 +139,7 @@ void fragment() {
 	float glass = 0.0;
 	float frame = 0.0;
 	float sill = 0.0;
-	bool windows = elen > 0.45 && y < top - 0.14;
+	bool windows = elen > 0.45 && y > 0.0 && y < top - 0.14;
 	if (windows) {
 		if (fl < 0.5) {
 			if (shop) {

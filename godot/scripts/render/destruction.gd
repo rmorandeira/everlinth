@@ -19,10 +19,16 @@ var _emit_acc := 0.0
 var _debris_mats: Array[StandardMaterial3D] = []
 
 
+# suelo de los cascotes: plano horizontal a la altura del último derrumbe (relieve)
+var _ground := StaticBody3D.new()
+var _ground_shape: WorldBoundaryShape3D
+
+
 func _ready() -> void:
-	var ground := StaticBody3D.new()
+	var ground := _ground
+	_ground_shape = WorldBoundaryShape3D.new()
 	var shape := CollisionShape3D.new()
-	var plane := WorldBoundaryShape3D.new()
+	var plane := _ground_shape
 	plane.plane = Plane(Vector3.UP, 0.05)
 	shape.shape = plane
 	ground.add_child(shape)
@@ -58,6 +64,8 @@ func _collapse(b: Dictionary) -> void:
 		else:
 			var mm: MultiMesh = r[0]
 			mm.set_instance_transform(r[1], Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -100, 0)))
+	var base_y: float = b.pos.y
+	_ground_shape.plane = Plane(Vector3.UP, base_y)
 	var plan := City.collapse_plan(str(b.id), b.pts)
 	var h: float = b.height
 	var d2: Vector2 = plan.dir
@@ -68,10 +76,10 @@ func _collapse(b: Dictionary) -> void:
 		0:
 			pieces.append(_piece(b, "sink", 0.0, Vector3.ZERO, Vector3.ZERO))
 		1:
-			var piv := Vector3(c2.x, 0.05, c2.y) + dir * float(plan.edge)
+			var piv := Vector3(c2.x, base_y, c2.y) + dir * float(plan.edge)
 			pieces.append(_piece(b, "topple", 0.0, piv, Vector3.ZERO))
 		2:
-			var cut_y: float = 0.05 + h * float(plan.cut)
+			var cut_y: float = base_y + h * float(plan.cut)
 			var piv := Vector3(c2.x, cut_y, c2.y) + dir * float(plan.edge)
 			var cut_p := Vector3(c2.x, cut_y, c2.y)
 			var low := _piece(b, "sink", 0.7, Vector3.ZERO, Vector3.ZERO)
@@ -79,7 +87,7 @@ func _collapse(b: Dictionary) -> void:
 			pieces.append(low)
 			var top := _piece(b, "top", 0.0, piv, Vector3.ZERO)
 			top.clip = [Vector3.DOWN, cut_p] # se quita lo de debajo del corte
-			top.cut_h = cut_y - 0.05
+			top.cut_h = cut_y - base_y
 			pieces.append(top)
 	_collapsing.append({"t": 0.0, "info": b, "plan": plan, "dir": dir, "pieces": pieces, "impact": false})
 	_dust(b, 26)

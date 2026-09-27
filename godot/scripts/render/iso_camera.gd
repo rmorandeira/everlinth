@@ -25,6 +25,9 @@ func _ready() -> void:
 	far = 500.0
 
 
+var ground_y := 0.0
+
+
 func rotate_step(d: int) -> void:
 	step = posmod(step + d, 4)
 
@@ -44,17 +47,20 @@ func follow(px: float, pz: float, t: float, dt: float) -> void:
 	var drift_z := cos(t * 0.093 + 2.1) * 0.22 + sin(t * 0.057 + 0.7) * 0.12
 	var pitch := deg_to_rad(89.0) if Config.cenital > 0.0 else PITCH
 	var dir := Vector3(cos(pitch) * cos(y), sin(pitch), cos(pitch) * sin(y))
-	var target := Vector3(px + drift_x, 0.0, pz + drift_z)
+	# altura del suelo bajo el personaje (relieve), suavizada para no dar tirones
+	ground_y += (Terrain.at(px, pz) - ground_y) * (1.0 - exp(-6.0 * dt))
+	var target := Vector3(px + drift_x, ground_y, pz + drift_z)
 	global_position = target + dir * DIST
 	look_at(target, Vector3.UP)
 	if Config.cenital <= 0.0:
 		global_position += global_transform.basis.y * (0.5 - PLAYER_SCREEN_Y) * 2.0 * VIEW_HALF_HEIGHT
 
 
-## Punto del suelo (y = 0) bajo una posición de pantalla, en unidades de render.
+## Punto del suelo (a la altura del terreno bajo el personaje) bajo una posición de
+## pantalla, en unidades de render.
 func screen_to_ground(p: Vector2) -> Vector3:
 	var o := project_ray_origin(p)
 	var d := project_ray_normal(p)
 	if absf(d.y) < 1e-5:
 		return o
-	return o + d * (-o.y / d.y)
+	return o + d * ((ground_y - o.y) / d.y)

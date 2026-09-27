@@ -3,6 +3,10 @@ class_name GeoBatch
 ## miles de cuadriláteros de calzada, marcas y manchas acaban en una malla por material.
 
 var _lists := {} # Material -> [PackedVector3Array, PackedVector3Array, PackedVector2Array]
+## Apoyar en el relieve (Terrain): al construir, cada vértice sube la altura del terreno
+## en su punto, y los triángulos planos largos se parten antes para que sigan la ladera.
+var terrain := false
+const MAX_EDGE := 1.5 # la separación de la rejilla del relieve (3 tiles)
 
 
 func _list(mat: Material) -> Array:
@@ -11,12 +15,43 @@ func _list(mat: Material) -> Array:
 	return _lists[mat]
 
 
+## Vértices acumulados (depuración).
+func vertex_count() -> int:
+	var n := 0
+	for m in _lists:
+		n += (_lists[m][0] as PackedVector3Array).size()
+	return n
+
+
 func is_empty() -> bool:
 	return _lists.is_empty()
 
 
 ## Triángulo con normal n; el orden se corrige para que mire hacia n (Godot: horario = frente).
 func tri(mat: Material, a: Vector3, b: Vector3, c: Vector3, n: Vector3, ua: Vector2, ub: Vector2, uc: Vector2) -> void:
+	if terrain and not Terrain.is_flat():
+		# partir por el lado horizontal más largo hasta que todos midan menos de MAX_EDGE
+		var dab := Vector2(b.x - a.x, b.z - a.z).length()
+		var dbc := Vector2(c.x - b.x, c.z - b.z).length()
+		var dca := Vector2(a.x - c.x, a.z - c.z).length()
+		var m := maxf(dab, maxf(dbc, dca))
+		if m > MAX_EDGE:
+			if m == dab:
+				var p := (a + b) * 0.5
+				var up := (ua + ub) * 0.5
+				tri(mat, a, p, c, n, ua, up, uc)
+				tri(mat, p, b, c, n, up, ub, uc)
+			elif m == dbc:
+				var p := (b + c) * 0.5
+				var up := (ub + uc) * 0.5
+				tri(mat, a, b, p, n, ua, ub, up)
+				tri(mat, a, p, c, n, ua, up, uc)
+			else:
+				var p := (c + a) * 0.5
+				var up := (uc + ua) * 0.5
+				tri(mat, a, b, p, n, ua, ub, up)
+				tri(mat, p, b, c, n, up, ub, uc)
+			return
 	var l := _list(mat)
 	if (b - a).cross(c - a).dot(n) > 0.0:
 		l[0].append_array([a, c, b])
@@ -127,11 +162,31 @@ static func _flat_arrays(m: Mesh, s: int, flip: bool) -> Array:
 	return _flat_cache[key]
 
 
+## Vértices apoyados en el relieve; las caras que miraban hacia arriba toman la
+## normal de la ladera.
+func _grounded(l: Array) -> Array:
+	if not terrain or Terrain.is_flat():
+		return l
+	var v: PackedVector3Array = l[0].duplicate()
+	var n: PackedVector3Array = l[1].duplicate()
+	for i in v.size():
+		v[i].y += Terrain.at(v[i].x, v[i].z)
+	for i in range(0, v.size() - 2, 3):
+		if n[i].y > 0.999 and n[i + 1].y > 0.999 and n[i + 2].y > 0.999:
+			var f := (v[i + 2] - v[i]).cross(v[i + 1] - v[i]).normalized()
+			if f.y < 0.0:
+				f = -f
+			n[i] = f
+			n[i + 1] = f
+			n[i + 2] = f
+	return [v, n, l[2]]
+
+
 ## Una ArrayMesh con una superficie por material.
 func to_mesh() -> ArrayMesh:
 	var out := ArrayMesh.new()
 	for mat in _lists:
-		var l: Array = _lists[mat]
+		var l: Array = _grounded(_lists[mat])
 		if l[0].size() == 0:
 			continue
 		var a := []
@@ -147,7 +202,7 @@ func to_mesh() -> ArrayMesh:
 ## Un MeshInstance3D por material, colgado de parent.
 func build(parent: Node3D, cast_shadows := false) -> void:
 	for mat in _lists:
-		var l: Array = _lists[mat]
+		var l: Array = _grounded(_lists[mat])
 		if l[0].size() == 0:
 			continue
 		var a := []

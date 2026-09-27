@@ -67,7 +67,7 @@ func set_cars(specs: Array) -> void:
 func _world_of(c: Dictionary, local: Vector3) -> Vector3:
 	var cs := cos(c.ang)
 	var sn := sin(c.ang)
-	return Vector3(c.x + local.x * cs - local.z * sn, local.y + 0.05, c.z + local.x * sn + local.z * cs)
+	return Vector3(c.x + local.x * cs - local.z * sn, local.y + 0.05 + Terrain.at(c.x, c.z), c.z + local.x * sn + local.z * cs)
 
 
 func _spawn_debris(mesh: Mesh, pos: Vector3, rot: float, v: Vector3, scale := 1.0, tint := Color.WHITE) -> void:
@@ -102,7 +102,7 @@ func _wheel_mesh(c: Dictionary, i: int) -> Mesh:
 func _explode(c: Dictionary) -> void:
 	c.burnt = true
 	c.burn_t = 14.0
-	fx.explosion(Vector3(c.x, 0.0, c.z))
+	fx.explosion(Vector3(c.x, Terrain.at(c.x, c.z), c.z))
 	var ks := Kenney.base_scale("cars/sedan")
 	for i in 4:
 		if c.wheels[i]:
@@ -215,7 +215,7 @@ func _process(dt: float) -> void:
 				lost += 1
 		var tilt: Vector2 = c.tilt
 		var basis := Basis(Vector3.UP, -c.ang) * Basis.from_euler(Vector3(tilt.y + sz * 0.8, 0, tilt.x + sx * 0.8), EULER_ORDER_XYZ)
-		var car := Transform3D(basis, Vector3(c.x + sx * 0.2, 0.05 - lost * 0.025 - (0.05 if c.burnt else 0.0), c.z + sz * 0.2))
+		var car := Transform3D(basis, Vector3(c.x + sx * 0.2, 0.05 + Terrain.at(c.x, c.z) - lost * 0.025 - (0.05 if c.burnt else 0.0), c.z + sz * 0.2))
 		# el eje largo del coche es +X local; el modelo del kit mira a +Z
 		var s := Kenney.base_scale(c.model)
 		var model_xf := car * Transform3D(Basis(Vector3.UP, PI / 2.0).scaled(Vector3(s, s, s)), Vector3.ZERO)
@@ -235,9 +235,9 @@ func _process(dt: float) -> void:
 		if c.burn_t > 0.0:
 			c.burn_t -= dt
 			if randf() < dt * 14.0:
-				fx.emit(Vector3(c.x + (randf() - 0.5) * 0.9, 0.45, c.z + (randf() - 0.5) * 0.5), Vector3(0, 1.4, 0), 0.5 + randf() * 0.4, 0.4, 0.2, 1.0, 1, Color("ff9a40"), true, 0.0)
+				fx.emit(Vector3(c.x + (randf() - 0.5) * 0.9, 0.45 + Terrain.at(c.x, c.z), c.z + (randf() - 0.5) * 0.5), Vector3(0, 1.4, 0), 0.5 + randf() * 0.4, 0.4, 0.2, 1.0, 1, Color("ff9a40"), true, 0.0)
 			if randf() < dt * 5.0:
-				fx.emit(Vector3(c.x, 0.8, c.z), Vector3(0, 0.9, 0), 3.0 + randf() * 2.0, 0.6, 2.4, 0.55, 0, Color("3c3a37"), false)
+				fx.emit(Vector3(c.x, 0.8 + Terrain.at(c.x, c.z), c.z), Vector3(0, 0.9, 0), 3.0 + randf() * 2.0, 0.6, 2.4, 0.55, 0, Color("3c3a37"), false)
 	for k in _mm:
 		for p in _mm[k]:
 			p[0].multimesh.visible_instance_count = counts.get(k, 0)

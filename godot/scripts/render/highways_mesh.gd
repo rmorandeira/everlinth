@@ -71,6 +71,10 @@ static func build(root: Node3D, datas: Array, ogx: int, ogz: int, paint_white: M
 		return Vector3((gx - ogx) * T, y, (gz - ogz) * T)
 	var solid := GeoBatch.new()
 	var flat := GeoBatch.new()
+	solid.terrain = true
+	flat.terrain = true
+	solid.terrain = true
+	flat.terrain = true
 	var cmat := concrete()
 	var amat := asphalt()
 	for h in segs.values():

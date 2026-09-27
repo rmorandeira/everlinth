@@ -299,6 +299,9 @@ export interface CityData {
   sand?: Array<Array<[number, number]>>;
   /** Muelles y diques [x0, y0, x1, y1] (tierra transitable de ~2 tiles de semiancho sobre el mar). */
   piers?: Array<[number, number, number, number]>;
+  /** Relieve de la sala: alturas (unidades de render, 1 = 3 m) en una rejilla de w × h
+   * puntos cada `step` tiles desde la esquina de la sala (esquinas incluidas). */
+  elev?: { step: number; w: number; h: number; z: number[] };
   /** Hitos modelados (estadio…): centro, largo y ancho (tiles), ángulo del eje largo. */
   landmarks?: Array<{ kind: string; name: string; x: number; y: number; len: number; wid: number; ang: number }>;
   /** Cruces de calles (para pasos de cebra y cortar las marcas). */
