@@ -10,6 +10,8 @@ import {
   WORLD_MIN,
   WORLD_MAX,
   LOCATIONS,
+  ZOMBIE_SPEED_MUL,
+  CIVILIAN_SPEED_MUL,
   inCountryside,
   RANDOM_CITY_REGION,
   ZOMBIE_MAX_HP,
@@ -669,8 +671,8 @@ export class GameServer {
           // lentos, arrastrándose: 0,8-1,6 tiles/s (el jugador corre a más de 7); gigantes 0,5-0,7
           this.zombies.push(
             giant
-              ? { id: this.nextZombieId++, gx, gy, hp: GIANT_HP, speed: (0.5 + Math.random() * 0.2) * 1.25, hitCooldown: 0, giant: true, pack }
-              : { id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: packSpeed * (0.94 + Math.random() * 0.12) * 1.25, hitCooldown: 0, pack }
+              ? { id: this.nextZombieId++, gx, gy, hp: GIANT_HP, speed: (0.5 + Math.random() * 0.2) * ZOMBIE_SPEED_MUL, hitCooldown: 0, giant: true, pack }
+              : { id: this.nextZombieId++, gx, gy, hp: ZOMBIE_MAX_HP, speed: packSpeed * (0.94 + Math.random() * 0.12) * ZOMBIE_SPEED_MUL, hitCooldown: 0, pack }
           );
           break;
         }
@@ -845,7 +847,7 @@ export class GameServer {
       const gx = t.gx + Math.cos(ang) * r;
       const gy = t.gy + Math.sin(ang) * r;
       if (!this.sidewalk(gx, gy)) continue;
-      this.civilians.push({ id: this.nextCivilianId++, gx, gy, tx: gx, ty: gy, walk: (0.8 + Math.random() * 0.5) * 1.2, run: (3.0 + Math.random() * 1.3) * 1.2, panic: 0, infected: 0, v: Math.floor(Math.random() * 1000), wait: Math.random() * 3, fallen: 0, helping: 0, helpT: 0, helped: false });
+      this.civilians.push({ id: this.nextCivilianId++, gx, gy, tx: gx, ty: gy, walk: (0.8 + Math.random() * 0.5) * CIVILIAN_SPEED_MUL, run: (3.0 + Math.random() * 1.3) * CIVILIAN_SPEED_MUL, panic: 0, infected: 0, v: Math.floor(Math.random() * 1000), wait: Math.random() * 3, fallen: 0, helping: 0, helpT: 0, helped: false });
     }
   }
 
@@ -1021,7 +1023,7 @@ export class GameServer {
       const gone = new Set(turned);
       this.civilians = this.civilians.filter((c) => !gone.has(c));
       for (const c of turned) {
-        this.zombies.push({ id: this.nextZombieId++, gx: c.gx, gy: c.gy, hp: ZOMBIE_MAX_HP, speed: (0.9 + Math.random() * 0.6) * 1.25, hitCooldown: 1, pack: this.nextPack++ });
+        this.zombies.push({ id: this.nextZombieId++, gx: c.gx, gy: c.gy, hp: ZOMBIE_MAX_HP, speed: (0.9 + Math.random() * 0.6) * ZOMBIE_SPEED_MUL, hitCooldown: 1, pack: this.nextPack++ });
       }
     }
   }

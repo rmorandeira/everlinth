@@ -22,7 +22,7 @@ export const LOCATIONS = [
   { id: "coruna", name: "A Coruña", sx: 0, sy: 0 },
   { id: "generada", name: "Ciudad generada", sx: 120, sy: 0 },
   { id: "nueva", name: "Otra ciudad generada (aleatoria)", sx: 0, sy: 0 },
-  { id: "campo", name: "Campo", sx: -140, sy: 0 },
+  { id: "campo", name: "Campo", sx: -141, sy: -5 },
 ];
 /** Zona donde se eligen los destinos aleatorios, en salas [sx0, sy0, sx1, sy1]. */
 export const RANDOM_CITY_REGION = [60, -190, 190, 190];
@@ -71,7 +71,10 @@ export const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
 
 // Movimiento continuo (no por casillas): el servidor simula a este tick fijo.
 export const TICK_MS = 50;
-export const PLAYER_SPEED = 10.2; // tiles/segundo
+export const PLAYER_SPEED = 13; // tiles/segundo
+/** Multiplicadores de velocidad de la horda y de los paseantes (sobre su base al azar). */
+export const ZOMBIE_SPEED_MUL = 1.6;
+export const CIVILIAN_SPEED_MUL = 1.55;
 export const ATTACK_RANGE = 1.8; // tiles
 export const PICKUP_RANGE = 1.5; // tiles
 

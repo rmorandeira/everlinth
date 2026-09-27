@@ -78,7 +78,7 @@ function seedCatalog(): number {
           name: humanName(name),
           source: { type: "glb", path: `${kit}/${name}` },
           category: guessCategory(kit, name),
-          biomes: kit === "countryside" ? ["countryside"] : kit === "suburban" ? ["city", "classic"] : ["city"],
+          biomes: kit === "countryside" ? ["countryside"] : kit === "suburban" ? (name.startsWith("building-type") ? ["city", "classic", "countryside"] : ["city", "classic"]) : ["city"],
           scale: 1,
           textures: {},
           sockets: [],
@@ -133,6 +133,27 @@ export const assetsRouter = Router();
 // Avisa de cada asset guardado o borrado (index.ts lo reenvía a los clientes
 // conectados, así el juego Godot recarga ese asset en caliente).
 export const assetEvents = new EventEmitter();
+
+// Assets de un bioma (los generadores los usan: p. ej. los edificios del campo), en caché
+// hasta que se guarde o borre un asset.
+let biomeCache: Map<string, AssetDef[]> | null = null;
+assetEvents.on("changed", () => {
+  biomeCache = null;
+});
+export function assetsForBiome(biome: BiomeId): AssetDef[] {
+  if (!biomeCache) biomeCache = new Map();
+  let list = biomeCache.get(biome);
+  if (!list) {
+    list = listAssets().filter((d) => d.biomes.includes(biome));
+    biomeCache.set(biome, list);
+  }
+  return list;
+}
+
+/** Clave de modelo del cliente para un asset ("kit/nombre" o "asset:<id>"). */
+export function modelKey(d: AssetDef): string {
+  return d.source.type === "glb" ? d.source.path : "asset:" + d.id;
+}
 
 // Público: el juego lo lee para saber categoría, biomas, texturas y puntos de unión.
 assetsRouter.get("/assets.json", (_req, res) => {

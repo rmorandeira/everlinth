@@ -8,6 +8,26 @@
 //   su era de tierra. Los graneros y silos ocupan casillas de edificio (colisión).
 // Misma salida que los generadores de ciudad: casillas + geometría (CityData rural).
 import { SCREEN_WIDTH, SCREEN_HEIGHT, TileType, type CityData, type CityRoad } from "@roi/shared";
+import { assetsForBiome, modelKey } from "../adminAssets.js";
+
+// modelos propios del campo (con su huella conocida); el resto de assets del catálogo
+// con bioma countryside se reparten como edificios extra de las granjas
+const KNOWN = new Set(["countryside/barn-a", "countryside/barn-b", "countryside/barn-c", "countryside/silo", "countryside/windmill", "countryside/tractor-red", "countryside/tractor-green"]);
+
+/** Casas de labranza (casas del catálogo con bioma campo) y demás edificios del bioma. */
+function biomeBuildings(): { houses: string[]; extras: string[] } {
+  const houses: string[] = [];
+  const extras: string[] = [];
+  for (const d of assetsForBiome("countryside")) {
+    const k = modelKey(d);
+    if (KNOWN.has(k)) continue;
+    if (d.category === "casa" || k.includes("building-type")) houses.push(k);
+    else if (d.category === "edificio" || d.category === "pieza de edificio" || d.category === "decoración" || d.category === "vehículo" || d.category === "mobiliario") extras.push(k);
+  }
+  houses.sort();
+  extras.sort();
+  return { houses, extras };
+}
 
 const SP_Y = 600; // entre carreteras este-oeste
 const SP_X = 800; // entre carreteras norte-sur
@@ -85,7 +105,7 @@ interface Field {
 
 function field(cx: number, cy: number): Field {
   const h = hash2(cx, cy, 1);
-  const farm = hash2(cx, cy, 7) < 0.14;
+  const farm = hash2(cx, cy, 7) < 0.3;
   const kind: FieldKind = farm ? "pasture" : h < 0.42 ? "wheat" : h < 0.62 ? "stubble" : h < 0.82 ? "plowed" : "pasture";
   return { id: `f${cx}:${cy}`, x0: cx * CELL_W + 1, y0: cy * CELL_H + 1, x1: (cx + 1) * CELL_W - 1, y1: (cy + 1) * CELL_H - 1, kind, ang: hash2(cx, cy, 3) < 0.5 ? 0 : Math.PI / 2, farm };
 }
@@ -158,10 +178,43 @@ function farmOf(cx: number, cy: number): { props: Prop[]; yard: [number, number,
   props.push({ id: `w${cx}:${cy}`, m: "countryside/windmill", x: cx0 - ax * (bl / 2 + 7) + ay * 6, y: cy0 - ay * (bl / 2 + 7) - ax * 6, a: hash2(cx, cy, 16) * Math.PI * 2, r: 1.2 });
   const tractor = hash2(cx, cy, 17) < 0.5 ? "countryside/tractor-red" : "countryside/tractor-green";
   props.push({ id: `t${cx}:${cy}`, m: tractor, x: cx0 + ax * (bl / 2 + 4) + ay * 2, y: cy0 + ay * (bl / 2 + 4) - ax * 2, a: rot + (hash2(cx, cy, 18) - 0.5) * 1.2 });
-  // era de tierra alrededor
-  const ex = Math.abs(ax) * (bl / 2 + 10) + Math.abs(ay) * (bw / 2 + 9);
-  const ey = Math.abs(ay) * (bl / 2 + 10) + Math.abs(ax) * (bw / 2 + 9);
+  // casa de labranza al otro lado de la era, mirando al granero
+  const { houses, extras } = biomeBuildings();
+  const hd = bw / 2 + 12;
+  if (houses.length) {
+    const hk = houses[Math.floor(hash2(cx, cy, 19) * houses.length) % houses.length];
+    props.push({ id: `h${cx}:${cy}`, m: hk, x: cx0 + ay * hd, y: cy0 - ax * hd, a: rot + Math.PI / 2, len: 8, wid: 8 });
+  }
+  // a veces un cobertizo pequeño junto al granero
+  if (hash2(cx, cy, 20) < 0.4 && v !== 2) {
+    props.push({ id: `c${cx}:${cy}`, m: "countryside/barn-c", x: cx0 - ax * (bl / 2 + 8) - ay * (bw / 2 + 6), y: cy0 - ay * (bl / 2 + 8) + ax * (bw / 2 + 6), a: rot, len: 10, wid: 5.9 });
+  }
+  // algún edificio más del catálogo del bioma (lo que se haya añadido en el editor)
+  if (extras.length && hash2(cx, cy, 21) < 0.6) {
+    const ek = extras[Math.floor(hash2(cx, cy, 22) * extras.length) % extras.length];
+    props.push({ id: `e${cx}:${cy}`, m: ek, x: cx0 + ax * (bl / 2 + 10) + ay * (hd - 2), y: cy0 + ay * (bl / 2 + 10) - ax * (hd - 2), a: rot, len: 6, wid: 6 });
+  }
+  // era de tierra alrededor (que abarque la casa)
+  const ex = Math.abs(ax) * (bl / 2 + 12) + Math.abs(ay) * (hd + 6);
+  const ey = Math.abs(ay) * (bl / 2 + 12) + Math.abs(ax) * (hd + 6);
   return { props, yard: [cx0 - ex, cy0 - ey, cx0 + ex, cy0 + ey] };
+}
+
+/** Estructuras sueltas por las fincas sin granja: molinos solos, tractores
+ * abandonados y parejas de silos junto a los lindes. */
+function extrasOf(cx: number, cy: number): Prop[] {
+  const f = field(cx, cy);
+  if (f.farm) return [];
+  const h = hash2(cx, cy, 30);
+  const px = cx * CELL_W + CELL_W * (0.25 + hash2(cx, cy, 31) * 0.5);
+  const py = cy * CELL_H + CELL_H * (0.25 + hash2(cx, cy, 32) * 0.5);
+  if (h < 0.1) return [{ id: `xw${cx}:${cy}`, m: "countryside/windmill", x: px, y: py, a: hash2(cx, cy, 33) * Math.PI * 2, r: 1.2 }];
+  if (h < 0.18) return [{ id: `xt${cx}:${cy}`, m: hash2(cx, cy, 34) < 0.5 ? "countryside/tractor-red" : "countryside/tractor-green", x: px, y: py, a: f.ang + (hash2(cx, cy, 35) - 0.5) * 0.4 }];
+  if (h < 0.24) {
+    const x = cx * CELL_W + 5;
+    return [0, 1].map((i) => ({ id: `xs${cx}:${cy}:${i}`, m: "countryside/silo", x, y: py + i * 5, a: 0, r: 2.2 }));
+  }
+  return [];
 }
 
 function inProp(p: Prop, px: number, py: number): boolean {
@@ -193,6 +246,7 @@ export function rasterRoomCountryside(sx: number, sy: number): { tiles: TileType
         props.push(...farm.props);
         yards.push(farm.yard);
       }
+      props.push(...extrasOf(cx, cy));
     }
   }
   const tiles: TileType[][] = [];
