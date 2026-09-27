@@ -41,6 +41,7 @@ uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap_anisotropic, re
 uniform bool has_normal = false;
 uniform sampler2D rough_tex : filter_linear_mipmap, repeat_enable;
 uniform bool has_rough = false;
+uniform bool alpha_cut = false; // recorte por transparencia (cintas, hojas)
 const float FAC_WALLS = 6.0;   // capas 0-5: paredes
 const float FAC_ROOF = 6.0;    // capa 6: grava de azotea
 const float FAC_TILE = 0.9;    // unidades por repetición (≈2,7 m: algo mayor que el real para que se lea a esta distancia)
@@ -98,6 +99,9 @@ void fragment() {
 		}
 	}
 	vec4 a = texture(albedo_tex, tex_mode == 0 ? UV : catalog_uv(UV)) * albedo_color;
+	if (alpha_cut && a.a < 0.5) {
+		discard;
+	}
 	ALBEDO = a.rgb * COLOR.rgb;
 	ROUGHNESS = 0.85;
 	SPECULAR = 0.3;
