@@ -9,6 +9,8 @@ import {
   PICKUP_RANGE,
   WORLD_MIN,
   WORLD_MAX,
+  LOCATIONS,
+  RANDOM_CITY_REGION,
   ZOMBIE_MAX_HP,
   GIANT_HP,
   ZOMBIE_VIEW_RANGE,
@@ -141,6 +143,28 @@ export class GameServer {
       if (process.env.DEBUG_WEAPONS?.trim() === "1" && Number.isFinite(msg.gx) && Number.isFinite(msg.gy) && dist(px, py, msg.gx, msg.gy) < 40) {
         this.explode(msg.gx, msg.gy, 4, 120, { conn, player });
       }
+    }
+    else if (msg.type === "travel") {
+      // cambio de localización (desplegable "Lugar"): a una calle de la ciudad elegida
+      const loc = LOCATIONS.find((l) => l.id === msg.to);
+      if (!loc) return;
+      let nsx = loc.sx;
+      let nsy = loc.sy;
+      if (loc.id === "nueva") {
+        const [x0, y0, x1, y1] = RANDOM_CITY_REGION;
+        nsx = x0 + Math.floor(Math.random() * (x1 - x0 + 1));
+        nsy = y0 + Math.floor(Math.random() * (y1 - y0 + 1));
+      }
+      this.leaveScreenRoom(conn, screenKey({ sx: player.sx, sy: player.sy }));
+      this.broadcastToScreen(player.sx, player.sy, { type: "playerLeft", username: conn.username }, conn);
+      this.ensureScreenLoaded(nsx, nsy);
+      const spot = this.findSpawn(nsx, nsy);
+      player.sx = nsx;
+      player.sy = nsy;
+      player.x = spot.x;
+      player.y = spot.y;
+      this.enterScreen(conn, player, nsx, nsy, false);
+      savePlayer(player);
     }
     else if (msg.type === "debugTeleport") {
       // pruebas (solo con DEBUG_WEAPONS=1): llevar al jugador a un tile global

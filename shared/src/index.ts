@@ -13,6 +13,24 @@ export const WORLD_SIZE = 400;
 export const WORLD_MIN = -Math.floor(WORLD_SIZE / 2);
 export const WORLD_MAX = Math.ceil(WORLD_SIZE / 2) - 1;
 
+// Localizaciones del mundo (desplegable "Lugar" del juego). La ciudad real (A Coruña,
+// OpenStreetMap) ocupa una región de salas; fuera de ella la ciudad se genera sola
+// (generador procedural). "nueva" lleva a un punto aleatorio de la zona generada.
+/** Región de la ciudad real, en salas [sx0, sy0, sx1, sy1] (incluidas). */
+export const OSM_REGION = [-70, -50, 40, 135];
+export const LOCATIONS = [
+  { id: "coruna", name: "A Coruña", sx: 0, sy: 0 },
+  { id: "generada", name: "Ciudad generada", sx: 120, sy: 0 },
+  { id: "nueva", name: "Otra ciudad generada (aleatoria)", sx: 0, sy: 0 },
+];
+/** Zona donde se eligen los destinos aleatorios, en salas [sx0, sy0, sx1, sy1]. */
+export const RANDOM_CITY_REGION = [60, -190, 190, 190];
+
+/** ¿La sala está en la región de la ciudad real? */
+export function inOsmRegion(sx: number, sy: number): boolean {
+  return sx >= OSM_REGION[0] && sx <= OSM_REGION[2] && sy >= OSM_REGION[1] && sy <= OSM_REGION[3];
+}
+
 // Ajustes visuales globales editables desde el backoffice (afectan a todos los
 // jugadores, solo a la escena del juego, nunca al HUD). El cliente los pide una
 // vez al arrancar; si el servidor no responde o no hay nada guardado aún, usa
@@ -435,7 +453,8 @@ export type ClientMessage =
   | { type: "setZombies"; enabled: boolean }
   // Prueba de explosiones en (gx, gy) (tiles globales); el servidor solo la acepta con DEBUG_WEAPONS=1.
   | { type: "debugExplode"; gx: number; gy: number }
-  | { type: "debugTeleport"; gx: number; gy: number };
+  | { type: "debugTeleport"; gx: number; gy: number }
+  | { type: "travel"; to: string };
 
 // ---- Mensajes servidor -> cliente ----
 export type ServerMessage =

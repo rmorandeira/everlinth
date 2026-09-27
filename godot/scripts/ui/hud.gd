@@ -2,12 +2,14 @@ class_name Hud
 extends CanvasLayer
 ## Interfaz (como la web): login, nombre/nivel/XP y barra de vida arriba a la
 ## izquierda, interruptor de zombis (tecla Z) y control de la hora del día (0-24 h,
-## "Real" vuelve a la hora del reloj) arriba a la derecha, medidor de FPS (F3) y
+## "Real" vuelve a la hora del reloj) y desplegable "Lugar" (A Coruña real o una ciudad
+## generada) arriba a la derecha, medidor de FPS (F3) y
 ## minimapa abajo a la izquierda. Los ajustes se recuerdan entre sesiones.
 
 signal join_requested(username: String, server: String)
 signal zombies_toggled(enabled: bool)
 signal hour_changed(hour: float) # < 0 = hora real
+signal travel_requested(location: String) # id de Protocol.LOCATIONS
 
 const SETTINGS := "user://ajustes.cfg"
 
@@ -22,6 +24,8 @@ var hour_slider := HSlider.new()
 var hour_label := Label.new()
 var real_btn := Button.new()
 var fps_label := Label.new()
+var location_select := OptionButton.new()
+var osm_label := Label.new() # atribución de OpenStreetMap (solo en la ciudad real)
 var discovery := Label.new()
 var minimap := Minimap.new()
 var _cfg := ConfigFile.new()
@@ -101,6 +105,18 @@ func _ready() -> void:
 	real_btn.pressed.connect(func() -> void: _set_hour(-1.0))
 	hrow.add_child(real_btn)
 	tr.add_child(hrow)
+	# cambio de localización: la ciudad real o una generada
+	var lrow := HBoxContainer.new()
+	var ll := Label.new()
+	ll.text = "Lugar"
+	lrow.add_child(ll)
+	for loc in Protocol.LOCATIONS:
+		location_select.add_item(str(loc.name))
+	location_select.custom_minimum_size = Vector2(200, 0)
+	location_select.focus_mode = Control.FOCUS_NONE
+	location_select.item_selected.connect(func(i: int) -> void: travel_requested.emit(str(Protocol.LOCATIONS[i].id)))
+	lrow.add_child(location_select)
+	tr.add_child(lrow)
 	fps_label.add_theme_color_override("font_color", Color("99ff99"))
 	fps_label.add_theme_color_override("font_shadow_color", Color.BLACK)
 	tr.add_child(fps_label)
@@ -114,7 +130,7 @@ func _ready() -> void:
 	add_child(discovery)
 
 	# atribución de los datos del mapa (licencia ODbL)
-	var osm := Label.new()
+	var osm := osm_label
 	osm.text = "Mapa © colaboradores de OpenStreetMap"
 	osm.add_theme_font_size_override("font_size", 11)
 	osm.add_theme_color_override("font_color", Color(1, 1, 1, 0.75))
@@ -206,3 +222,13 @@ func _unhandled_input(ev: InputEvent) -> void:
 			zombie_toggle.button_pressed = not zombie_toggle.button_pressed
 		KEY_F3:
 			fps_label.visible = not fps_label.visible
+
+
+## Muestra en el desplegable dónde está el personaje (sin viajar).
+func set_location(sx: int, sy: int) -> void:
+	var r: Array = Protocol.OSM_REGION
+	var real := sx >= int(r[0]) and sx <= int(r[2]) and sy >= int(r[1]) and sy <= int(r[3])
+	osm_label.visible = real
+	for i in Protocol.LOCATIONS.size():
+		if str(Protocol.LOCATIONS[i].id) == ("coruna" if real else "generada"):
+			location_select.select(i)

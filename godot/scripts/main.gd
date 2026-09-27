@@ -101,6 +101,7 @@ func _ready() -> void:
 	hud.join_requested.connect(_on_join_requested)
 	hud.zombies_toggled.connect(_on_zombies_toggled)
 	hud.hour_changed.connect(func(h: float) -> void: lighting.hour_override = h)
+	hud.travel_requested.connect(func(loc: String) -> void: Net.send({"type": "travel", "to": loc}))
 	zombies_on = hud.zombie_toggle.button_pressed
 	if Config.bench:
 		lighting.env.ssao_enabled = not ("ssao" in Config.off)
@@ -179,6 +180,8 @@ func _on_message(msg: Dictionary) -> void:
 			hud.set_playing(true)
 			joined_at = time
 			Net.send({"type": "setZombies", "enabled": zombies_on})
+			if Config.travel != "":
+				Net.send({"type": "travel", "to": Config.travel})
 			if Config.tp.x != INF:
 				Net.send({"type": "debugTeleport", "gx": Config.tp.x, "gy": Config.tp.y})
 			hud.set_stats(you)
@@ -201,6 +204,7 @@ func _on_message(msg: Dictionary) -> void:
 			ground.build(screen, neighbors)
 			_build_city()
 			hud.minimap.set_rooms(screen, neighbors)
+			hud.set_location(int(screen.sx), int(screen.sy))
 		"playerUpdate":
 			_set_other(msg.player)
 		"playerLeft":

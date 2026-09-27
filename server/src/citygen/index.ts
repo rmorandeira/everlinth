@@ -20,6 +20,7 @@ import {
   type CityBuilding,
   CITY_ROAD_HALF,
   CITY_SIDEWALK_W,
+  inOsmRegion,
 } from "@roi/shared";
 import Vector from "./vector.js";
 import TensorField from "./tensor_field.js";
@@ -312,8 +313,8 @@ export interface RasterRoom {
 
 // Tiles + geometría vectorial de la sala (sx, sy).
 export function rasterRoom(sx: number, sy: number): RasterRoom {
-  // ciudad real (OpenStreetMap) si hay datos; si no, el generador procedural
-  if (osmAvailable()) return rasterRoomOSM(sx, sy);
+  // ciudad real (OpenStreetMap) en su región si hay datos; fuera, el generador procedural
+  if (osmAvailable() && inOsmRegion(sx, sy)) return rasterRoomOSM(sx, sy);
   const dx = Math.floor((sx + ROOM_OFFSET) / DISTRICT_ROOMS);
   const dy = Math.floor((sy + ROOM_OFFSET) / DISTRICT_ROOMS);
   const d = getDistrict(dx, dy);
@@ -427,7 +428,7 @@ function round2(v: number): number {
 
 // Punto de la calzada más cercano a un punto (para colocar a un jugador nuevo).
 export function nearestRoadPoint(gx: number, gy: number): { x: number; y: number } | null {
-  if (osmAvailable()) return nearestRoadOSM(gx, gy);
+  if (osmAvailable() && inOsmRegion(Math.floor(gx / SCREEN_WIDTH), Math.floor(gy / SCREEN_HEIGHT))) return nearestRoadOSM(gx, gy);
   const dx = Math.floor((Math.floor(gx / SCREEN_WIDTH) + ROOM_OFFSET) / DISTRICT_ROOMS);
   const dy = Math.floor((Math.floor(gy / SCREEN_HEIGHT) + ROOM_OFFSET) / DISTRICT_ROOMS);
   const d = getDistrict(dx, dy);
