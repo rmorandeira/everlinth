@@ -82,10 +82,19 @@ static func _std(key: String, setup: Callable) -> Material:
 	return _mat_cache[key]
 
 
-static func asphalt_mat(tone: Color) -> Material:
-	return _std("asphalt" + tone.to_html(), func(m: StandardMaterial3D) -> void:
-		m.albedo_texture = _tex("asphalt")
-		m.albedo_color = tone)
+## Asfalto fotográfico PBR (asphalt.gdshader). tone: tono de la calle (los de
+## ASPHALT_TONES, relativos a un gris medio); patch: parche de reparación (otra textura).
+static func asphalt_mat(tone: Color, patch := false) -> Material:
+	var key := "asphalt" + tone.to_html() + ("p" if patch else "")
+	if not _mat_cache.has(key):
+		var m := ShaderMaterial.new()
+		m.shader = load("res://shaders/asphalt.gdshader")
+		m.set_shader_parameter("albedo_tex", load("res://assets/textures/road/%s_Color.jpg" % ("Road012A" if patch else "Road015A")))
+		m.set_shader_parameter("normal_tex", load("res://assets/textures/road/Road015A_NormalGL.jpg"))
+		m.set_shader_parameter("rough_tex", load("res://assets/textures/road/Road015A_Roughness.jpg"))
+		m.set_shader_parameter("tone", Color(tone.r / 0.65, tone.g / 0.65, tone.b / 0.65) * (0.92 if patch else 1.0))
+		_mat_cache[key] = m
+	return _mat_cache[key]
 
 
 static func paint_mat(c: Color) -> Material:
@@ -435,7 +444,7 @@ func _roadway() -> void:
 				var off := side * (half - w / 2.0) * 0.9
 				var ti := ASPHALT_TONES.find(tone)
 				var ptone: Color = ASPHALT_TONES[(ti + 1 + (1 if hp > 0.87 else 0)) % ASPHALT_TONES.size()]
-				flat.quad(asphalt_mat(ptone), _p(px - uy0 * off, py + ux0 * off, Y_ASPHALT + 0.001), (1.6 + hp * 3.0) * T, w * T, ang + (hp - 0.85) * 0.1, ASPHALT_UV)
+				flat.quad(asphalt_mat(ptone, true), _p(px - uy0 * off, py + ux0 * off, Y_ASPHALT + 0.001), (1.6 + hp * 3.0) * T, w * T, ang + (hp - 0.85) * 0.1, ASPHALT_UV)
 			elif hp < 0.07:
 				var off := (1.0 if hp < 0.035 else -1.0) * half * 0.45
 				flat.disc(lambert(Color("3f4145")), _p(px - uy0 * off, py + ux0 * off, Y_ASPHALT + 0.003), 0.42 * T)
@@ -463,7 +472,7 @@ func _roadway() -> void:
 			var hz := hash2(jround(px * 1.7) - 11.0, jround(py * 1.7) + 4.0)
 			if hz > 0.9:
 				var ztone: Color = ASPHALT_TONES[(ASPHALT_TONES.find(tone) + 2) % ASPHALT_TONES.size()]
-				flat.quad(asphalt_mat(ztone), _p(px, py, Y_ASPHALT + 0.0015), (0.9 + hz * 0.6) * T, half * 2.0 * T * 0.98, ang + PI / 2.0 + (hz - 0.95) * 0.3, ASPHALT_UV)
+				flat.quad(asphalt_mat(ztone, true), _p(px, py, Y_ASPHALT + 0.0015), (0.9 + hz * 0.6) * T, half * 2.0 * T * 0.98, ang + PI / 2.0 + (hz - 0.95) * 0.3, ASPHALT_UV)
 			elif hz < 0.22:
 				flat.quad(seal, _p(px + nx0 * (hz - 0.11) * half * 6.0, py + ny0 * (hz - 0.11) * half * 6.0, Y_DECAL), 2.2 * T, 2.2 * T, ang + hz * 20.0)
 			t += 13.0
