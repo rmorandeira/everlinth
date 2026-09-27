@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BIOME_IDS, DEFAULT_TEXTURE_PARAMS, type AssetDef, type BiomeId } from "@roi/shared";
 import { db } from "./db.js";
+import { AiError, generateAsset } from "./aiAssets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT = path.join(__dirname, "..", "..", "client");
@@ -153,10 +154,9 @@ assetsRouter.put("/admin/assets/:id", (req, res) => {
   res.json(def);
 });
 
-// Nuevo asset de primitivas (vacío o con las piezas que mande el editor/IA).
-assetsRouter.post("/admin/assets", (req, res) => {
-  const body = (req.body ?? {}) as Partial<AssetDef>;
-  const base = String(body.name ?? "Nuevo asset")
+/** Id libre "prim.<nombre>" para un asset nuevo. */
+function freeId(name: string): string {
+  const base = name
     .toLowerCase()
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
@@ -164,6 +164,13 @@ assetsRouter.post("/admin/assets", (req, res) => {
     .replace(/^-|-$/g, "") || "asset";
   let id = `prim.${base}`;
   for (let n = 2; getAsset(id); n++) id = `prim.${base}-${n}`;
+  return id;
+}
+
+// Nuevo asset de primitivas (vacío o con las piezas que mande el editor/IA).
+assetsRouter.post("/admin/assets", (req, res) => {
+  const body = (req.body ?? {}) as Partial<AssetDef>;
+  const id = freeId(String(body.name ?? "Nuevo asset"));
   const def = sanitize({ category: "otro", biomes: ["city"], scale: 1, textures: {}, sockets: [], source: { type: "primitives", parts: [] }, ...body }, id);
   if (!def) {
     res.status(400).json({ error: "Asset inválido" });
@@ -207,14 +214,31 @@ assetsRouter.get("/admin/asset-textures.json", (_req, res) => {
   res.json(out);
 });
 
-// Generación por IA (texto + imagen opcional → asset de primitivas). Preparado para
-// cuando haya clave: sin ANTHROPIC_API_KEY responde 503 con una explicación.
-assetsRouter.post("/admin/assets/generate", (_req, res) => {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    res.status(503).json({ error: "Falta la clave de la API de Anthropic: crea server/.env con ANTHROPIC_API_KEY=sk-ant-... y reinicia el servidor." });
+// Generación por IA (texto + imagen opcional → asset de primitivas, ver aiAssets.ts).
+// Con baseId, la IA parte de ese asset (lo modifica) y el resultado es un asset nuevo.
+assetsRouter.post("/admin/assets/generate", async (req, res) => {
+  const body = (req.body ?? {}) as { prompt?: unknown; image?: unknown; baseId?: unknown };
+  const prompt = typeof body.prompt === "string" ? body.prompt.slice(0, 4000) : "";
+  const image = typeof body.image === "string" ? body.image : null;
+  if (!prompt.trim() && !image) {
+    res.status(400).json({ error: "Describe el asset o pega una imagen." });
     return;
   }
-  res.status(501).json({ error: "La generación con IA se activará en el siguiente paso (la clave ya está configurada)." });
+  const base = typeof body.baseId === "string" ? getAsset(body.baseId) : null;
+  try {
+    const t0 = Date.now();
+    const out = await generateAsset({ prompt, image, base });
+    const def = sanitize(out.asset, freeId(out.asset.name));
+    if (!def) throw new AiError("El asset generado no es válido.");
+    saveAsset(def);
+    assetEvents.emit("changed", def.id);
+    const secs = ((Date.now() - t0) / 1000).toFixed(0);
+    console.log(`Asset IA ${def.id}: ${out.info} · ${secs} s`);
+    res.json({ asset: def, info: `${out.info} · ${secs} s` });
+  } catch (e) {
+    const status = e instanceof AiError ? e.status : 500;
+    res.status(status).json({ error: (e as Error).message });
+  }
 });
 
 // El editor es una página del cliente (Vite): client/admin-assets.html.

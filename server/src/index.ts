@@ -19,7 +19,8 @@ try {
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 const app = express();
-app.use(express.json());
+// límite amplio: el generador de assets con IA recibe imágenes de referencia en base64
+app.use(express.json({ limit: "12mb" }));
 // CORS de solo lectura para el catálogo y los recursos públicos: los necesita el
 // cliente Godot exportado a web (el nativo no aplica CORS).
 app.use((req, res, next) => {
