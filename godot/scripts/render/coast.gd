@@ -202,8 +202,12 @@ static func build(root: Node3D, rooms: Array, ogx: int, ogz: int) -> void:
 	ground.terrain = true # el paseo y los parques siguen el relieve
 	var walls := GeoBatch.new()
 	var beach := GeoBatch.new()
+	# por salas: la cámara descarta lo que no ve
+	for b in [ground, walls, beach]:
+		b.chunk = Vector2(W * T, H * T)
 	var any_water := false
 	var trees := {} # clave de árbol -> [Transform3D]
+	var built: Array = []
 	var lo := Vector2(INF, INF)
 	var hi := Vector2(-INF, -INF)
 	for room in rooms:
@@ -211,19 +215,49 @@ static func build(root: Node3D, rooms: Array, ogx: int, ogz: int) -> void:
 		r.setup(room, ogx, ogz)
 		r.build(ground, walls, beach)
 		r.park_trees(trees)
+		built.append(r)
 		any_water = any_water or r.has_water
 		lo = lo.min(Vector2(r.gx0, r.gy0))
 		hi = hi.max(Vector2(r.gx0 + W, r.gy0 + H))
-	_trees(root, trees)
+	if not ("trees" in Config.off):
+		_trees(root, trees)
 	# por salas: la cámara descarta lo que no ve
 	for b in [[ground, false], [beach, false], [walls, true]]:
-		b[0].chunk = Vector2(W * T, H * T)
+		if "beach" in Config.off and b[0] == beach:
+			continue
 		b[0].build(root, b[1])
-	if any_water:
-		_sea(root, lo, hi, ogx, ogz)
+	if any_water and not ("sea" in Config.off):
+		_sea(root, lo, hi, ogx, ogz, built)
 
 
-static func _sea(root: Node3D, lo: Vector2, hi: Vector2, ogx: int, ogz: int) -> void:
+## El mar: un plano opaco con oleaje. Lo que hay debajo no se lee de la pantalla (eso
+## obliga a copiar la profundidad y a dibujarlo transparente: carísimo); se pasa en una
+## textura de un texel por tile hecha aquí con los campos de la costa: R = profundidad
+## del agua, G = distancia a la orilla o al muro (tiles). Sin fondo marino que dibujar.
+static func _sea(root: Node3D, lo: Vector2, hi: Vector2, ogx: int, ogz: int, rooms: Array) -> void:
+	var tw := int(hi.x - lo.x) + 1
+	var th := int(hi.y - lo.y) + 1
+	var img := Image.create_empty(tw, th, false, Image.FORMAT_RGF)
+	img.fill(Color(SEA_Y - SEA_FLOOR, R, 0, 0))
+	for rm in rooms:
+		var room: _Room = rm
+		for y in H + 1:
+			for x in W + 1:
+				var i := room._i(x, y)
+				var px := room.gx0 + x - int(lo.x)
+				var py := room.gy0 + y - int(lo.y)
+				var gv: float = room.g[i]
+				if gv > 0.0:
+					img.set_pixel(px, py, Color(0, 0, 0, 0))
+					continue
+				var bottom := SEA_FLOOR
+				if room.s[i] > -10.0:
+					bottom = maxf(SEA_FLOOR, beach_height(room.d[i]))
+				img.set_pixel(px, py, Color(maxf(0.0, SEA_Y - bottom), minf(-gv, R), 0, 0))
+	var m: ShaderMaterial = sea_mat()
+	m.set_shader_parameter("under", ImageTexture.create_from_image(img))
+	m.set_shader_parameter("under_origin", Vector2((lo.x - ogx) * T, (lo.y - ogz) * T))
+	m.set_shader_parameter("under_size", Vector2(tw * T, th * T))
 	var size := (hi - lo) * T + Vector2(8, 8)
 	var c := ((lo + hi) * 0.5 - Vector2(ogx, ogz)) * T
 	var pm := PlaneMesh.new()
@@ -232,18 +266,10 @@ static func _sea(root: Node3D, lo: Vector2, hi: Vector2, ogx: int, ogz: int) -> 
 	pm.subdivide_depth = int(size.y * 2.0)
 	var sea := MeshInstance3D.new()
 	sea.mesh = pm
-	sea.material_override = sea_mat()
+	sea.material_override = m
 	sea.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	sea.position = Vector3(c.x, SEA_Y, c.y)
 	root.add_child(sea)
-	var bed_mesh := PlaneMesh.new()
-	bed_mesh.size = size
-	var bed := MeshInstance3D.new()
-	bed.mesh = bed_mesh
-	bed.material_override = _pbr("seabed", "Ground093A", 2.0, Color(0.42, 0.44, 0.38))
-	bed.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	bed.position = Vector3(c.x, SEA_FLOOR, c.y)
-	root.add_child(bed)
 
 
 ## Una sala: campos, suelo, muros y playa.

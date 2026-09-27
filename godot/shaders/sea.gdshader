@@ -1,22 +1,25 @@
-// Mar con oleaje: varias ondas desplazan la malla (mar de fondo del Atlántico) y una
-// ondulación fina mueve las normales. El color va del verde azulado sobre la arena al
-// azul oscuro donde cubre; espuma pegada a lo que asoma (muro, rocas, orilla) y, en las
-// playas, rompientes: franjas de espuma que avanzan hacia la orilla donde hay poco fondo.
-// La profundidad del agua sale de la diferencia con lo que hay debajo (textura de
-// profundidad), así que funciona igual contra el muro que sobre la arena.
+// Mar con oleaje, opaco (barato): varias ondas desplazan la malla (mar de fondo del
+// Atlántico) y dos capas de ruido precalculado mueven las normales. Lo que hay debajo
+// viene en la textura "under" (coast.gd, un texel por tile): R = profundidad del agua,
+// G = distancia a la orilla o al muro. Con eso: color del turquesa sobre la arena al azul
+// oscuro donde cubre, espuma pegada al muro, las rocas y la orilla, y rompientes que
+// avanzan hacia la playa donde hay poco fondo. Las olas se calman donde no cubre.
 shader_type spatial;
-render_mode depth_draw_opaque, cull_disabled;
+render_mode cull_disabled;
 
 uniform vec3 deep : source_color = vec3(0.03, 0.13, 0.2);
 uniform vec3 shallow : source_color = vec3(0.12, 0.36, 0.37);
+uniform vec3 sand : source_color = vec3(0.55, 0.52, 0.4);
 uniform vec3 foam_color : source_color = vec3(0.93, 0.96, 0.97);
-uniform sampler2D depth_tex : hint_depth_texture, filter_linear;
-// ruido precalculado (coast.gd): mucho más barato que calcularlo por píxel
+uniform sampler2D under : filter_linear, repeat_disable;
+uniform vec2 under_origin;
+uniform vec2 under_size = vec2(1.0);
 uniform sampler2D ripple_tex : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform sampler2D noise_tex : filter_linear_mipmap, repeat_enable;
 global uniform float sprite_light;
 
 varying vec3 v_wpos;
+varying vec2 v_under;
 
 vec3 wave(vec2 p, vec2 dir, float amp, float len, float speed, inout vec3 n) {
 	float k = TAU / len;
@@ -28,28 +31,28 @@ vec3 wave(vec2 p, vec2 dir, float amp, float len, float speed, inout vec3 n) {
 	return vec3(d.x * amp * 0.5 * c, amp * sin(f), d.y * amp * 0.5 * c);
 }
 
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float noise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	f = f * f * (3.0 - 2.0 * f);
-	return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
-}
-
 void vertex() {
 	vec3 w = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec2 uv = (w.xz - under_origin) / under_size;
+	float depth = textureLod(under, uv, 0.0).r;
+	// menos ola donde hay poco fondo (en la orilla el agua casi no sube ni baja)
+	float calm = smoothstep(0.0, 0.8, depth);
 	vec3 n = vec3(0.0, 1.0, 0.0);
 	vec3 off = vec3(0.0);
 	off += wave(w.xz, vec2(0.3, -1.0), 0.05, 4.5, 1.1, n);
 	off += wave(w.xz, vec2(1.0, -0.6), 0.025, 2.1, 0.9, n);
 	off += wave(w.xz, vec2(-0.7, -1.0), 0.012, 1.1, 0.7, n);
+	off.y *= mix(0.25, 1.0, calm);
 	VERTEX += off;
-	NORMAL = normalize(n);
+	NORMAL = normalize(mix(vec3(0.0, 1.0, 0.0), n, mix(0.3, 1.0, calm)));
 	v_wpos = w + off;
 }
 
 void fragment() {
 	vec2 p = v_wpos.xz;
+	vec2 un = texture(under, (p - under_origin) / under_size).rg;
+	float wd = un.r;          // profundidad (unidades)
+	float wall = un.g;        // distancia a la orilla/muro (tiles)
 	// ondulación fina: normales de ruido que se desplazan
 	vec3 r1 = texture(ripple_tex, p * 0.35 + vec2(TIME * 0.04, -TIME * 0.025)).xyz * 2.0 - 1.0;
 	vec3 r2 = texture(ripple_tex, p * 0.6 + vec2(-TIME * 0.03, TIME * 0.035)).xyz * 2.0 - 1.0;
@@ -57,26 +60,21 @@ void fragment() {
 	vec3 base_n = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	NORMAL = normalize((VIEW_MATRIX * vec4(normalize(base_n + vec3(wn.x, 0.0, wn.z)), 0.0)).xyz);
 
-	// profundidad del agua a lo largo de la visual
-	float depth = texture(depth_tex, SCREEN_UV).r;
-	vec4 world = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, depth, 1.0);
-	world.xyz /= world.w;
-	float wd = clamp(VERTEX.z - world.z, 0.0, 6.0);
-	float t = smoothstep(0.0, 1.6, wd);
-	vec3 col = mix(shallow, deep, t);
-
-	// espuma de contacto (muro, rocas, orilla), rota por ruido
+	float t = smoothstep(0.0, 1.3, wd);
+	// sobre la arena se ve el fondo (turquesa arenoso); mar adentro, azul oscuro
+	vec3 col = mix(mix(sand, shallow, smoothstep(0.0, 0.35, wd)), deep, t);
 	float n1 = texture(noise_tex, p * 1.1 + vec2(TIME * 0.07, TIME * 0.05)).r;
-	float contact = 1.0 - smoothstep(0.0, 0.1 + 0.08 * n1, wd);
+	// espuma de contacto: en la orilla (poco fondo) y contra el muro y las rocas
+	float shore = 1.0 - smoothstep(0.0, 0.07 + 0.06 * n1, wd);
+	float at_wall = (1.0 - smoothstep(0.0, 0.7 + 0.6 * n1, wall)) * step(0.3, wd);
+	float contact = max(shore, at_wall);
 	// rompientes: franjas que avanzan hacia donde hay menos fondo
-	float shoal = 1.0 - smoothstep(0.15, 0.9, wd);
+	float shoal = 1.0 - smoothstep(0.1, 0.8, wd);
 	float band = sin(wd * 18.0 + TIME * 2.2 + n1 * 2.0);
 	float breaker = smoothstep(0.75, 0.98, band) * shoal * smoothstep(0.35, 0.7, texture(noise_tex, p * 0.3 + vec2(0.0, TIME * 0.035)).r);
 	float foam = clamp(contact * (0.55 + 0.45 * n1) + breaker * 0.8, 0.0, 1.0);
 	col = mix(col, foam_color, foam);
-	float day = mix(0.5, 1.0, sprite_light);
-	ALBEDO = col * day;
+	ALBEDO = col * mix(0.5, 1.0, sprite_light);
 	ROUGHNESS = mix(0.06, 0.6, foam);
 	SPECULAR = 0.55;
-	ALPHA = clamp(mix(0.55, 0.97, t) + foam, 0.0, 1.0);
 }

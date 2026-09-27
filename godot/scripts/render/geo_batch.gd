@@ -2,7 +2,7 @@ class_name GeoBatch
 ## Acumulador de geometría fusionada por material (como la clase Batch de city3d.ts):
 ## miles de cuadriláteros de calzada, marcas y manchas acaban en una malla por material.
 
-var _lists := {} # Material -> [PackedVector3Array, PackedVector3Array, PackedVector2Array]
+var _lists := {} # Material (o [Material, celda] si se trocea) -> [vértices, normales, UV]
 ## Apoyar en el relieve (Terrain): al construir, cada vértice sube la altura del terreno
 ## en su punto, y los triángulos planos largos se parten antes para que sigan la ladera.
 var terrain := false
@@ -12,10 +12,18 @@ var chunk := Vector2.ZERO
 const MAX_EDGE := 1.5 # la separación de la rejilla del relieve (3 tiles)
 
 
-func _list(mat: Material) -> Array:
-	if not _lists.has(mat):
-		_lists[mat] = [PackedVector3Array(), PackedVector3Array(), PackedVector2Array()]
-	return _lists[mat]
+## Lista de un material (y, si se trocea, de la celda que contiene p).
+func _list(mat: Material, p: Vector3) -> Array:
+	var key: Variant = mat
+	if chunk != Vector2.ZERO:
+		key = [mat, Vector2i(floori(p.x / chunk.x), floori(p.z / chunk.y))]
+	if not _lists.has(key):
+		_lists[key] = [PackedVector3Array(), PackedVector3Array(), PackedVector2Array()]
+	return _lists[key]
+
+
+static func _mat_of(key: Variant) -> Material:
+	return key[0] if key is Array else key
 
 
 ## Vértices acumulados (depuración).
@@ -55,7 +63,7 @@ func tri(mat: Material, a: Vector3, b: Vector3, c: Vector3, n: Vector3, ua: Vect
 				tri(mat, a, b, p, n, ua, ub, up)
 				tri(mat, p, b, c, n, up, ub, uc)
 			return
-	var l := _list(mat)
+	var l := _list(mat, (a + b + c) / 3.0)
 	if (b - a).cross(c - a).dot(n) > 0.0:
 		l[0].append_array([a, c, b])
 		l[2].append_array([ua, uc, ub])
@@ -84,8 +92,7 @@ func quad(mat: Material, c: Vector3, length: float, w: float, ang: float, uv_wor
 		u10 = Vector2(p10.x, p10.z) / uv_world
 		u11 = Vector2(p11.x, p11.z) / uv_world
 		u01 = Vector2(p01.x, p01.z) / uv_world
-	tri(mat, p00, p10, p11, Vector3.UP, u00, u10, u11)
-	tri(mat, p00, p11, p01, Vector3.UP, u00, u11, u01)
+	_grid_quad(mat, p00, p10, p11, p01, u00, u10, u11, u01)
 
 
 ## Como quad(), con las UV de un trozo del atlas (uv: rectángulo 0..1).
@@ -100,8 +107,57 @@ func quad_uv(mat: Material, c: Vector3, length: float, w: float, ang: float, uv:
 	var u10 := uv.position + Vector2(uv.size.x, 0)
 	var u11 := uv.end
 	var u01 := uv.position + Vector2(0, uv.size.y)
-	tri(mat, p00, p10, p11, Vector3.UP, u00, u10, u11)
-	tri(mat, p00, p11, p01, Vector3.UP, u00, u11, u01)
+	_grid_quad(mat, p00, p10, p11, p01, u00, u10, u11, u01)
+
+
+## Cuadrilátero plano; con relieve, partido de una vez en una cuadrícula de trozos de
+## menos de MAX_EDGE (mucho más rápido que ir partiendo triángulos uno a uno).
+func _grid_quad(mat: Material, p00: Vector3, p10: Vector3, p11: Vector3, p01: Vector3, u00: Vector2, u10: Vector2, u11: Vector2, u01: Vector2) -> void:
+	var nu := 1
+	var nv := 1
+	if terrain and not Terrain.is_flat():
+		nu = maxi(1, ceili(Vector2(p10.x - p00.x, p10.z - p00.z).length() / MAX_EDGE))
+		nv = maxi(1, ceili(Vector2(p01.x - p00.x, p01.z - p00.z).length() / MAX_EDGE))
+	if nu == 1 and nv == 1:
+		tri(mat, p00, p10, p11, Vector3.UP, u00, u10, u11)
+		tri(mat, p00, p11, p01, Vector3.UP, u00, u11, u01)
+		return
+	for j in nv:
+		var v0 := float(j) / nv
+		var v1 := float(j + 1) / nv
+		var a0 := p00.lerp(p01, v0)
+		var a1 := p00.lerp(p01, v1)
+		var b0 := p10.lerp(p11, v0)
+		var b1 := p10.lerp(p11, v1)
+		var ua0 := u00.lerp(u01, v0)
+		var ua1 := u00.lerp(u01, v1)
+		var ub0 := u10.lerp(u11, v0)
+		var ub1 := u10.lerp(u11, v1)
+		for i in nu:
+			var t0 := float(i) / nu
+			var t1 := float(i + 1) / nu
+			var q00 := a0.lerp(b0, t0)
+			var q10 := a0.lerp(b0, t1)
+			var q11 := a1.lerp(b1, t1)
+			var q01 := a1.lerp(b1, t0)
+			var w00 := ua0.lerp(ub0, t0)
+			var w10 := ua0.lerp(ub0, t1)
+			var w11 := ua1.lerp(ub1, t1)
+			var w01 := ua1.lerp(ub1, t0)
+			_raw_tri(mat, q00, q10, q11, w00, w10, w11)
+			_raw_tri(mat, q00, q11, q01, w00, w11, w01)
+
+
+## Triángulo mirando hacia arriba, ya pequeño (sin volver a comprobar su tamaño).
+func _raw_tri(mat: Material, a: Vector3, b: Vector3, c: Vector3, ua: Vector2, ub: Vector2, uc: Vector2) -> void:
+	var l := _list(mat, (a + b + c) / 3.0)
+	if (b - a).cross(c - a).y > 0.0:
+		l[0].append_array([a, c, b])
+		l[2].append_array([ua, uc, ub])
+	else:
+		l[0].append_array([a, b, c])
+		l[2].append_array([ua, ub, uc])
+	l[1].append_array([Vector3.UP, Vector3.UP, Vector3.UP])
 
 
 func disc(mat: Material, c: Vector3, r: float, uv_world := 0.0, segments := 14) -> void:
@@ -129,7 +185,7 @@ func mesh(m: Mesh, xf: Transform3D, mat: Material = null) -> void:
 	for s in m.get_surface_count():
 		var flat := _flat_arrays(m, s, flip)
 		var mm: Material = mat if mat else m.surface_get_material(s)
-		var l := _list(mm)
+		var l := _list(mm, xf.origin)
 		l[0].append_array(xf * (flat[0] as PackedVector3Array))
 		l[1].append_array(nxf * (flat[1] as PackedVector3Array))
 		l[2].append_array(flat[2])
@@ -188,8 +244,9 @@ func _grounded(l: Array) -> Array:
 ## Una ArrayMesh con una superficie por material.
 func to_mesh() -> ArrayMesh:
 	var out := ArrayMesh.new()
-	for mat in _lists:
-		var l: Array = _grounded(_lists[mat])
+	for key in _lists:
+		var mat := _mat_of(key)
+		var l: Array = _grounded(_lists[key])
 		if l[0].size() == 0:
 			continue
 		var a := []
@@ -204,11 +261,9 @@ func to_mesh() -> ArrayMesh:
 
 ## Un MeshInstance3D por material, colgado de parent.
 func build(parent: Node3D, cast_shadows := false) -> void:
-	for mat in _lists:
-		var l: Array = _grounded(_lists[mat])
-		if chunk != Vector2.ZERO:
-			_build_chunked(parent, mat, l, cast_shadows)
-			continue
+	for key in _lists:
+		var mat := _mat_of(key)
+		var l: Array = _grounded(_lists[key])
 		if l[0].size() == 0:
 			continue
 		var a := []
@@ -224,33 +279,3 @@ func build(parent: Node3D, cast_shadows := false) -> void:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mi)
 
-
-## Una malla por celda (según el centro de cada triángulo) para este material.
-func _build_chunked(parent: Node3D, mat: Material, l: Array, cast_shadows: bool) -> void:
-	var v: PackedVector3Array = l[0]
-	var n: PackedVector3Array = l[1]
-	var uv: PackedVector2Array = l[2]
-	var cells := {}
-	for i in range(0, v.size() - 2, 3):
-		var c := (v[i] + v[i + 1] + v[i + 2]) / 3.0
-		var k := Vector2i(floori(c.x / chunk.x), floori(c.z / chunk.y))
-		if not cells.has(k):
-			cells[k] = [PackedVector3Array(), PackedVector3Array(), PackedVector2Array()]
-		var dst: Array = cells[k]
-		dst[0].append_array([v[i], v[i + 1], v[i + 2]])
-		dst[1].append_array([n[i], n[i + 1], n[i + 2]])
-		dst[2].append_array([uv[i], uv[i + 1], uv[i + 2]])
-	for k in cells:
-		var dst: Array = cells[k]
-		var a := []
-		a.resize(Mesh.ARRAY_MAX)
-		a[Mesh.ARRAY_VERTEX] = dst[0]
-		a[Mesh.ARRAY_NORMAL] = dst[1]
-		a[Mesh.ARRAY_TEX_UV] = dst[2]
-		var am := ArrayMesh.new()
-		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
-		am.surface_set_material(0, mat)
-		var mi := MeshInstance3D.new()
-		mi.mesh = am
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		parent.add_child(mi)

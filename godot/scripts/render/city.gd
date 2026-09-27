@@ -143,6 +143,19 @@ var _bchunks := {} # sala -> MeshInstance3D con los edificios fundidos
 var osm := false # ciudad real (OpenStreetMap): plantas reales extruidas, sentido único real
 
 
+var _t_last := 0
+
+
+## Tiempos de construcción (bench=1).
+func _tick(what: String) -> void:
+	if not Config.bench:
+		return
+	var now := Time.get_ticks_msec()
+	if _t_last > 0:
+		print("  ciudad · %s: %d ms" % [what, now - _t_last])
+	_t_last = now
+
+
 func _L(gx: float) -> float:
 	return (gx - origin_gx) * T
 
@@ -301,6 +314,7 @@ func _build(datas: Array) -> void:
 			building_defs[b.id] = b
 	if roads.is_empty() and building_defs.is_empty():
 		return
+	_tick("")
 	for d in datas:
 		osm = osm or d.get("osm", false)
 	# todo lo que se apoya en el suelo sigue el relieve (ciudad real)
@@ -310,10 +324,6 @@ func _build(datas: Array) -> void:
 	# troceado por salas: la cámara solo dibuja lo que ve
 	for b in [flat, solid, litter]:
 		b.chunk = Vector2(W * T, H * T)
-	# todo lo que se apoya en el suelo sigue el relieve (ciudad real)
-	flat.terrain = true
-	solid.terrain = true
-	litter.terrain = true
 	segs = roads.values()
 	for s in segs:
 		s.kind = int(s.kind)
@@ -341,15 +351,21 @@ func _build(datas: Array) -> void:
 			poly.append(p)
 			box = Rect2(p, Vector2.ZERO) if i == 0 else box.expand(p)
 		bpolys.append([poly, box])
+	_tick("preparación")
 	_roadway()
+	_tick("calzadas")
 	_crossings()
+	_tick("cruces")
 	_corners()
+	_tick("esquinas")
 	_markings_and_furniture()
+	_tick("marcas y mobiliario")
 	for bd in building_defs.values():
 		if osm:
 			_osm_building(bd)
 		elif not _kit_building(bd):
 			_polygon_building(bd)
+	_tick("edificios")
 	if osm:
 		var lms := {}
 		for d in datas:
@@ -359,9 +375,12 @@ func _build(datas: Array) -> void:
 			Landmarks.build(root, l, origin_gx, origin_gz)
 	if Config.bench:
 		print("vértices: calle %d · piezas %d · basura %d" % [flat.vertex_count(), solid.vertex_count(), litter.vertex_count()])
-	flat.build(root, false)
+	_tick("hitos")
+	if not ("streets" in Config.off):
+		flat.build(root, false)
 	litter.build(root, false)
 	solid.build(root, true)
+	_tick("mallas del suelo")
 	HighwaysMesh.build(root, datas, origin_gx, origin_gz, paint_mat(PAINT_WHITE), paint_mat(PAINT_YELLOW))
 	var hws := {}
 	for d in datas:
@@ -370,9 +389,12 @@ func _build(datas: Array) -> void:
 	root.set_meta("highways", hws.values())
 	if Config.bench:
 		print("reglas: descartados por solape=%d edificio=%d calzada=%d" % [audit.prop, audit.edificio, audit.calzada])
+	_tick("autovías")
 	for ck in _bchunks:
 		_chunk_rebuild(_bchunks[ck])
+	_tick("fundir edificios")
 	_instantiate_chunks()
+	_tick("instancias")
 
 
 # ------------------------------------------------------------------ calzada
@@ -1185,6 +1207,8 @@ func _instantiate_chunks() -> void:
 			if kind == "streetlight":
 				_multimesh(StreetFurniture.streetlight_mesh(), Transform3D(), list, false)
 			elif kind.begins_with("tree:"):
+				if "trees" in Config.off:
+					continue
 				_multimesh(Trees.mesh_for_key(kind), Transform3D(), list, false)
 			elif kind == "car":
 				_multimesh(car_mesh(), Transform3D(), list, true)
