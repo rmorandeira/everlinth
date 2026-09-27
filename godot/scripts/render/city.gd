@@ -281,6 +281,8 @@ func _segs_info() -> Dictionary:
 
 
 func _line_info(sg: Dictionary) -> Dictionary:
+	if closed.has(sg.id):
+		return {"one_way": false, "dir": 1, "closed": true}
 	if sg.has("ow"):
 		return {"one_way": int(sg.ow) != 0, "dir": 1 if int(sg.ow) > 0 else -1}
 	var key := _line_key(sg)
@@ -368,6 +370,8 @@ func _build(datas: Array) -> void:
 	_corners()
 	_tick("esquinas")
 	_markings_and_furniture()
+	if not osm:
+		_apocalypse()
 	_tick("marcas y mobiliario")
 	for bd in building_defs.values():
 		if osm:
@@ -650,6 +654,127 @@ func _markings_and_furniture() -> void:
 
 
 ## Coche aparcado (los dibuja y destruye Cars; clave = posición global).
+# ------------------------------------------------------------------ apocalipsis
+
+var closed := {} # id de segmento -> true: calle cortada por un control (sin tráfico)
+
+
+## Modelo del kit a su tamaño real: largo `meters` a lo largo de su eje X, frente (+Z)
+## hacia (fx, fy) en tiles. Devuelve false si el modelo no existe.
+func _prop_real(key: String, px: float, py: float, fx: float, fy: float, meters: float) -> bool:
+	var sz := Kenney.size(key)
+	if sz == Vector3.ZERO:
+		return false
+	var s := (meters / 3.0) / sz.x
+	_place("model:" + key, Transform3D(Basis(Vector3.UP, atan2(fx, fy)).scaled(Vector3(s, s, s)), Vector3(_L(px), 0.05, _Lz(py))))
+	return true
+
+
+## Ciudades generadas (la real no): controles con barreras New Jersey en algunos cruces
+## (esa calle queda cortada al tráfico y sin coches aparcados junto al control), obras
+## junto al bordillo con vallas y material, y restos por las aceras.
+func _apocalypse() -> void:
+	var barrier_keys := ["retro/detail-barrier-strong-type-a", "retro/detail-barrier-strong-type-b", "retro/detail-barrier-strong-damaged"]
+	# controles en cruces
+	for c in crosses:
+		if c.through.size() < 2 or hash2(c.x * 0.71, c.y * 1.3) > 0.16:
+			continue
+		var pick: Dictionary = c.through[int(hash2(c.y * 0.3, c.x * 0.9) * c.through.size()) % c.through.size()]
+		var s: Dictionary = pick.seg
+		var seglen := Vector2(s.x1 - s.x0, s.y1 - s.y0).length()
+		var from_start := Vector2(c.x - s.x0, c.y - s.y0).length() < Vector2(c.x - s.x1, c.y - s.y1).length()
+		var ux: float = pick.ux * (1.0 if from_start else -1.0)
+		var uy: float = pick.uy * (1.0 if from_start else -1.0)
+		var d: float = c.max_half + 2.8
+		if d > seglen - 2.0:
+			continue
+		var cx: float = c.x + ux * d
+		var cy: float = c.y + uy * d
+		var nx := -uy
+		var ny := ux
+		var width: float = (ROAD_HALF[s.kind] + CURB_W) * 2.0
+		var n := ceili(width / 2.3)
+		for i in n:
+			var off := (float(i) - (n - 1) * 0.5) * 2.35
+			var r := hash2(cx * 1.7 + i, cy * 0.3 - i)
+			var key: String = barrier_keys[2] if r < 0.22 else (barrier_keys[1] if r < 0.55 else barrier_keys[0])
+			var a := (r - 0.5) * 0.35 # algo torcidas, colocadas deprisa
+			var fx := ux * cos(a) - uy * sin(a)
+			var fy := ux * sin(a) + uy * cos(a)
+			var px := cx + nx * off + ux * (hash2(cy, cx + i) - 0.5) * 0.8
+			var py := cy + ny * off + uy * (hash2(cy, cx + i) - 0.5) * 0.8
+			_prop_real(key, px, py, fx, fy, 3.7)
+			_claim(px, py, 1.3)
+		# a veces un camión atravesado detrás del control
+		if hash2(cx * 0.2, cy * 0.7) < 0.45:
+			var trucks := ["retro/truck-grey", "retro/truck-green", "retro/truck-grey-cargo", "retro/truck-green-cargo", "retro/truck-flat"]
+			var tk: String = trucks[int(hash2(cy, cx) * trucks.size()) % trucks.size()]
+			var tx := cx + ux * 4.5
+			var ty := cy + uy * 4.5
+			var ta := 1.2 + (hash2(tx, ty) - 0.5) * 0.6
+			_prop_real(tk, tx, ty, ux * cos(ta) - uy * sin(ta), ux * sin(ta) + uy * cos(ta), 6.5)
+			_claim(tx, ty, 2.5)
+		closed[s.id] = true
+		if Config.bench:
+			print("control en %.0f,%.0f" % [cx, cy])
+		# fuera los coches aparcados que caen en el control
+		var keep: Array = []
+		for car in cars:
+			var gx: float = car.x / T + origin_gx
+			var gy: float = car.z / T + origin_gz
+			if Vector2(gx - cx, gy - cy).length() > 7.0:
+				keep.append(car)
+		cars = keep
+	# obras junto al bordillo y restos por las aceras
+	var debris := [["retro/pallet", 1.2], ["retro/pallet-small", 0.9], ["retro/planks", 2.4], ["retro/detail-bricks-type-a", 1.4], ["retro/detail-bricks-type-b", 1.4], ["retro/detail-dumpster-open", 1.9], ["retro/detail-barrier-strong-damaged", 3.7]]
+	for s in segs:
+		var dx: float = s.x1 - s.x0
+		var dy: float = s.y1 - s.y0
+		var length := Vector2(dx, dy).length()
+		if length < 10.0:
+			continue
+		var ux := dx / length
+		var uy := dy / length
+		var nx := -uy
+		var ny := ux
+		var half: float = ROAD_HALF[s.kind]
+		var hs := hash2(s.x0 * 0.37 + s.y1, s.y0 * 0.21 + s.x1)
+		if hs < 0.1 and length > 16.0:
+			# obras: fila de vallas ligeras en la acera, pegadas al bordillo, y material detrás
+			var side := 1.0 if hs < 0.05 else -1.0
+			var t := 4.0
+			var t_end := minf(length - 4.0, t + 11.0)
+			while t < t_end:
+				var bx: float = s.x0 + ux * t + nx * side * (half + CURB_W + 0.45)
+				var by: float = s.y0 + uy * t + ny * side * (half + CURB_W + 0.45)
+				if _free(bx, by, 0.5, 0.2, false) and not _near_cross(bx, by, 2.0):
+					_prop_real("retro/detail-barrier-type-a" if hash2(bx, by) < 0.5 else "retro/detail-barrier-type-b", bx, by, nx * side, ny * side, 2.0)
+					_claim(bx, by, 1.0)
+					if hash2(by, bx) < 0.45:
+						var it: Array = debris[int(hash2(bx * 3.0, by) * 5.0) % 5]
+						var mx := bx + nx * side * 1.4
+						var my := by + ny * side * 1.4
+						if _free(mx, my, 0.6, 0.2):
+							var a := hash2(mx, my) * TAU
+							_prop_real(it[0], mx, my, cos(a), sin(a), it[1])
+							_claim(mx, my, 0.8)
+				t += 2.1
+		# restos sueltos por la acera
+		var t2 := 3.0 + hash2(s.x0, s.y0) * 6.0
+		while t2 < length - 3.0:
+			var h := hash2(s.x0 + t2 * 0.9, s.y0 - t2 * 0.4)
+			if h < 0.16:
+				var side := 1.0 if h < 0.08 else -1.0
+				var px: float = s.x0 + ux * t2 + nx * side * (half + CURB_W + 1.0 + h * 4.0)
+				var py: float = s.y0 + uy * t2 + ny * side * (half + CURB_W + 1.0 + h * 4.0)
+				var it: Array = debris[int(hash2(px, py) * debris.size()) % debris.size()]
+				if _free(px, py, 0.7, 0.3) and not _near_cross(px, py, 2.5):
+					var a := hash2(py, px) * TAU
+					_prop_real(it[0], px, py, cos(a), sin(a), it[1])
+					_claim(px, py, 0.9)
+			t2 += 6.5
+
+
 func _add_car(x: float, z: float, ang: float, color: Color) -> void:
 	cars.append({"key": "%.1f,%.1f" % [x / T + origin_gx, z / T + origin_gz], "x": x, "z": z, "ang": ang, "color": color})
 

@@ -192,6 +192,8 @@ func _lane(s: Dictionary, forward: bool) -> float:
 
 func _can_go(s: Dictionary, forward: bool) -> bool:
 	var li: Dictionary = info.get(s.id, {"one_way": false, "dir": 1})
+	if li.get("closed", false):
+		return false # cortada por un control de barreras
 	if not li.one_way:
 		return true
 	return (li.dir > 0) == forward
@@ -202,6 +204,8 @@ func _spawn(near: Vector2, far_only: bool) -> void:
 		return
 	for attempt in 12:
 		var s: Dictionary = segs[randi() % segs.size()]
+		if info.get(s.id, {}).get("closed", false):
+			continue # calle cortada por un control
 		var fwd := randf() < 0.5
 		if not _can_go(s, fwd):
 			fwd = not fwd
