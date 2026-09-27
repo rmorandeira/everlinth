@@ -59,7 +59,9 @@ func on_damage(id: String, hp: float, max_hp: float) -> void:
 func _collapse(b: Dictionary) -> void:
 	# ocultar la instancia de la MultiMesh (o el nodo suelto) y animar copias sueltas
 	for r in b.refs:
-		if r is Node3D:
+		if r is Callable:
+			(r as Callable).call() # edificios fundidos por sala: se rehace la malla sin él
+		elif r is Node3D:
 			(r as Node3D).visible = false
 		else:
 			var mm: MultiMesh = r[0]

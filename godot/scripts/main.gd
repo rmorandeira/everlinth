@@ -40,6 +40,9 @@ var last_dirs := {"N": false, "S": false, "E": false, "W": false}
 var time := 0.0
 var joined_at := -1.0
 var capturing := false
+## Media ventana visible en tiles (con margen, y la cámara puede girar): lo que queda
+## fuera no se manda a dibujar.
+const VIEW_TILES := Vector2(44.0, 44.0)
 var zombies_on := true
 
 # disparo y apuntado
@@ -56,6 +59,16 @@ var last_laugh := -1e9
 var _bench_frames := 0
 var _bench_time := 0.0
 var _bench_cpu := 0.0
+var _prof := {} # pruebas (bench=1): ms acumulados por parte del fotograma
+var _prof_t := 0
+
+
+func _mark(name: String) -> void:
+	if not Config.bench:
+		return
+	var now := Time.get_ticks_usec()
+	_prof[name] = _prof.get(name, 0.0) + (now - _prof_t) / 1000.0
+	_prof_t = now
 var _bench_gpu := 0.0
 var _bench_rcpu := 0.0
 
@@ -453,6 +466,7 @@ func _update_fire() -> void:
 func _process(dt: float) -> void:
 	var _t0 := Time.get_ticks_usec()
 	_process_game(dt)
+	_maybe_capture() # también si el personaje ha muerto (la partida deja de actualizarse)
 	if Config.bench and time - joined_at > 1.0:
 		_bench_cpu += (Time.get_ticks_usec() - _t0) / 1000.0
 
@@ -486,6 +500,7 @@ func _process_game(dt: float) -> void:
 		stride_acc = 0.0
 		sfx.step(0.6)
 
+	_prof_t = Time.get_ticks_usec()
 	var sx := int(screen.sx)
 	var sy := int(screen.sy)
 	var zox := sx * W
@@ -515,9 +530,12 @@ func _process_game(dt: float) -> void:
 		d.y = lerp_towards(d.y, t.y, dt, 14.0)
 		zombie_display[id] = d
 		var giant := t.z > 0.5
+		dots.append([d, Color("ff8a1a") if giant else Color("e04040"), 2.2 if giant else 1.0])
+		# fuera de cámara (con margen): solo en el minimapa
+		if absf(d.x - zox - you_display.x) > VIEW_TILES.x or absf(d.y - zoy - you_display.y) > VIEW_TILES.y:
+			continue
 		ents.append({"id": "z%d" % id, "x": (d.x - zox) * T, "z": (d.y - zoy) * T, "variant": People.ZOMBIE_BASE + id % People.ZOMBIE_VARIANTS,
 			"scale": Protocol.GIANT_SCALE if giant else 1.0, "kind": People.KIND_GIANT if giant else People.KIND_ZOMBIE})
-		dots.append([d, Color("ff8a1a") if giant else Color("e04040"), 2.2 if giant else 1.0])
 	for id in civ_display:
 		var d: Vector2 = civ_display[id]
 		var ct: Array = civ_targets.get(id, [d, 0, 0])
@@ -527,20 +545,24 @@ func _process_game(dt: float) -> void:
 		civ_display[id] = d
 		var st := int(ct[1])
 		var cv := int(ct[2]) % People.CIVILIAN_VARIANTS
+		dots.append([d, Color("f0f0e0") if st == 0 else (Color("ffd84a") if st == 1 else Color("8fd06a")), 0.8])
+		if absf(d.x - zox - you_display.x) > VIEW_TILES.x or absf(d.y - zoy - you_display.y) > VIEW_TILES.y:
+			continue
 		if st == 3:
 			# caído en el suelo (tropezón): tumbado, sin sangre
 			ks.append({"x": (d.x - zox) * T, "z": (d.y - zoy) * T, "row": People.FALLEN_BASE + cv, "pose": id % 2, "scale": 1.0})
 		else:
 			ents.append({"id": "c%d" % id, "x": (d.x - zox) * T, "z": (d.y - zoy) * T, "variant": (People.CIVILIAN_PANIC_BASE if st == 1 else People.CIVILIAN_BASE) + cv,
 				"scale": 1.0, "kind": People.KIND_BITTEN if st == 2 else People.KIND_CIVILIAN})
-		dots.append([d, Color("f0f0e0") if int(ct[1]) == 0 else (Color("ffd84a") if int(ct[1]) == 1 else Color("8fd06a")), 0.8])
 	for c in corpses:
 		var cx: float = c.gx - zox
 		var cz: float = c.gy - zoy
 		if absf(cx - you_display.x) > 70.0 or absf(cz - you_display.y) > 50.0:
 			continue
 		ks.append({"x": cx * T, "z": cz * T, "variant": c.variant, "pose": c.pose, "scale": c.scale})
+	_mark("entidades")
 	people.update(ents, ks, cam)
+	_mark("personas")
 	cars.focus = Vector3(you_display.x * T, 0.0, you_display.y * T)
 	# tráfico: frena ante cualquiera que esté en la calzada (tiles globales)
 	var obst: Array = [Vector2(zox + you_display.x, zoy + you_display.y)]
@@ -550,6 +572,7 @@ func _process_game(dt: float) -> void:
 		obst.append(civ_display[id])
 	traffic.set_obstacles(obst)
 	traffic.update(dt, time, Vector2(zox + you_display.x, zoy + you_display.y))
+	_mark("trafico")
 
 	var dn := lighting.day_night()
 	RenderingServer.global_shader_parameter_set("sprite_light", 1.0 - dn.x * 0.55)
@@ -558,9 +581,10 @@ func _process_game(dt: float) -> void:
 	StreetFurniture.update_signals(time)
 	cam.follow(you_display.x * T, you_display.y * T, time, dt)
 	_update_cutaway()
+	_mark("luz_camara")
 	var facing := atan2(aim.x, aim.y)
 	hud.minimap.update_view(zox + you_display.x, zoy + you_display.y, facing, cam.yaw, dots)
-	_maybe_capture()
+	_mark("minimapa")
 
 
 ## Franja de pantalla del personaje (desde su cabeza hacia abajo, 70 % del ancho).
@@ -579,13 +603,19 @@ func _maybe_capture() -> void:
 	if Config.capture_path == "" or capturing or joined_at < 0.0 or time - joined_at < Config.capture_after:
 		return
 	capturing = true
-	await RenderingServer.frame_post_draw
+	# no se espera a frame_post_draw: si la ventana queda tapada, Windows no la dibuja y
+	# esa señal no llega nunca; la textura del viewport tiene el último fotograma
+	await get_tree().process_frame
 	var img := get_viewport().get_texture().get_image()
 	var path := Config.capture_path
 	if path.begins_with("res://") or path.begins_with("user://"):
 		path = ProjectSettings.globalize_path(path)
 	img.save_png(path)
 	if Config.bench and _bench_frames > 0:
+		var parts: Array = []
+		for k in _prof:
+			parts.append("%s %.2f" % [k, _prof[k] / _bench_frames])
+		print("BENCH partes (ms): " + ", ".join(parts))
 		print("BENCH scripts %.2f ms · render CPU %.2f ms · GPU %.2f ms · dibujos %d · primitivas %d" % [_bench_cpu / _bench_frames, _bench_rcpu / _bench_frames, _bench_gpu / _bench_frames, Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)])
 	print("captura guardada en %s · %d FPS (media %.1f) · calidad %d · %d zombis" % [path, Engine.get_frames_per_second(), _bench_frames / maxf(_bench_time, 0.001), quality.tier, zombie_display.size()])
 	get_tree().quit()

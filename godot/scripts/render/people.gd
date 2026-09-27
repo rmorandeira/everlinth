@@ -29,7 +29,10 @@ const KIND_BITTEN := 6 # mordido: se tambalea, tinte verdoso
 var _walkers := MultiMeshInstance3D.new()
 var _corpses := MultiMeshInstance3D.new()
 var _shadows := MultiMeshInstance3D.new()
-var _state := {} # id -> { x, z, phase, fx, fz }
+var _state := {} # id -> { x, z, phase, fx, fz, still, seen }
+var _wbuf := PackedFloat32Array()
+var _sbuf := PackedFloat32Array()
+var _kbuf := PackedFloat32Array()
 
 
 func _ready() -> void:
@@ -113,63 +116,92 @@ static func octant(fx: float, fz: float, cam: Camera3D) -> int:
 
 ## entities: [{ id, x, z (unidades de render), variant, scale, kind, face? (Vector2 hacia
 ## donde mira; si no, hacia donde anda) }]. corpses: [{ x, z, variant, pose, scale }].
+## Las instancias se escriben en búferes y se suben de una vez (mucho más rápido que
+## una llamada al servidor de render por instancia).
 func update(entities: Array, corpses: Array, cam: Camera3D) -> void:
 	var mm := _walkers.multimesh
 	var sm := _shadows.multimesh
-	var seen := {}
+	if _wbuf.size() != MAX_WALKERS * 16:
+		_wbuf.resize(MAX_WALKERS * 16)
+		_sbuf.resize(MAX_WALKERS * 12)
+		_kbuf.resize(MAX_CORPSES * 16)
+	var r := cam.global_transform.basis.x
+	var f := -cam.global_transform.basis.z
+	var frame_id := Engine.get_process_frames()
 	var n := 0
 	for e in entities:
 		if n >= MAX_WALKERS:
 			break
 		var id: String = e.id
-		seen[id] = true
 		var st: Dictionary = _state.get(id, {})
 		if st.is_empty():
-			st = {"x": e.x, "z": e.z, "phase": randf() * 10.0, "fx": 0.0, "fz": 1.0}
+			st = {"x": e.x, "z": e.z, "phase": randf() * 10.0, "fx": 0.0, "fz": 1.0, "still": 0}
 			_state[id] = st
-		var dx: float = e.x - st.x
-		var dz: float = e.z - st.z
+		st.seen = frame_id
+		var ex: float = e.x
+		var ez: float = e.z
+		var dx: float = ex - st.x
+		var dz: float = ez - st.z
 		var dist := sqrt(dx * dx + dz * dz)
 		var s: float = e.scale
-		var moving := dist > 0.0005
-		if moving:
-			var zombie: bool = e.kind <= KIND_GIANT
-			st.phase += dist * (16.0 * 0.6 if zombie else 11.0) / s
+		if dist > 0.0005:
+			st.phase += dist * (16.0 * 0.6 if e.kind <= KIND_GIANT else 11.0) / s
 			st.fx = dx / dist
 			st.fz = dz / dist
 			st.still = 0
 		else:
-			st.still = st.get("still", 0) + 1
-		st.x = e.x
-		st.z = e.z
+			st.still += 1
+		st.x = ex
+		st.z = ez
 		var fx: float = st.fx
 		var fz: float = st.fz
 		if e.has("face"):
 			fx = e.face.x
 			fz = e.face.y
-		var d := octant(fx, fz, cam)
+		var d := posmod(int(roundf(atan2(fx * r.x + fz * r.z, fx * f.x + fz * f.z) / (PI / 4.0))), 8)
 		# quieto unos fotogramas → de pie (fotograma 0)
 		var frame := 0 if st.still > 4 else int(floorf(fposmod(st.phase, TAU) / TAU * PixelPeople.FRAMES)) % PixelPeople.FRAMES
 		var row: int = e.variant * PixelPeople.FRAMES + frame
-		var gy := Coast.height_at(e.x, e.z) # la playa queda más baja que el paseo
-		var pos := Vector3(e.x, gy, e.z)
-		mm.set_instance_transform(n, Transform3D(Basis(), pos))
-		mm.set_instance_custom_data(n, Color(d, row, s, e.kind))
-		sm.set_instance_transform(n, Transform3D(Basis.from_scale(Vector3(s, 1, s)), Vector3(e.x, gy + 0.022, e.z)))
+		# altura del suelo (playa, relieve): solo al moverse un poco (es lo más caro)
+		var gy: float
+		if st.has("gy") and absf(ex - st.hx) + absf(ez - st.hz) < 0.15:
+			gy = st.gy
+		else:
+			gy = Coast.height_at(ex, ez)
+			st.gy = gy
+			st.hx = ex
+			st.hz = ez
+		var o := n * 16
+		_wbuf[o] = 1.0; _wbuf[o + 1] = 0.0; _wbuf[o + 2] = 0.0; _wbuf[o + 3] = ex
+		_wbuf[o + 4] = 0.0; _wbuf[o + 5] = 1.0; _wbuf[o + 6] = 0.0; _wbuf[o + 7] = gy
+		_wbuf[o + 8] = 0.0; _wbuf[o + 9] = 0.0; _wbuf[o + 10] = 1.0; _wbuf[o + 11] = ez
+		_wbuf[o + 12] = d; _wbuf[o + 13] = row; _wbuf[o + 14] = s; _wbuf[o + 15] = e.kind
+		var q := n * 12
+		_sbuf[q] = s; _sbuf[q + 1] = 0.0; _sbuf[q + 2] = 0.0; _sbuf[q + 3] = ex
+		_sbuf[q + 4] = 0.0; _sbuf[q + 5] = 1.0; _sbuf[q + 6] = 0.0; _sbuf[q + 7] = gy + 0.022
+		_sbuf[q + 8] = 0.0; _sbuf[q + 9] = 0.0; _sbuf[q + 10] = s; _sbuf[q + 11] = ez
 		n += 1
+	mm.buffer = _wbuf
+	sm.buffer = _sbuf
 	mm.visible_instance_count = n
 	sm.visible_instance_count = n
-	for id in _state.keys():
-		if not seen.has(id):
-			_state.erase(id)
+	# estado de los que ya no están (cada segundo, no en cada fotograma)
+	if frame_id % 60 == 0:
+		for id in _state.keys():
+			if _state[id].seen != frame_id:
+				_state.erase(id)
 
 	var km := _corpses.multimesh
 	var k := 0
 	for c in corpses:
 		if k >= MAX_CORPSES:
 			break
-		km.set_instance_transform(k, Transform3D(Basis(), Vector3(c.x, Coast.height_at(c.x, c.z), c.z)))
-		var row: int = c.row if c.has("row") else int(c.variant) % ZOMBIE_VARIANTS
-		km.set_instance_custom_data(k, Color(c.pose, row, c.scale, 4))
+		var o := k * 16
+		_kbuf[o] = 1.0; _kbuf[o + 1] = 0.0; _kbuf[o + 2] = 0.0; _kbuf[o + 3] = c.x
+		_kbuf[o + 4] = 0.0; _kbuf[o + 5] = 1.0; _kbuf[o + 6] = 0.0; _kbuf[o + 7] = Coast.height_at(c.x, c.z)
+		_kbuf[o + 8] = 0.0; _kbuf[o + 9] = 0.0; _kbuf[o + 10] = 1.0; _kbuf[o + 11] = c.z
+		_kbuf[o + 12] = c.pose; _kbuf[o + 13] = c.row if c.has("row") else int(c.variant) % ZOMBIE_VARIANTS; _kbuf[o + 14] = c.scale; _kbuf[o + 15] = 4
 		k += 1
+	if k > 0:
+		km.buffer = _kbuf
 	km.visible_instance_count = k

@@ -145,6 +145,24 @@ static func sea_mat() -> Material:
 	if not _mats.has("sea"):
 		var m := ShaderMaterial.new()
 		m.shader = load("res://shaders/sea.gdshader")
+		var ripple := NoiseTexture2D.new()
+		ripple.width = 256
+		ripple.height = 256
+		ripple.seamless = true
+		ripple.as_normal_map = true
+		ripple.bump_strength = 6.0
+		ripple.generate_mipmaps = true
+		ripple.noise = FastNoiseLite.new()
+		ripple.noise.frequency = 0.03
+		m.set_shader_parameter("ripple_tex", ripple)
+		var nz := NoiseTexture2D.new()
+		nz.width = 256
+		nz.height = 256
+		nz.seamless = true
+		nz.generate_mipmaps = true
+		nz.noise = FastNoiseLite.new()
+		nz.noise.frequency = 0.04
+		m.set_shader_parameter("noise_tex", nz)
 		_mats.sea = m
 	return _mats.sea
 
@@ -185,23 +203,22 @@ static func build(root: Node3D, rooms: Array, ogx: int, ogz: int) -> void:
 	var walls := GeoBatch.new()
 	var beach := GeoBatch.new()
 	var any_water := false
+	var trees := {} # clave de árbol -> [Transform3D]
 	var lo := Vector2(INF, INF)
 	var hi := Vector2(-INF, -INF)
 	for room in rooms:
 		var r := _Room.new()
 		r.setup(room, ogx, ogz)
 		r.build(ground, walls, beach)
+		r.park_trees(trees)
 		any_water = any_water or r.has_water
 		lo = lo.min(Vector2(r.gx0, r.gy0))
 		hi = hi.max(Vector2(r.gx0 + W, r.gy0 + H))
+	_trees(root, trees)
+	# por salas: la cámara descarta lo que no ve
 	for b in [[ground, false], [beach, false], [walls, true]]:
-		var mesh: ArrayMesh = b[0].to_mesh()
-		if mesh.get_surface_count() == 0:
-			continue
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if b[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		root.add_child(mi)
+		b[0].chunk = Vector2(W * T, H * T)
+		b[0].build(root, b[1])
 	if any_water:
 		_sea(root, lo, hi, ogx, ogz)
 
@@ -362,6 +379,41 @@ class _Room:
 			for x in W:
 				_cell(x, y, ground, beach, mat, contour)
 		_walls(contour, walls)
+
+	## Árboles de los parques: uno por celda de 5 tiles (posición con ruido) donde la
+	## hierba sigue alrededor; robles, hayas y pinos, y tamariscos junto al mar.
+	func park_trees(out: Dictionary) -> void:
+		if tiles.is_empty():
+			return
+		for cy in range(0, H, 5):
+			for cx in range(0, W, 5):
+				var gx := gx0 + cx
+				var gy := gy0 + cy
+				if Coast._hash(gx * 0.31, gy * 0.17) > 0.62:
+					continue
+				var px := cx + 0.5 + Coast._hash(gx, gy + 3.0) * 4.0
+				var py := cy + 0.5 + Coast._hash(gx + 7.0, gy) * 4.0
+				var ok := true
+				for dy in [-1, 0, 1]:
+					for dx in [-1, 0, 1]:
+						var tx := clampi(int(px) + dx, 0, W - 1)
+						var ty := clampi(int(py) + dy, 0, H - 1)
+						if int(tiles[ty][tx]) != Protocol.TileType.Grass:
+							ok = false
+				if not ok:
+					continue
+				var wx := gx0 + px
+				var wy := gy0 + py
+				var u := Coast._hash(wx * 1.3, wy * 0.7)
+				var species := "roble" if u < 0.45 else ("haya" if u < 0.75 else "pino")
+				if absf(coast.value(wx, wy)) < 10.0:
+					species = "tamarisco"
+				var sc := 0.8 + Coast._hash(wy, wx) * 0.4
+				var key := Trees.key_for(species, wx, wy)
+				if not out.has(key):
+					out[key] = []
+				var xf := Transform3D(Basis(Vector3.UP, u * 40.0).scaled(Vector3(sc, sc, sc)), _L(wx, wy, Y + Terrain.h(wx, wy)))
+				out[key].append(xf)
 
 	## Parques y jardines (casillas de hierba del servidor): contorno suavizado con
 	## marching squares sobre la media de las cuatro casillas de cada esquina.
@@ -539,6 +591,21 @@ class _Room:
 static func _hash(x: float, y: float) -> float:
 	var h := sin(x * 127.1 + y * 311.7) * 43758.5453
 	return h - floorf(h)
+
+
+## Árboles de los parques en MultiMesh (una llamada de dibujo por especie y variante).
+static func _trees(root: Node3D, trees: Dictionary) -> void:
+	for key in trees:
+		var list: Array = trees[key]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = Trees.mesh_for_key(key)
+		mm.instance_count = list.size()
+		for i in list.size():
+			mm.set_instance_transform(i, list[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		root.add_child(mmi)
 
 
 ## Farola del paseo: fuste de fundición, brazo corto y farol.

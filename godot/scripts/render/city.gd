@@ -139,6 +139,7 @@ var audit := {"prop": 0, "edificio": 0, "calzada": 0}
 var approaches: Array = [] # llegadas a cruces: { x, y, hx, hy, stop_dist, axis ("A"/"B"/"stop") } (tiles globales)
 var buildings := {} # id -> info para Destruction (pos, height, pts, refs, parts, xf, hp, max_hp)
 var crosses: Array = []
+var _bchunks := {} # sala -> MeshInstance3D con los edificios fundidos
 var osm := false # ciudad real (OpenStreetMap): plantas reales extruidas, sentido único real
 
 
@@ -206,6 +207,18 @@ func _free(px: float, py: float, r: float, margin := 0.4, sidewalk := true) -> b
 				audit.calzada += 1
 				return false
 	return true
+
+
+## Distancia (tiles) a la fachada más cercana, hasta un máximo.
+func _building_gap(px: float, py: float, max_d: float) -> float:
+	var p := Vector2(px, py)
+	var best := max_d
+	for bp in bpolys:
+		var box: Rect2 = bp[1]
+		if not box.grow(best).has_point(p):
+			continue
+		best = minf(best, _poly_dist(p, bp[0]))
+	return best
 
 
 func _claim(px: float, py: float, r: float) -> void:
@@ -294,6 +307,9 @@ func _build(datas: Array) -> void:
 	flat.terrain = true
 	solid.terrain = true
 	litter.terrain = true
+	# troceado por salas: la cámara solo dibuja lo que ve
+	for b in [flat, solid, litter]:
+		b.chunk = Vector2(W * T, H * T)
 	# todo lo que se apoya en el suelo sigue el relieve (ciudad real)
 	flat.terrain = true
 	solid.terrain = true
@@ -354,6 +370,8 @@ func _build(datas: Array) -> void:
 	root.set_meta("highways", hws.values())
 	if Config.bench:
 		print("reglas: descartados por solape=%d edificio=%d calzada=%d" % [audit.prop, audit.edificio, audit.calzada])
+	for ck in _bchunks:
+		_chunk_rebuild(_bchunks[ck])
 	_instantiate_chunks()
 
 
@@ -519,8 +537,12 @@ func _markings_and_furniture() -> void:
 			elif k % 3 == 1 and h > 0.3 and not _near_cross(px, py, 6.0):
 				# árbol en alcorque, lejos de los cruces y de farolas / hidrantes
 				if _free(fx, fy, 0.5, 0.4):
-					var crown: int = CROWNS[int(floorf(h * 97.0)) % CROWNS.size()]
-					_kit_prop("suburban", "tree-large" if crown % 2 == 0 else "tree-small", _L(fx), _Lz(fy), 0.0, 1.0, 0.9 + (crown % 7) * 0.05)
+					# plátanos de sombra (y algún haya), del tamaño que deja la fachada más cercana
+					var species := "platano" if hash2(fx * 0.37, fy * 0.53) < 0.8 else "haya"
+					var room := _building_gap(fx, fy, 4.0) * T
+					var sc := clampf(room / float(Trees.SPECIES[species].cr) * 1.15, 0.5, 1.1)
+					var rot := Basis(Vector3.UP, hash2(fx, fy) * TAU).scaled(Vector3(sc, sc * (0.95 + hash2(fy, fx) * 0.1), sc))
+					_place(Trees.key_for(species, fx, fy), Transform3D(rot, Vector3(_L(fx), 0.05, _Lz(fy))))
 					_claim(fx, fy, 0.8)
 			elif h < 0.07 and not _near_cross(px, py, 5.0):
 				var bx := px + nx * side * (half + 1.3)
@@ -1043,10 +1065,70 @@ func _osm_building(bd: Dictionary) -> void:
 		c /= bd.pts.size()
 		built = OsmBuilding.build(poly, int(bd.floors), str(bd.get("t", "yes")), str(bd.id), (c - Vector2(24, 13.5)).length(), true)
 	var mesh: ArrayMesh = built[0]
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	root.add_child(mi)
-	_register(bd, Transform3D(), float(built[1]), [[mesh, Transform3D()]], [mi])
+	if mesh.get_surface_count() > 1 or built.size() < 4:
+		# hitos con varias superficies: nodo propio
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		root.add_child(mi)
+		_register(bd, Transform3D(), float(built[1]), [[mesh, Transform3D()]], [mi])
+		return
+	# el resto se funde por sala en una sola malla (una llamada de dibujo por sala)
+	var c0: Vector2 = poly[0]
+	var ck := "%d,%d" % [floori((c0.x / T + origin_gx) / W), floori((c0.y / T + origin_gz) / H)]
+	if not _bchunks.has(ck):
+		var holder := MeshInstance3D.new()
+		holder.set_meta("entries", {})
+		holder.set_meta("hidden", {})
+		root.add_child(holder)
+		_bchunks[ck] = holder
+	var h: MeshInstance3D = _bchunks[ck]
+	h.get_meta("entries")[str(bd.id)] = built[3]
+	_register(bd, Transform3D(), float(built[1]), [[mesh, Transform3D()]], [City._chunk_hide.bind(h, str(bd.id))])
+
+
+## Malla fundida de los edificios de una sala (sin los derrumbados).
+static func _chunk_rebuild(h: MeshInstance3D) -> void:
+	var entries: Dictionary = h.get_meta("entries")
+	var hidden: Dictionary = h.get_meta("hidden")
+	var v := PackedVector3Array()
+	var n := PackedVector3Array()
+	var col := PackedColorArray()
+	var uv := PackedVector2Array()
+	var uv2 := PackedVector2Array()
+	var cu := PackedFloat32Array()
+	for id in entries:
+		if hidden.has(id):
+			continue
+		var a: Array = entries[id]
+		v.append_array(a[Mesh.ARRAY_VERTEX])
+		n.append_array(a[Mesh.ARRAY_NORMAL])
+		col.append_array(a[Mesh.ARRAY_COLOR])
+		uv.append_array(a[Mesh.ARRAY_TEX_UV])
+		uv2.append_array(a[Mesh.ARRAY_TEX_UV2])
+		cu.append_array(a[Mesh.ARRAY_CUSTOM0])
+	if v.is_empty():
+		h.mesh = null
+		return
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = v
+	arr[Mesh.ARRAY_NORMAL] = n
+	arr[Mesh.ARRAY_COLOR] = col
+	arr[Mesh.ARRAY_TEX_UV] = uv
+	arr[Mesh.ARRAY_TEX_UV2] = uv2
+	arr[Mesh.ARRAY_CUSTOM0] = cu
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr, [], {}, Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
+	m.surface_set_material(0, OsmBuilding.material())
+	h.mesh = m
+
+
+## Derrumbe: el edificio sale de la malla fundida de su sala.
+static func _chunk_hide(h: MeshInstance3D, id: String) -> void:
+	if not is_instance_valid(h):
+		return
+	h.get_meta("hidden")[id] = true
+	_chunk_rebuild(h)
 
 
 ## Respaldo: planta poligonal extruida (parcelas donde no cabe ningún modelo).
@@ -1102,15 +1184,20 @@ func _instantiate_chunks() -> void:
 			var list: Array = kinds[kind]
 			if kind == "streetlight":
 				_multimesh(StreetFurniture.streetlight_mesh(), Transform3D(), list, false)
+			elif kind.begins_with("tree:"):
+				_multimesh(Trees.mesh_for_key(kind), Transform3D(), list, false)
 			elif kind == "car":
 				_multimesh(car_mesh(), Transform3D(), list, true)
 			else:
-				var model := Kenney.model(kind.substr(6))
+				var key: String = kind.substr(6)
+				var model := Kenney.model(key)
+				# mobiliario pequeño (bancos, papeleras, detalles): sin sombra, que apenas se ve
+				var small := Kenney.size(key).y * Kenney.base_scale(key) < 1.0
 				for part in model.parts:
-					_multimesh(part[0], part[1], list, false)
+					_multimesh(part[0], part[1], list, false, not small)
 
 
-func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool) -> void:
+func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool, shadows := true) -> void:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = colors
@@ -1125,4 +1212,6 @@ func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool) -> 
 			buildings[bid].refs.append([mm, i])
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
+	if not shadows:
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(mmi)

@@ -47,6 +47,14 @@ func set_city(meta_root: Node3D, ogx: int, ogz: int) -> void:
 	segs = meta_root.get_meta("segs", [])
 	info = meta_root.get_meta("info", {})
 	approaches = meta_root.get_meta("approaches", [])
+	# llegadas a cruces por celda de 3 tiles: cada coche solo mira las de su final de tramo
+	_agrid.clear()
+	for a in approaches:
+		var c := Vector2i(floori(a.x / 3.0), floori(a.y / 3.0))
+		if _agrid.has(c):
+			_agrid[c].append(a)
+		else:
+			_agrid[c] = [a]
 	_ends.clear()
 	for s in segs:
 		for e in 2:
@@ -60,6 +68,8 @@ func set_city(meta_root: Node3D, ogx: int, ogz: int) -> void:
 
 
 var _fill := false
+var _agrid := {} # Vector2i (celda de 3 tiles) -> [llegada a cruce]
+var _ogrid := {} # Vector2i (celda de 4 tiles) -> [Vector2]
 
 
 ## Carriles de las autovías: dos por sentido, por la derecha, a lo largo de cada una.
@@ -127,8 +137,17 @@ func _update_hw(dt: float) -> void:
 			v.d = 0.0
 
 
+## Personas y zombis en una rejilla de celdas de 4 tiles: cada coche solo mira las
+## celdas de su alrededor.
 func set_obstacles(list: Array) -> void:
 	_obstacles = list
+	_ogrid.clear()
+	for o in list:
+		var c := Vector2i(floori(o.x / 4.0), floori(o.y / 4.0))
+		if _ogrid.has(c):
+			_ogrid[c].append(o)
+		else:
+			_ogrid[c] = [o]
 
 
 static func _end_key(x: float, y: float) -> String:
@@ -254,6 +273,19 @@ func _next(v: Dictionary) -> bool:
 	return true
 
 
+## Llegadas a cruces a menos de 1,5 tiles (celdas vecinas de la rejilla).
+func _near_approaches(p: Vector2) -> Array:
+	var out: Array = []
+	var cx := floori(p.x / 3.0)
+	var cy := floori(p.y / 3.0)
+	for dy in [-1, 0, 1]:
+		for dx in [-1, 0, 1]:
+			var l: Array = _agrid.get(Vector2i(cx + dx, cy + dy), [])
+			if not l.is_empty():
+				out.append_array(l)
+	return out
+
+
 ## ¿Hay que parar antes del cruce del final del tramo? Devuelve la distancia (tiles)
 ## hasta la línea de detención, o INF si puede seguir.
 func _stop_distance(v: Dictionary, length: float, time: float) -> float:
@@ -262,7 +294,7 @@ func _stop_distance(v: Dictionary, length: float, time: float) -> float:
 	var s: Dictionary = v.seg
 	var end := Vector2(s.x1, s.y1) if v.fwd else Vector2(s.x0, s.y0)
 	var h := _dir_of(s, v.fwd)
-	for a in approaches:
+	for a in _near_approaches(end):
 		if absf(a.x - end.x) > 1.5 or absf(a.y - end.y) > 1.5:
 			continue
 		if Vector2(a.hx, a.hy).dot(h) < 0.9:
@@ -320,7 +352,7 @@ func update(dt: float, time: float, player: Vector2) -> void:
 					# STOP: tras detenerse un momento, sigue
 					var end := Vector2(s.x1, s.y1) if v.fwd else Vector2(s.x0, s.y0)
 					if v.wait > 1.2 and _stop_distance(v, length, time) < INF:
-						for a in approaches:
+						for a in _near_approaches(end):
 							if a.axis == "stop" and absf(a.x - end.x) < 1.5 and absf(a.y - end.y) < 1.5:
 								v.stopped_at = end
 								v.wait = 0.0
@@ -336,13 +368,16 @@ func update(dt: float, time: float, player: Vector2) -> void:
 				target = minf(target, maxf(0.0, (ahead - 4.2) * 1.2))
 		# personas y zombis en la calzada por delante
 		var crowd := 0
-		for o in _obstacles:
-			var q: Vector2 = o - p
-			var ahead := q.dot(h)
-			if ahead > -1.0 and ahead < 5.0 and absf(q.dot(Vector2(-h.y, h.x))) < 1.6:
-				target = minf(target, maxf(0.0, (ahead - 2.2) * 1.0))
-			if q.length_squared() < 36.0:
-				crowd += 1
+		for cy in range(floori((p.y - 6.0) / 4.0), floori((p.y + 6.0) / 4.0) + 1):
+			for cx in range(floori((p.x - 6.0) / 4.0), floori((p.x + 6.0) / 4.0) + 1):
+				var cell: Array = _ogrid.get(Vector2i(cx, cy), [])
+				for o in cell:
+					var q: Vector2 = o - p
+					var ahead := q.dot(h)
+					if ahead > -1.0 and ahead < 5.0 and absf(q.dot(Vector2(-h.y, h.x))) < 1.6:
+						target = minf(target, maxf(0.0, (ahead - 2.2) * 1.0))
+					if q.length_squared() < 36.0:
+						crowd += 1
 		if crowd >= 6 and v.kind != "emergency":
 			target = 0.0 # la horda lo rodea: se queda parado
 		var acc := 3.0 if target > v.speed else 7.0

@@ -11,6 +11,9 @@ uniform vec3 deep : source_color = vec3(0.03, 0.13, 0.2);
 uniform vec3 shallow : source_color = vec3(0.12, 0.36, 0.37);
 uniform vec3 foam_color : source_color = vec3(0.93, 0.96, 0.97);
 uniform sampler2D depth_tex : hint_depth_texture, filter_linear;
+// ruido precalculado (coast.gd): mucho más barato que calcularlo por píxel
+uniform sampler2D ripple_tex : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform sampler2D noise_tex : filter_linear_mipmap, repeat_enable;
 global uniform float sprite_light;
 
 varying vec3 v_wpos;
@@ -48,13 +51,9 @@ void vertex() {
 void fragment() {
 	vec2 p = v_wpos.xz;
 	// ondulación fina: normales de ruido que se desplazan
-	float e = 0.05;
-	vec2 q1 = p * 3.0 + vec2(TIME * 0.35, -TIME * 0.2);
-	vec2 q2 = p * 5.3 + vec2(-TIME * 0.25, TIME * 0.3);
-	float h0 = noise(q1) + 0.5 * noise(q2);
-	float hx = noise(q1 + vec2(e, 0.0)) + 0.5 * noise(q2 + vec2(e, 0.0));
-	float hz = noise(q1 + vec2(0.0, e)) + 0.5 * noise(q2 + vec2(0.0, e));
-	vec3 wn = normalize(vec3(-(hx - h0) / e * 0.08, 1.0, -(hz - h0) / e * 0.08));
+	vec3 r1 = texture(ripple_tex, p * 0.35 + vec2(TIME * 0.04, -TIME * 0.025)).xyz * 2.0 - 1.0;
+	vec3 r2 = texture(ripple_tex, p * 0.6 + vec2(-TIME * 0.03, TIME * 0.035)).xyz * 2.0 - 1.0;
+	vec3 wn = normalize(vec3((r1.x + r2.x) * 0.35, 1.0, (r1.y + r2.y) * 0.35));
 	vec3 base_n = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	NORMAL = normalize((VIEW_MATRIX * vec4(normalize(base_n + vec3(wn.x, 0.0, wn.z)), 0.0)).xyz);
 
@@ -67,12 +66,12 @@ void fragment() {
 	vec3 col = mix(shallow, deep, t);
 
 	// espuma de contacto (muro, rocas, orilla), rota por ruido
-	float n1 = noise(p * 9.0 + vec2(TIME * 0.6, TIME * 0.4));
+	float n1 = texture(noise_tex, p * 1.1 + vec2(TIME * 0.07, TIME * 0.05)).r;
 	float contact = 1.0 - smoothstep(0.0, 0.1 + 0.08 * n1, wd);
 	// rompientes: franjas que avanzan hacia donde hay menos fondo
 	float shoal = 1.0 - smoothstep(0.15, 0.9, wd);
 	float band = sin(wd * 18.0 + TIME * 2.2 + n1 * 2.0);
-	float breaker = smoothstep(0.75, 0.98, band) * shoal * smoothstep(0.35, 0.7, noise(p * 2.5 + vec2(0.0, TIME * 0.3)));
+	float breaker = smoothstep(0.75, 0.98, band) * shoal * smoothstep(0.35, 0.7, texture(noise_tex, p * 0.3 + vec2(0.0, TIME * 0.035)).r);
 	float foam = clamp(contact * (0.55 + 0.45 * n1) + breaker * 0.8, 0.0, 1.0);
 	col = mix(col, foam_color, foam);
 	float day = mix(0.5, 1.0, sprite_light);

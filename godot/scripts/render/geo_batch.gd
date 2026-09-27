@@ -6,6 +6,9 @@ var _lists := {} # Material -> [PackedVector3Array, PackedVector3Array, PackedVe
 ## Apoyar en el relieve (Terrain): al construir, cada vértice sube la altura del terreno
 ## en su punto, y los triángulos planos largos se parten antes para que sigan la ladera.
 var terrain := false
+## Trocear al construir en celdas de este tamaño (unidades; 0 = una malla por material):
+## así la cámara descarta lo que no ve en vez de dibujar las nueve salas enteras.
+var chunk := Vector2.ZERO
 const MAX_EDGE := 1.5 # la separación de la rejilla del relieve (3 tiles)
 
 
@@ -203,6 +206,9 @@ func to_mesh() -> ArrayMesh:
 func build(parent: Node3D, cast_shadows := false) -> void:
 	for mat in _lists:
 		var l: Array = _grounded(_lists[mat])
+		if chunk != Vector2.ZERO:
+			_build_chunked(parent, mat, l, cast_shadows)
+			continue
 		if l[0].size() == 0:
 			continue
 		var a := []
@@ -210,6 +216,37 @@ func build(parent: Node3D, cast_shadows := false) -> void:
 		a[Mesh.ARRAY_VERTEX] = l[0]
 		a[Mesh.ARRAY_NORMAL] = l[1]
 		a[Mesh.ARRAY_TEX_UV] = l[2]
+		var am := ArrayMesh.new()
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
+		am.surface_set_material(0, mat)
+		var mi := MeshInstance3D.new()
+		mi.mesh = am
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(mi)
+
+
+## Una malla por celda (según el centro de cada triángulo) para este material.
+func _build_chunked(parent: Node3D, mat: Material, l: Array, cast_shadows: bool) -> void:
+	var v: PackedVector3Array = l[0]
+	var n: PackedVector3Array = l[1]
+	var uv: PackedVector2Array = l[2]
+	var cells := {}
+	for i in range(0, v.size() - 2, 3):
+		var c := (v[i] + v[i + 1] + v[i + 2]) / 3.0
+		var k := Vector2i(floori(c.x / chunk.x), floori(c.z / chunk.y))
+		if not cells.has(k):
+			cells[k] = [PackedVector3Array(), PackedVector3Array(), PackedVector2Array()]
+		var dst: Array = cells[k]
+		dst[0].append_array([v[i], v[i + 1], v[i + 2]])
+		dst[1].append_array([n[i], n[i + 1], n[i + 2]])
+		dst[2].append_array([uv[i], uv[i + 1], uv[i + 2]])
+	for k in cells:
+		var dst: Array = cells[k]
+		var a := []
+		a.resize(Mesh.ARRAY_MAX)
+		a[Mesh.ARRAY_VERTEX] = dst[0]
+		a[Mesh.ARRAY_NORMAL] = dst[1]
+		a[Mesh.ARRAY_TEX_UV] = dst[2]
 		var am := ArrayMesh.new()
 		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
 		am.surface_set_material(0, mat)
