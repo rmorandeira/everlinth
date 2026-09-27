@@ -173,7 +173,7 @@ export function generateScreen(sx: number, sy: number): GeneratedScreen {
   // antes de generar los tiles y usarse para filtrar qué se coloca.
   const { biome, biomeSource, biomeBlend } = classifyBiome(sx, sy);
   const groundOnly = GROUND_ONLY_BIOMES.has(biome);
-  const isCity = biome === "city";
+  const isCity = biome === "city" || biome === "countryside"; // geometría vectorial (citygen)
 
   const tiles: TileType[][] = Array.from({ length: SCREEN_HEIGHT }, () =>
     Array.from({ length: SCREEN_WIDTH }, () => TileType.Grass)

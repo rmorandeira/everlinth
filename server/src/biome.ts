@@ -2,6 +2,7 @@ import {
   BIOME_CATALOG,
   BIOME_IDS,
   minTransitionScreens,
+  inCountryside,
   type BiomeId,
   type BiomeSource,
   type BiomeBlend,
@@ -46,7 +47,8 @@ function smoothNoise(sx: number, sy: number, salt: number): number {
 // Bioma "natural" de una estancia si nadie la ha pintado: dos ejes de ruido
 // (temperatura, artificialidad) y el bioma del catálogo más cercano a ese punto.
 export function proceduralBiome(sx: number, sy: number): BiomeId {
-  // El bioma por defecto del mundo es la ciudad; el resto solo existe donde se pinte.
+  // El campo tiene su región; el resto del mundo es ciudad (otros biomas, solo pintados).
+  if (inCountryside(sx, sy)) return "countryside";
   if (DEFAULT_CITY) return "city";
   const temp = smoothNoise(sx, sy, 1);
   const tech = smoothNoise(sx, sy, 2);

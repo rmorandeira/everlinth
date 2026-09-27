@@ -317,12 +317,15 @@ func _build_city() -> void:
 		city_root.queue_free()
 		city_root = null
 	var datas: Array = []
-	if screen.has("city"):
-		datas.append(screen.city)
-	for n in neighbors:
-		if n.has("city"):
-			datas.append(n.city)
-	if datas.is_empty():
+	var rural_rooms: Array = [] # campo (bioma countryside): lo dibuja Rural, no City
+	for r in [screen] + neighbors:
+		if not r.has("city"):
+			continue
+		if r.city.get("rural", false):
+			rural_rooms.append({"sx": r.sx, "sy": r.sy, "city": r.city})
+		else:
+			datas.append(r.city)
+	if datas.is_empty() and rural_rooms.is_empty():
 		cars.set_cars([])
 		return
 	var t_build := Time.get_ticks_msec()
@@ -330,6 +333,11 @@ func _build_city() -> void:
 	if Config.bench:
 		print("ciudad: %d ms" % (Time.get_ticks_msec() - t_build))
 	add_child(city_root)
+	if not rural_rooms.is_empty():
+		var t_rural := Time.get_ticks_msec()
+		Rural.build(city_root, rural_rooms, int(screen.sx) * W, int(screen.sy) * H)
+		if Config.bench:
+			print("campo: %d ms" % (Time.get_ticks_msec() - t_rural))
 	# ciudad real (OSM): suelo recortado por la costa, paseo marítimo, playas y mar
 	var coast_rooms: Array = []
 	for r in [screen] + neighbors:

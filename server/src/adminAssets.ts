@@ -44,6 +44,7 @@ function saveAsset(def: AssetDef): void {
 // ---- Registro automático ----
 
 function guessCategory(kit: string, name: string): string {
+  if (kit === "countryside") return name.startsWith("tractor") ? "vehículo" : name === "windmill" ? "decoración" : "edificio";
   if (name.includes("skyscraper")) return "rascacielos";
   if (kit === "suburban" && name.startsWith("building")) return "casa";
   if (name.startsWith("building") || name.startsWith("low-detail-building")) return "edificio";
@@ -77,7 +78,7 @@ function seedCatalog(): number {
           name: humanName(name),
           source: { type: "glb", path: `${kit}/${name}` },
           category: guessCategory(kit, name),
-          biomes: kit === "suburban" ? ["city", "classic"] : ["city"],
+          biomes: kit === "countryside" ? ["countryside"] : kit === "suburban" ? ["city", "classic"] : ["city"],
           scale: 1,
           textures: {},
           sockets: [],

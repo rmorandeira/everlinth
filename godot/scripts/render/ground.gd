@@ -70,14 +70,14 @@ func build(screen: Dictionary, neighbors: Array) -> void:
 	var block_cells: Array = []
 	var urban := GeoBatch.new()
 	if screen.has("city"):
-		_urban_room(urban, 0, 0, screen.city.get("osm", false))
+		_urban_room(urban, 0, 0, screen.city.get("osm", false) or screen.city.get("rural", false))
 	else:
 		_collect(screen.tiles, 0, 0, sx, sy, floor_cells, block_cells, false)
 	for n in neighbors:
 		var nx := int(n.sx)
 		var ny := int(n.sy)
 		if n.has("city"):
-			_urban_room(urban, (nx - sx) * W, (ny - sy) * H, n.city.get("osm", false))
+			_urban_room(urban, (nx - sx) * W, (ny - sy) * H, n.city.get("osm", false) or n.city.get("rural", false))
 		else:
 			_collect(n.tiles, (nx - sx) * W, (ny - sy) * H, nx, ny, floor_cells, block_cells, false)
 

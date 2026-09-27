@@ -22,9 +22,18 @@ export const LOCATIONS = [
   { id: "coruna", name: "A Coruña", sx: 0, sy: 0 },
   { id: "generada", name: "Ciudad generada", sx: 120, sy: 0 },
   { id: "nueva", name: "Otra ciudad generada (aleatoria)", sx: 0, sy: 0 },
+  { id: "campo", name: "Campo", sx: -140, sy: 0 },
 ];
 /** Zona donde se eligen los destinos aleatorios, en salas [sx0, sy0, sx1, sy1]. */
 export const RANDOM_CITY_REGION = [60, -190, 190, 190];
+
+/** Región del campo (bioma countryside), en salas [sx0, sy0, sx1, sy1] (incluidas). */
+export const COUNTRYSIDE_REGION = [-200, -200, -80, 199];
+
+/** ¿La sala está en el campo? */
+export function inCountryside(sx: number, sy: number): boolean {
+  return sx >= COUNTRYSIDE_REGION[0] && sx <= COUNTRYSIDE_REGION[2] && sy >= COUNTRYSIDE_REGION[1] && sy <= COUNTRYSIDE_REGION[3];
+}
 
 /** ¿La sala está en la región de la ciudad real? */
 export function inOsmRegion(sx: number, sy: number): boolean {
@@ -142,7 +151,7 @@ export function screenKey(c: ScreenCoord): string {
 // punto más, no O(n^2) relaciones que mantener a mano. La distancia entre dos
 // biomas en ese espacio decide cuántas estancias mínimas de transición hacen
 // falta para pasar de uno a otro sin salto brusco (ver minTransitionScreens).
-export type BiomeId = "classic" | "grimdark" | "badlands" | "cyberpunk" | "ega" | "cga" | "sea" | "city";
+export type BiomeId = "classic" | "grimdark" | "badlands" | "cyberpunk" | "ega" | "cga" | "sea" | "city" | "countryside";
 
 export interface BiomeDef {
   id: BiomeId;
@@ -162,6 +171,7 @@ export const BIOME_CATALOG: Record<BiomeId, BiomeDef> = {
   cga: { id: "cga", label: "CGA", temp: -0.2, tech: 0.55, debugColor: "#55ffff" },
   city: { id: "city", label: "Ciudad", temp: 0.15, tech: 0.8, debugColor: "#8a8f98" },
   sea: { id: "sea", label: "Mar", temp: 0, tech: -0.2, blocking: true, debugColor: "#1f5fa8" },
+  countryside: { id: "countryside", label: "Campo", temp: 0.2, tech: -0.5, debugColor: "#c9b458" },
 };
 
 export const BIOME_IDS = Object.keys(BIOME_CATALOG) as BiomeId[];
@@ -320,6 +330,14 @@ export interface CityData {
   /** Relieve de la sala: alturas (unidades de render, 1 = 3 m) en una rejilla de w × h
    * puntos cada `step` tiles desde la esquina de la sala (esquinas incluidas). */
   elev?: { step: number; w: number; h: number; z: number[] };
+  /** Campo (bioma countryside): la sala no es ciudad, la dibuja el módulo rural. */
+  rural?: boolean;
+  /** Pistas de tierra [x0, y0, x1, y1, semiancho] (tiles globales). */
+  tracks?: Array<[number, number, number, number, number]>;
+  /** Parcelas: rectángulo [x0, y0, x1, y1] (tiles globales), tipo y dirección de labor. */
+  fields?: Array<{ id: string; x0: number; y0: number; x1: number; y1: number; kind: "wheat" | "stubble" | "plowed" | "pasture"; ang: number }>;
+  /** Objetos del campo: modelo del catálogo ("countryside/barn-a"…), posición y giro. */
+  props?: Array<{ id: string; m: string; x: number; y: number; a: number }>;
   /** Hitos modelados (estadio…): centro, largo y ancho (tiles), ángulo del eje largo. */
   landmarks?: Array<{ kind: string; name: string; x: number; y: number; len: number; wid: number; ang: number }>;
   /** Cruces de calles (para pasos de cebra y cortar las marcas). */

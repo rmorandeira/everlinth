@@ -10,6 +10,7 @@ import {
   WORLD_MIN,
   WORLD_MAX,
   LOCATIONS,
+  inCountryside,
   RANDOM_CITY_REGION,
   ZOMBIE_MAX_HP,
   GIANT_HP,
@@ -258,7 +259,9 @@ export class GameServer {
       // La geometría vectorial de la ciudad no se guarda: se regenera (determinista).
       // La ciudad no se guarda: geometría y casillas se regeneran (deterministas), así
       // las salas guardadas siguen al generador (autovías, pilares, corredores…).
-      if (sc.biome === "city" && !sc.city) {
+      // el campo tiene su región (salas guardadas antes como ciudad pasan a campo)
+      if (inCountryside(sx, sy)) sc.biome = "countryside";
+      if ((sc.biome === "city" || sc.biome === "countryside") && !sc.city) {
         const r = rasterRoom(sx, sy);
         sc.city = r.city;
         sc.tiles = r.tiles;

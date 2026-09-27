@@ -228,7 +228,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 func set_location(sx: int, sy: int) -> void:
 	var r: Array = Protocol.OSM_REGION
 	var real := sx >= int(r[0]) and sx <= int(r[2]) and sy >= int(r[1]) and sy <= int(r[3])
+	var c: Array = Protocol.COUNTRYSIDE_REGION
+	var rural := sx >= int(c[0]) and sx <= int(c[2]) and sy >= int(c[1]) and sy <= int(c[3])
 	osm_label.visible = real
+	var here := "coruna" if real else ("campo" if rural else "generada")
 	for i in Protocol.LOCATIONS.size():
-		if str(Protocol.LOCATIONS[i].id) == ("coruna" if real else "generada"):
+		if str(Protocol.LOCATIONS[i].id) == here:
 			location_select.select(i)
