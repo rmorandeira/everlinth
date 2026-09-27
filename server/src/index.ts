@@ -10,7 +10,7 @@ import { treesRouter } from "./adminTrees.js";
 import { assetsRouter, assetEvents } from "./adminAssets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Secretos locales (p. ej. ANTHROPIC_API_KEY) en server/.env, fuera del repositorio.
+// Secretos y ajustes locales en server/.env, fuera del repositorio.
 try {
   process.loadEnvFile(path.join(__dirname, "..", ".env"));
 } catch {
@@ -19,8 +19,8 @@ try {
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 const app = express();
-// límite amplio: el generador de assets con IA recibe imágenes de referencia en base64
-app.use(express.json({ limit: "12mb" }));
+// límite amplio: los assets de primitivas con muchas piezas pesan
+app.use(express.json({ limit: "2mb" }));
 // CORS de solo lectura para el catálogo y los recursos públicos: los necesita el
 // cliente Godot exportado a web (el nativo no aplica CORS).
 app.use((req, res, next) => {

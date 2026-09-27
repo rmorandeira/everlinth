@@ -10,7 +10,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BIOME_IDS, DEFAULT_TEXTURE_PARAMS, type AssetDef, type BiomeId } from "@roi/shared";
 import { db } from "./db.js";
-import { AiError, generateAsset } from "./aiAssets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT = path.join(__dirname, "..", "..", "client");
@@ -167,7 +166,7 @@ function freeId(name: string): string {
   return id;
 }
 
-// Nuevo asset de primitivas (vacío o con las piezas que mande el editor/IA).
+// Nuevo asset de primitivas (vacío o con las piezas que manden el editor o Claude Code).
 assetsRouter.post("/admin/assets", (req, res) => {
   const body = (req.body ?? {}) as Partial<AssetDef>;
   const id = freeId(String(body.name ?? "Nuevo asset"));
@@ -212,33 +211,6 @@ assetsRouter.get("/admin/asset-textures.json", (_req, res) => {
     }
   }
   res.json(out);
-});
-
-// Generación por IA (texto + imagen opcional → asset de primitivas, ver aiAssets.ts).
-// Con baseId, la IA parte de ese asset (lo modifica) y el resultado es un asset nuevo.
-assetsRouter.post("/admin/assets/generate", async (req, res) => {
-  const body = (req.body ?? {}) as { prompt?: unknown; image?: unknown; baseId?: unknown };
-  const prompt = typeof body.prompt === "string" ? body.prompt.slice(0, 4000) : "";
-  const image = typeof body.image === "string" ? body.image : null;
-  if (!prompt.trim() && !image) {
-    res.status(400).json({ error: "Describe el asset o pega una imagen." });
-    return;
-  }
-  const base = typeof body.baseId === "string" ? getAsset(body.baseId) : null;
-  try {
-    const t0 = Date.now();
-    const out = await generateAsset({ prompt, image, base });
-    const def = sanitize(out.asset, freeId(out.asset.name));
-    if (!def) throw new AiError("El asset generado no es válido.");
-    saveAsset(def);
-    assetEvents.emit("changed", def.id);
-    const secs = ((Date.now() - t0) / 1000).toFixed(0);
-    console.log(`Asset IA ${def.id}: ${out.info} · ${secs} s`);
-    res.json({ asset: def, info: `${out.info} · ${secs} s` });
-  } catch (e) {
-    const status = e instanceof AiError ? e.status : 500;
-    res.status(status).json({ error: (e as Error).message });
-  }
 });
 
 // El editor es una página del cliente (Vite): client/admin-assets.html.

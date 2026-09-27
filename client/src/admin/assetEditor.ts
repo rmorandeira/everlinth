@@ -42,7 +42,6 @@ let textureLib: Array<{ url: string; name: string; group: string }> = [];
 let selectedPart: string | null = null;
 let selectedSocket: string | null = null;
 let pickingSocket = false;
-let aiImage: string | null = null;
 
 function setStatus(text: string): void {
   $("status").textContent = text;
@@ -590,7 +589,6 @@ function fillForm(): void {
     box.appendChild(l);
   }
   $("delete").classList.toggle("hidden", current.source.type !== "primitives");
-  $("ai-base-row").classList.toggle("hidden", current.source.type !== "primitives");
 }
 
 async function openAsset(id: string): Promise<void> {
@@ -762,57 +760,6 @@ $("delete").addEventListener("click", async () => {
   $("editor").classList.add("hidden");
   $("empty").classList.remove("hidden");
   renderList();
-});
-
-// ---------------------------------------------------------------- IA
-
-document.addEventListener("paste", (e) => {
-  const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith("image/"));
-  if (!item) return;
-  const file = item.getAsFile();
-  if (!file) return;
-  e.preventDefault();
-  const reader = new FileReader();
-  reader.onload = () => {
-    aiImage = String(reader.result);
-    $<HTMLImageElement>("ai-image-img").src = aiImage;
-    $("ai-image").classList.remove("hidden");
-  };
-  reader.readAsDataURL(file);
-});
-$("ai-image-clear").addEventListener("click", () => {
-  aiImage = null;
-  $("ai-image").classList.add("hidden");
-});
-$("ai-generate").addEventListener("click", async () => {
-  const prompt = $<HTMLTextAreaElement>("ai-prompt").value.trim();
-  if (!prompt && !aiImage) return;
-  const btn = $<HTMLButtonElement>("ai-generate");
-  // "Partir del asset actual": la IA modifica el abierto (el resultado es un asset nuevo)
-  const base = $<HTMLInputElement>("ai-base").checked && current?.source.type === "primitives" ? current.id : null;
-  btn.disabled = true;
-  const t0 = Date.now();
-  const tick = setInterval(() => {
-    $("ai-result").textContent = `Generando con Claude… ${Math.round((Date.now() - t0) / 1000)} s (puede tardar un par de minutos)`;
-  }, 500);
-  try {
-    const res = await fetch("/admin/assets/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, image: aiImage, baseId: base }) });
-    const data = (await res.json().catch(() => ({}))) as { error?: string; asset?: AssetDef; info?: string };
-    clearInterval(tick);
-    if (!res.ok || !data.asset) {
-      $("ai-result").textContent = data.error ?? `Error ${res.status}`;
-      return;
-    }
-    $("ai-result").textContent = `✓ «${data.asset.name}» generado · ${data.info ?? ""}`;
-    assets.push(data.asset);
-    renderList();
-    await openAsset(data.asset.id);
-  } catch (e) {
-    clearInterval(tick);
-    $("ai-result").textContent = `Error: ${(e as Error).message}`;
-  } finally {
-    btn.disabled = false;
-  }
 });
 
 // ---------------------------------------------------------------- arranque
