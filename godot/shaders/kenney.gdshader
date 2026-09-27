@@ -36,6 +36,11 @@ global uniform sampler2DArray fac_normal : filter_linear_mipmap, repeat_enable;
 global uniform sampler2DArray fac_rough : filter_linear_mipmap, repeat_enable;
 global uniform float facade_on;
 uniform bool allow_facade = true; // no en hormigón de autovías, etc.
+// Assets detallados (texturas PBR propias del modelo): relieve y rugosidad.
+uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool has_normal = false;
+uniform sampler2D rough_tex : filter_linear_mipmap, repeat_enable;
+uniform bool has_rough = false;
 const float FAC_WALLS = 6.0;   // capas 0-5: paredes
 const float FAC_ROOF = 6.0;    // capa 6: grava de azotea
 const float FAC_TILE = 0.9;    // unidades por repetición (≈2,7 m: algo mayor que el real para que se lea a esta distancia)
@@ -96,7 +101,13 @@ void fragment() {
 	ALBEDO = a.rgb * COLOR.rgb;
 	ROUGHNESS = 0.85;
 	SPECULAR = 0.3;
-	if (tex_mode == 0 && allow_facade && facade_on > 0.5 && v_win == 0.0) {
+	if (has_normal) {
+		NORMAL_MAP = texture(normal_tex, UV).rgb;
+	}
+	if (has_rough) {
+		ROUGHNESS = texture(rough_tex, UV).g;
+	}
+	if (tex_mode == 0 && allow_facade && !has_normal && facade_on > 0.5 && v_win == 0.0) {
 		vec3 n = normalize(v_wnrm);
 		float lum = dot(a.rgb, vec3(0.299, 0.587, 0.114));
 		float sat = max(a.r, max(a.g, a.b)) - min(a.r, min(a.g, a.b));

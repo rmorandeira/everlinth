@@ -138,7 +138,7 @@ static func model(key: String) -> Dictionary:
 		for surf in p[0]:
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, surf.arrays)
 			var tp: Dictionary = textures.get(surf.slot, {})
-			mesh.surface_set_material(mesh.get_surface_count() - 1, _material_for(surf.albedo, surf.color, tp))
+			mesh.surface_set_material(mesh.get_surface_count() - 1, _material_for(surf.albedo, surf.color, tp, surf.get("normal"), surf.get("rough")))
 		parts.append([mesh, p[1], p[2] if p.size() > 2 else ""])
 	_models[key] = {"parts": parts, "size": base.size}
 	return _models[key]
@@ -267,10 +267,11 @@ static func _primitives_base(parts_def: Array) -> Dictionary:
 # ------------------------------------------------------------------ materiales
 
 ## Material del shader de Kenney: textura original del modelo o la del catálogo (tp).
-static func _material_for(albedo: Texture2D, color: Color, tp: Dictionary) -> Material:
+## normal / rough: mapas de relieve y rugosidad del propio modelo (assets detallados).
+static func _material_for(albedo: Texture2D, color: Color, tp: Dictionary, normal: Texture2D = null, rough: Texture2D = null) -> Material:
 	var tex_url: String = str(tp.texture) if tp.get("texture") != null else ""
 	var override: Texture2D = Catalog.texture(tex_url) if tex_url != "" else null
-	var key := "%s|%s|%s" % [str(albedo.get_instance_id()) if albedo else "-", color, JSON.stringify(tp) if override else ""]
+	var key := "%s|%s|%s|%s|%s" % [str(albedo.get_instance_id()) if albedo else "-", color, JSON.stringify(tp) if override else "", str(normal.get_instance_id()) if normal else "-", str(rough.get_instance_id()) if rough else "-"]
 	if _materials.has(key):
 		return _materials[key]
 	if _shader == null:
@@ -288,6 +289,12 @@ static func _material_for(albedo: Texture2D, color: Color, tp: Dictionary) -> Ma
 	else:
 		m.set_shader_parameter("albedo_tex", albedo if albedo else _white())
 		m.set_shader_parameter("albedo_color", color)
+	if normal:
+		m.set_shader_parameter("normal_tex", normal)
+		m.set_shader_parameter("has_normal", true)
+	if rough:
+		m.set_shader_parameter("rough_tex", rough)
+		m.set_shader_parameter("has_rough", true)
 	_materials[key] = m
 	return m
 
@@ -344,9 +351,35 @@ static func _prepare_surfaces(src: Mesh) -> Array:
 		a[Mesh.ARRAY_VERTEX] = v
 		a[Mesh.ARRAY_NORMAL] = n
 		a[Mesh.ARRAY_TEX_UV] = uv
-		a[Mesh.ARRAY_TEX_UV2] = _window_seeds(v, uv, _image_of(tex))
+		# assets detallados: color por vértice (suciedad, desgaste), tangentes (relieve) y
+		# mapas de relieve y rugosidad propios
+		var src_col: PackedColorArray = arrays[Mesh.ARRAY_COLOR] if arrays[Mesh.ARRAY_COLOR] != null else PackedColorArray()
+		var src_tan: PackedFloat32Array = arrays[Mesh.ARRAY_TANGENT] if arrays[Mesh.ARRAY_TANGENT] != null else PackedFloat32Array()
+		if src_col.size() > 0:
+			var col := PackedColorArray()
+			col.resize(count)
+			for i in count:
+				col[i] = src_col[idx[i] if idx.size() > 0 else i]
+			a[Mesh.ARRAY_COLOR] = col
+		if src_tan.size() > 0:
+			var tan := PackedFloat32Array()
+			tan.resize(count * 4)
+			for i in count:
+				var j := idx[i] if idx.size() > 0 else i
+				for c in 4:
+					tan[i * 4 + c] = src_tan[j * 4 + c]
+			a[Mesh.ARRAY_TANGENT] = tan
+		var normal: Texture2D = std.normal_texture if std and std.normal_enabled else null
+		var rough: Texture2D = std.roughness_texture if std else null
+		if normal == null:
+			a[Mesh.ARRAY_TEX_UV2] = _window_seeds(v, uv, _image_of(tex))
+		else:
+			# las ventanas iluminadas solo tienen sentido en la paleta de Kenney
+			var none := PackedVector2Array()
+			none.resize(count)
+			a[Mesh.ARRAY_TEX_UV2] = none
 		var slot: String = mat.resource_name if mat and mat.resource_name != "" else "material %d" % (s + 1)
-		out.append({"arrays": a, "slot": slot, "albedo": tex, "color": std.albedo_color if std else Color.WHITE})
+		out.append({"arrays": a, "slot": slot, "albedo": tex, "color": std.albedo_color if std else Color.WHITE, "normal": normal, "rough": rough})
 	return out
 
 
