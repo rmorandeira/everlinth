@@ -1363,8 +1363,9 @@ func _instantiate_chunks() -> void:
 				var small := hgt < 1.0
 				for part in model.parts:
 					var pmm := _multimesh(part[0], part[1], list, false, not small)
-					# edificios (más de ~4,8 m): se ocultan con el halo de visión; lo demás, no
-					if hgt >= 1.6:
+					# edificios (por su categoría del catálogo): se ocultan con el halo de visión;
+					# vehículos, barreras, mobiliario y demás objetos, no
+					if Kenney.is_building(key):
 						_last_mmi.set_instance_shader_parameter("occluder", 1.0)
 
 

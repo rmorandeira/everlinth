@@ -1,7 +1,8 @@
 // Halo de visión del personaje (común a los shaders de edificios, hitos y árboles).
-// Un fragmento se oculta si se interpone entre la cámara y el personaje: cae dentro del
-// halo (círculo alrededor del personaje en pantalla) y está más cerca de la cámara que
-// él. Lo que queda detrás del personaje, o fuera del halo, se ve siempre. Solo en la
+// Máscara radial en espacio de pantalla ("agujero" en la línea de visión): un fragmento
+// se oculta si cae dentro del halo (círculo alrededor del personaje en pantalla, con
+// degradado de opacidad hacia el borde) y está más cerca de la cámara que el personaje
+// (con algo de margen por detrás de él, para ver el suelo que rodea sus pies). Lo que queda detrás del personaje, o fuera del halo, se ve siempre. Solo en la
 // cámara principal (en las pasadas de sombra no se recorta: el edificio sigue dando
 // sombra). De lo oculto quedan las aristas del modelo (occl_edge) como silueta.
 global uniform vec4 occ_char;    // xyz: centro del personaje (mundo); w: 1 si hay personaje
@@ -13,9 +14,10 @@ float occl_amount(vec3 wp, vec2 frag, mat4 inv_view) {
 	if (occ_char.w < 0.5 || dot(inv_view[2].xyz, cut_cam_fwd) < 0.999) {
 		return 0.0;
 	}
-	// más cerca de la cámara que el personaje (el +Z de la cámara apunta hacia ella)
+	// más cerca de la cámara que un punto algo por detrás del personaje (el +Z de la
+	// cámara apunta hacia ella): así se despeja también el suelo a su alrededor
 	float ahead = dot(wp - occ_char.xyz, inv_view[2].xyz);
-	float in_front = smoothstep(0.1, 0.35, ahead);
+	float in_front = smoothstep(-0.7, -0.3, ahead);
 	float d = length(frag - occ_halo.xy);
 	return in_front * (1.0 - smoothstep(occ_halo.z - occ_halo.w, occ_halo.z, d));
 }

@@ -612,7 +612,7 @@ func _process_game(dt: float) -> void:
 ## Halo de visión: lo que se interpone entre la cámara y el personaje (edificios, hitos,
 ## árboles) desaparece dentro del halo y deja su silueta (ver Occlusion).
 func _update_cutaway() -> void:
-	var p := Vector3(you_display.x * T, 0.45 + Coast.height_at(you_display.x * T, you_display.y * T), you_display.y * T)
+	var p := Vector3(you_display.x * T, 0.3 + Coast.height_at(you_display.x * T, you_display.y * T), you_display.y * T)
 	Occlusion.update(cam, p, get_viewport().scaling_3d_scale)
 
 

@@ -6,8 +6,8 @@ class_name Occlusion
 ##   anuladas, para dibujar solo las aristas reales del modelo (la silueta de lo que se
 ##   oculta), sin las diagonales de los triángulos de una misma cara.
 
-const HALO_UNITS := 2.6 # radio del halo, en unidades de mundo (≈ 8 m) a la escala de la cámara
-const SOFT := 0.25      # fracción del radio en la que se funde el borde
+const HALO_UNITS := 3.3 # radio del halo, en unidades de mundo (≈ 10 m) a la escala de la cámara
+const SOFT := 0.5       # fracción del radio en la que se funde el borde (degradado de opacidad)
 
 
 static func update(cam: Camera3D, char_pos: Vector3, scale3d: float) -> void:

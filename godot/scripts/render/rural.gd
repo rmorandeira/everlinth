@@ -172,7 +172,7 @@ static func build(root: Node3D, rooms: Array, ogx: int, ogz: int) -> void:
 			var mi := MeshInstance3D.new()
 			mi.mesh = part[0]
 			mi.transform = xf * (part[1] as Transform3D)
-			if not key.contains("tractor"):
+			if Kenney.is_building(key):
 				mi.set_instance_shader_parameter("occluder", 1.0)
 			root.add_child(mi)
 

@@ -60,6 +60,14 @@ static func base_scale(key: String) -> float:
 	return KIT_SCALE.get(key.split("/")[0], 1.0) * s
 
 
+## ¿Es un edificio? (categoría del catálogo; si no está catalogado, por el nombre)
+static func is_building(key: String) -> bool:
+	var def := def_of(key)
+	if not def.is_empty():
+		return str(def.get("category", "")) in ["edificio", "rascacielos", "casa", "pieza de edificio"]
+	return key.contains("building") or key.contains("skyscraper")
+
+
 ## ¿Es una casa? (no se estira en altura como los edificios de oficinas)
 static func is_house(key: String) -> bool:
 	var def := def_of(key)
