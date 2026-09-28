@@ -33,6 +33,7 @@ interface Bld {
   floors: number;
   t: string;
   name?: string;
+  g?: string; // edificio catastral al que pertenece la parte (estilo común)
   pts: Pt[];
   bbox: [number, number, number, number];
 }
@@ -144,10 +145,10 @@ function load(): void {
     }
   }
   for (const l of (data.landmarks ?? []) as Landmark[]) landmarks.push(l);
-  for (const [id, floors, t, flat, name] of data.buildings as Array<[number, number, string, number[], string?]>) {
+  for (const [id, floors, t, flat, name, g] of data.buildings as Array<[number | string, number, string, number[], string?, string?]>) {
     const pts = toPts(flat);
     if (landmarks.some((l) => inLandmark(l, pts[0][0], pts[0][1], 2))) continue; // lo ocupa un hito
-    const b: Bld = { id: `w${id}`, floors, t, name, pts, bbox: bboxOf(pts) };
+    const b: Bld = { id: typeof id === "string" ? id : `w${id}`, floors, t, name: name || undefined, g, pts, bbox: bboxOf(pts) };
     blds.push(b);
     put(bBld, b.bbox[0], b.bbox[1], b.bbox[2], b.bbox[3], blds.length - 1);
   }
@@ -412,6 +413,7 @@ export function rasterRoomOSM(sx: number, sy: number): { tiles: TileType[][]; ci
         if (fx < gx0 || fx >= gx0 + SCREEN_WIDTH || fy < gy0 || fy >= gy0 + SCREEN_HEIGHT) continue;
         const cb: CityBuilding = { id: b.id, floors: b.floors, pts: b.pts.map(([x, y]) => [r2(x), r2(y)] as [number, number]), t: b.t };
         if (b.name) cb.name = b.name;
+        if (b.g) cb.g = b.g;
         buildings.push(cb);
       }
     }

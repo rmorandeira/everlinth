@@ -131,7 +131,7 @@ func _ready() -> void:
 
 	# atribución de los datos del mapa (licencia ODbL)
 	var osm := osm_label
-	osm.text = "Mapa © colaboradores de OpenStreetMap"
+	osm.text = "Mapa © colaboradores de OpenStreetMap · Edificios: Dirección General del Catastro"
 	osm.add_theme_font_size_override("font_size", 11)
 	osm.add_theme_color_override("font_color", Color(1, 1, 1, 0.75))
 	osm.add_theme_color_override("font_shadow_color", Color.BLACK)

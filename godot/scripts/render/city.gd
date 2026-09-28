@@ -1219,7 +1219,8 @@ func _osm_building(bd: Dictionary) -> void:
 		for p in bd.pts:
 			c += Vector2(p[0], p[1])
 		c /= bd.pts.size()
-		built = OsmBuilding.build(poly, int(bd.floors), str(bd.get("t", "yes")), str(bd.id), (c - Vector2(24, 13.5)).length(), true)
+		# las partes de un mismo edificio catastral comparten estilo de fachada
+		built = OsmBuilding.build(poly, int(bd.floors), str(bd.get("t", "yes")), str(bd.get("g", bd.id)), (c - Vector2(24, 13.5)).length(), true)
 	var mesh: ArrayMesh = built[0]
 	if mesh.get_surface_count() > 1 or built.size() < 4:
 		# hitos con varias superficies: nodo propio

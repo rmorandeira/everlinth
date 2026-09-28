@@ -295,6 +295,8 @@ export interface CityBuilding {
   /** Tipo de edificio de OSM (apartments, church…) y nombre, si lo tiene. */
   t?: string;
   name?: string;
+  /** Edificio al que pertenece esta parte (Catastro): las partes comparten fachada. */
+  g?: string;
   /** Daño (solo si ha recibido alguno): vida actual y máxima; 0 = derrumbado. */
   hp?: number;
   maxHp?: number;

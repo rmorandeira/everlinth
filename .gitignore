@@ -25,3 +25,4 @@ server/.env
 /build/
 tools/osm/.dem-cache/
 tools/assets-src/
+tools/osm/.catastro/
