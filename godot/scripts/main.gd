@@ -18,6 +18,7 @@ var lighting := Lighting.new()
 var people := People.new()
 var fx := Fx.new()
 var cars := Cars.new()
+var tree_fall := TreeFall.new() # árboles que se rompen a balazos
 var destruction := Destruction.new()
 var traffic := Traffic.new()
 var sfx := Sfx.new()
@@ -89,6 +90,8 @@ func _ready() -> void:
 	add_child(fx)
 	cars.fx = fx
 	add_child(cars)
+	tree_fall.fx = fx
+	add_child(tree_fall)
 	destruction.fx = fx
 	add_child(destruction)
 	add_child(traffic)
@@ -277,6 +280,7 @@ func _on_shot(msg: Dictionary) -> void:
 	fx.tracer(fx0, fz0, tx, tz)
 	fx.impact(tx, tz)
 	cars.hit(fx0, fz0, tx, tz)
+	tree_fall.hit(fx0, fz0, tx, tz)
 	if msg.hit == "wall" and randf() < 0.18:
 		var shot_len := Vector2(msg.to.gx - msg.from.gx, msg.to.gy - msg.from.gy).length()
 		var d := Vector2(tx - fx0, tz - fz0).normalized()
@@ -357,6 +361,7 @@ func _build_city() -> void:
 	else:
 		Coast.corners.clear()
 	cars.set_cars(city_root.get_meta("cars", []))
+	tree_fall.set_trees(city_root.get_meta("trees", []))
 	destruction.set_buildings(city_root.get_meta("buildings", {}))
 	traffic.set_city(city_root, int(screen.sx) * W, int(screen.sy) * H)
 
@@ -451,6 +456,11 @@ func _update_aim() -> void:
 		return
 	if Config.aim != Vector2.ZERO:
 		aim = Config.aim.normalized()
+		# pruebas: aim=0,9 apunta al árbol entero más cercano
+		if Config.aim.y == 9.0:
+			var t := tree_fall.nearest(Vector3(you_display.x * T, 0, you_display.y * T))
+			if t != Vector3.INF:
+				aim = Vector2(t.x - you_display.x * T, t.z - you_display.y * T).normalized()
 		return
 	var g := cam.screen_to_ground(get_viewport().get_mouse_position())
 	var d := Vector2(g.x / T - you_display.x, g.z / T - you_display.y)

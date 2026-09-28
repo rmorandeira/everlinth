@@ -434,7 +434,7 @@ class _Room:
 				var species := "roble" if u < 0.45 else ("haya" if u < 0.75 else "pino")
 				if absf(coast.value(wx, wy)) < 10.0:
 					species = "tamarisco"
-				var sc := 0.8 + Coast._hash(wy, wx) * 0.4
+				var sc := (0.8 + Coast._hash(wy, wx) * 0.4) * Trees.SIZE
 				var key := Trees.key_for(species, wx, wy)
 				if not out.has(key):
 					out[key] = []
@@ -632,6 +632,10 @@ static func _trees(root: Node3D, trees: Dictionary) -> void:
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
 		root.add_child(mmi)
+		var reg: Array = root.get_meta("trees", [])
+		for i in list.size():
+			reg.append({"key": key, "mm": mm, "i": i, "xf": list[i]})
+		root.set_meta("trees", reg)
 
 
 ## Farola del paseo: fuste de fundición, brazo corto y farol.

@@ -12,6 +12,7 @@ class_name Trees
 ## MultiMesh (una llamada de dibujo por especie y variante).
 
 const VARIANTS := 3
+const SIZE := 0.78 # escala de todos los árboles colocados (algo más pequeños que el modelo)
 const CLUSTER := 512
 
 # altura (unidades: 1 = 3 m), radio del tronco, altura de la cruz, radios de la copa

@@ -149,6 +149,7 @@ var approaches: Array = [] # llegadas a cruces: { x, y, hx, hy, stop_dist, axis 
 var buildings := {} # id -> info para Destruction (pos, height, pts, refs, parts, xf, hp, max_hp)
 var crosses: Array = []
 var _bchunks := {} # sala -> MeshInstance3D con los edificios fundidos
+var trees: Array = [] # árboles (TreeFall): { key, mm, i, xf }
 var osm := false # ciudad real (OpenStreetMap): plantas reales extruidas, sentido único real
 
 
@@ -309,6 +310,7 @@ static func build(datas: Array, ogx: int, ogz: int) -> Node3D:
 	c.root.set_meta("approaches", c.approaches)
 	c.root.set_meta("info", c._segs_info())
 	c.root.set_meta("buildings", c.buildings)
+	c.root.set_meta("trees", c.trees)
 	return c.root
 
 
@@ -575,7 +577,7 @@ func _markings_and_furniture() -> void:
 					# plátanos de sombra (y algún haya), del tamaño que deja la fachada más cercana
 					var species := "platano" if hash2(fx * 0.37, fy * 0.53) < 0.8 else "haya"
 					var room := _building_gap(fx, fy, 4.0) * T
-					var sc := clampf(room / float(Trees.SPECIES[species].cr) * 1.15, 0.5, 1.1)
+					var sc := clampf(room / float(Trees.SPECIES[species].cr) * 1.15, 0.5, 1.1) * Trees.SIZE
 					var rot := Basis(Vector3.UP, hash2(fx, fy) * TAU).scaled(Vector3(sc, sc * (0.95 + hash2(fy, fx) * 0.1), sc))
 					_place(Trees.key_for(species, fx, fy), Transform3D(rot, Vector3(_L(fx), 0.05, _Lz(fy))))
 					_claim(fx, fy, 0.8)
@@ -1344,7 +1346,9 @@ func _instantiate_chunks() -> void:
 			elif kind.begins_with("tree:"):
 				if "trees" in Config.off:
 					continue
-				_multimesh(Trees.mesh_for_key(kind), Transform3D(), list, false)
+				var tmm := _multimesh(Trees.mesh_for_key(kind), Transform3D(), list, false)
+				for i in list.size():
+					trees.append({"key": kind, "mm": tmm, "i": i, "xf": list[i][0]})
 			elif kind == "car":
 				_multimesh(car_mesh(), Transform3D(), list, true)
 			else:
@@ -1356,7 +1360,7 @@ func _instantiate_chunks() -> void:
 					_multimesh(part[0], part[1], list, false, not small)
 
 
-func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool, shadows := true) -> void:
+func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool, shadows := true) -> MultiMesh:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = colors
@@ -1374,3 +1378,4 @@ func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool, sha
 	if not shadows:
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(mmi)
+	return mm
