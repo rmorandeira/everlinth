@@ -158,6 +158,8 @@ static func build(root: Node3D, rooms: Array, ogx: int, ogz: int) -> void:
 		var mid := (a + b) * 0.5
 		flat.quad(track, L.call(mid.x, mid.y, Y + 0.006), (l + 1.0) * T, float(t[4]) * 2.4 * T, atan2(d.y, d.x), 0.0, l / 3.0)
 	flat.build(root, false)
+	_utility(root, roads.values(), L)
+	_fences(root, fields.values(), blocked, L)
 	# granjas
 	for p in props.values():
 		var key: String = p.m
@@ -212,3 +214,227 @@ static func _wheat(root: Node3D, fields: Array, blocked: Callable, L: Callable) 
 		mi.mesh = mesh
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(mi)
+
+
+# ------------------------------------------------------------------ tendido y farolas
+
+const M := 1.0 / 3.0 # metros → unidades de render
+const POLE_EVERY := 20.0 # tiles entre postes (30 m)
+const POLE_OFF := ROAD_HALF + 2.6 # desde el eje de la carretera (tiles)
+const LAMP_EVERY := 3 # uno de cada tres postes lleva farola
+
+static var _lamps: Array = [] # OmniLight3D de las farolas del campo
+static var _night := 0.0
+
+
+## De noche se encienden las farolas (luz suave amarilla); lo llama Lighting cada fotograma.
+static func set_night(n: float) -> void:
+	if absf(n - _night) < 0.01:
+		return
+	_night = n
+	var on := n > 0.02
+	var alive: Array = []
+	for l in _lamps:
+		if is_instance_valid(l):
+			(l as OmniLight3D).visible = on
+			(l as OmniLight3D).light_energy = n * 1.6
+			alive.append(l)
+	_lamps = alive
+	if _mats.has("bulb"):
+		(_mats.bulb as StandardMaterial3D).emission_energy_multiplier = n * 5.0
+
+
+static func bulb_mat() -> StandardMaterial3D:
+	if not _mats.has("bulb"):
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color("fff2cc")
+		m.emission_enabled = true
+		m.emission = Color("ffc873")
+		m.emission_energy_multiplier = _night * 5.0
+		_mats.bulb = m
+	return _mats.bulb
+
+
+static func pool_mat() -> ShaderMaterial:
+	if not _mats.has("pool"):
+		var m := ShaderMaterial.new()
+		m.shader = load("res://shaders/lamp_pool.gdshader")
+		m.render_priority = 6
+		_mats.pool = m
+	return _mats.pool
+
+
+## Viga de sección w (unidades) entre a y b.
+static func _beam(b: GeoBatch, mat: Material, a: Vector3, c: Vector3, w: float) -> void:
+	var d := c - a
+	var l := d.length()
+	if l < 1e-4:
+		return
+	var z := d / l
+	var x := z.cross(Vector3.UP)
+	if x.length() < 0.1:
+		x = z.cross(Vector3.RIGHT)
+	x = x.normalized()
+	var y := z.cross(x).normalized()
+	b.mesh(StreetFurniture.prim("box"), Transform3D(Basis(x * w, y * w, z * l), (a + c) * 0.5), mat)
+
+
+## Cable colgado en catenaria (aproximada por parábola) entre dos puntos.
+static func _wire(b: GeoBatch, mat: Material, a: Vector3, c: Vector3, sag: float) -> void:
+	var n := 8
+	var prev := a
+	for i in range(1, n + 1):
+		var t := float(i) / n
+		var p := a.lerp(c, t) - Vector3(0, sag * 4.0 * t * (1.0 - t), 0)
+		_beam(b, mat, prev, p, 0.022 * M)
+		prev = p
+
+
+## Postes de madera a un lado de cada carretera (cada 30 m por longitud de arco: casan
+## entre tramos y salas), línea eléctrica de tres conductores y telefónica de dos,
+## colgadas entre postes, y farola con charco de luz en uno de cada tres.
+static func _utility(root: Node3D, roads: Array, L: Callable) -> void:
+	var poles := {} # "familia:k" -> [pos (tiles), dirección, normal hacia fuera, k]
+	for s in roads:
+		var fam: String = str(s.id).split(":")[0]
+		var a := Vector2(s.x0, s.y0)
+		var b := Vector2(s.x1, s.y1)
+		var d := b - a
+		var l := d.length()
+		if l < 0.1:
+			continue
+		var u := d / l
+		var side := 1.0 if hash(fam) % 2 == 0 else -1.0
+		var nrm := Vector2(-u.y, u.x) * side
+		var s0: float = s.s0
+		var k := ceili(s0 / POLE_EVERY)
+		while k * POLE_EVERY < s0 + l:
+			var t := (k * POLE_EVERY - s0) / l
+			poles["%s:%d" % [fam, k]] = [a + d * t + nrm * POLE_OFF, u, nrm, k]
+			k += 1
+	var solid := GeoBatch.new()
+	var wires := GeoBatch.new()
+	var wood := StreetFurniture.lambert(Color("5d4a3a"))
+	var metal := StreetFurniture.lambert(Color("7a7d80"))
+	var porcelain := StreetFurniture.lambert(Color("cfd4d6"))
+	var cable := StreetFurniture.lambert(Color("1b1b1d"))
+	var tops := {} # clave -> [puntos de amarre (unidades)]
+	for key in poles:
+		var pl: Array = poles[key]
+		var p: Vector2 = pl[0]
+		var nrm: Vector2 = pl[2]
+		var base: Vector3 = L.call(p.x, p.y, Y)
+		var n3 := Vector3(nrm.x, 0, nrm.y)
+		var hgt := 9.0 * M
+		# fuste de madera algo inclinado al azar, cruceta alta y cruceta baja de teléfono
+		var lean := Vector3(hash(key) % 7 - 3, 0, hash(str(key) + "z") % 7 - 3) * 0.004
+		var top := base + Vector3(0, hgt, 0) + lean
+		_beam(solid, wood, base, top, 0.26 * M)
+		var arm_h := top - Vector3(0, 0.45 * M, 0)
+		_beam(solid, wood, arm_h - n3 * 1.2 * M, arm_h + n3 * 1.2 * M, 0.12 * M)
+		var tel_h := base + Vector3(0, 6.6 * M, 0) + lean * 0.7
+		_beam(solid, wood, tel_h - n3 * 0.55 * M, tel_h + n3 * 0.55 * M, 0.1 * M)
+		var pts: Array = []
+		for o: float in [-1.05, 0.0, 1.05]:
+			var q: Vector3 = arm_h + n3 * o * M + Vector3(0, 0.06 * M, 0)
+			if o == 0.0:
+				q = top + Vector3(0, 0.15 * M, 0)
+			StreetFurniture.part(solid, Transform3D(), "cyl", porcelain, Vector3(0.05 * M, 0.18 * M, 0.05 * M), q - Vector3(0, 0.12 * M, 0))
+			pts.append(q + Vector3(0, 0.06 * M, 0))
+		for o: float in [-0.4, 0.4]:
+			pts.append(tel_h + n3 * o * M + Vector3(0, 0.05 * M, 0))
+		tops[key] = pts
+		# farola: brazo hacia la calzada, luminaria, bombilla, luz y charco
+		if int(pl[3]) % LAMP_EVERY == 0:
+			var arm0 := base + Vector3(0, 7.6 * M, 0) + lean
+			var arm1 := arm0 - n3 * 2.1 * M + Vector3(0, 0.25 * M, 0)
+			_beam(solid, metal, arm0, arm1, 0.06 * M)
+			solid.mesh(StreetFurniture.prim("box"), Transform3D(Basis.looking_at(-n3, Vector3.UP).scaled(Vector3(0.28, 0.12, 0.55) * M), arm1 - n3 * 0.2 * M), metal)
+			var bulb := arm1 - n3 * 0.2 * M - Vector3(0, 0.08 * M, 0)
+			solid.mesh(StreetFurniture.prim("box"), Transform3D(Basis.looking_at(-n3, Vector3.UP).scaled(Vector3(0.22, 0.04, 0.4) * M), bulb), bulb_mat())
+			var light := OmniLight3D.new()
+			light.light_color = Color("ffcf87")
+			light.omni_range = 4.2
+			light.omni_attenuation = 1.3
+			light.light_energy = _night * 1.6
+			light.visible = _night > 0.02
+			light.shadow_enabled = false
+			light.position = bulb - Vector3(0, 0.15, 0)
+			root.add_child(light)
+			_lamps.append(light)
+			var pool := MeshInstance3D.new()
+			var pm := PlaneMesh.new()
+			pm.size = Vector2(5.5, 5.5)
+			pool.mesh = pm
+			pool.material_override = pool_mat()
+			pool.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			pool.position = Vector3(bulb.x, Y + 0.02, bulb.z)
+			root.add_child(pool)
+	# cables entre postes consecutivos de la misma carretera
+	for key in tops:
+		var parts: PackedStringArray = str(key).rsplit(":", true, 1)
+		var nxt := "%s:%d" % [parts[0], int(parts[1]) + 1]
+		if not tops.has(nxt):
+			continue
+		var a: Array = tops[key]
+		var b: Array = tops[nxt]
+		for i in a.size():
+			_wire(wires, cable, a[i], b[i], (0.75 if i < 3 else 0.55) * M)
+	solid.build(root, true)
+	wires.build(root, false)
+
+
+# ------------------------------------------------------------------ cierres de fincas
+
+## Vallas de alambre con postes de madera por el linde de algo más de la mitad de las
+## fincas, abiertas donde pasa una pista, una carretera o hay una granja.
+static func _fences(root: Node3D, fields: Array, blocked: Callable, L: Callable) -> void:
+	var posts: Array[Transform3D] = []
+	var wires := GeoBatch.new()
+	var wire_m := StreetFurniture.lambert(Color("4a4a48"))
+	var post_s := Vector3(0.1, 1.3, 0.1) * M
+	for f in fields:
+		if hash(str(f.id) + "valla") % 100 >= 55:
+			continue
+		var x0: float = f.x0 + 0.6
+		var y0: float = f.y0 + 0.6
+		var x1: float = f.x1 - 0.6
+		var y1: float = f.y1 - 0.6
+		var corners := [Vector2(x0, y0), Vector2(x1, y0), Vector2(x1, y1), Vector2(x0, y1)]
+		for e in 4:
+			var a: Vector2 = corners[e]
+			var b: Vector2 = corners[(e + 1) % 4]
+			var n := maxi(1, ceili(a.distance_to(b) / 2.0))
+			var run_start := Vector3.ZERO
+			var run_len := 0
+			var last := Vector3.ZERO
+			for i in n + 1:
+				var p := a.lerp(b, float(i) / n)
+				var ok: bool = not blocked.call(p)
+				var q: Vector3 = L.call(p.x, p.y, Y)
+				if ok:
+					var tilt := Basis(Vector3(1, 0, 0), (hash(p) % 9 - 4) * 0.01)
+					posts.append(Transform3D(tilt.scaled(post_s), q + Vector3(0, post_s.y * 0.5, 0)))
+					if run_len == 0:
+						run_start = q
+					run_len += 1
+					last = q
+				if (not ok or i == n) and run_len > 1:
+					for hy: float in [0.45, 0.8, 1.15]:
+						var up := Vector3(0, hy * M, 0)
+						_beam(wires, wire_m, run_start + up, last + up, 0.02 * M)
+				if not ok:
+					run_len = 0
+	if not posts.is_empty():
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = StreetFurniture.prim("box")
+		mm.instance_count = posts.size()
+		for i in posts.size():
+			mm.set_instance_transform(i, posts[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.material_override = StreetFurniture.lambert(Color("6b5a47"))
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(mmi)
+	wires.build(root, false)

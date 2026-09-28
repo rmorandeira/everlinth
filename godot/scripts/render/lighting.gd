@@ -125,3 +125,4 @@ func update(_px: float, _pz: float) -> void:
 	env.fog_depth_end = CAMERA_DIST + FOG_RADIUS * 1.42
 
 	RenderingServer.global_shader_parameter_set("win_glow", smoothstep(0.15, 0.85, darkness) * 0.45 + glow * 0.08)
+	Rural.set_night(smoothstep(0.15, 0.85, darkness)) # farolas del campo
