@@ -609,15 +609,11 @@ func _process_game(dt: float) -> void:
 	_mark("minimapa")
 
 
-## Franja de pantalla del personaje (desde su cabeza hacia abajo, 70 % del ancho).
+## Halo de visión: lo que se interpone entre la cámara y el personaje (edificios, hitos,
+## árboles) desaparece dentro del halo y deja su silueta (ver Occlusion).
 func _update_cutaway() -> void:
-	# en píxeles del render 3D (que puede ir a menor resolución que la ventana)
-	var vp := get_viewport()
-	var k := vp.scaling_3d_scale
-	var size := vp.get_visible_rect().size * k
-	var head := cam.unproject_position(Vector3(you_display.x * T, 0.8 + Coast.height_at(you_display.x * T, you_display.y * T), you_display.y * T)) * k
-	RenderingServer.global_shader_parameter_set("cut_params", Vector4(head.y, size.x * 0.5, size.x * 0.7 * 0.5, size.y * 0.05))
-	RenderingServer.global_shader_parameter_set("cut_cam_fwd", cam.global_transform.basis.z)
+	var p := Vector3(you_display.x * T, 0.45 + Coast.height_at(you_display.x * T, you_display.y * T), you_display.y * T)
+	Occlusion.update(cam, p, get_viewport().scaling_3d_scale)
 
 
 ## Verificación sin pantalla: guarda una captura tras N segundos de partida y sale.

@@ -144,6 +144,7 @@ static func build(root: Node3D, datas: Array, ogx: int, ogz: int, paint_white: M
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if b == solid else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.set_instance_shader_parameter("occluder", 1.0) # las autovías tapan: se ocultan con el halo
 		root.add_child(mi)
 		out.append(mi)
 	return out

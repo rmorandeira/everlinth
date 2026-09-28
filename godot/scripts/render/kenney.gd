@@ -136,7 +136,7 @@ static func model(key: String) -> Dictionary:
 	for p in base.parts:
 		var mesh := ArrayMesh.new()
 		for surf in p[0]:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, surf.arrays)
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, surf.arrays, [], {}, Occlusion.format())
 			var tp: Dictionary = textures.get(surf.slot, {})
 			mesh.surface_set_material(mesh.get_surface_count() - 1, _material_for(surf.albedo, surf.color, tp, surf.get("normal"), surf.get("rough"), surf.get("cut", false)))
 		parts.append([mesh, p[1], p[2] if p.size() > 2 else ""])
@@ -381,6 +381,8 @@ static func _prepare_surfaces(src: Mesh) -> Array:
 			var none := PackedVector2Array()
 			none.resize(count)
 			a[Mesh.ARRAY_TEX_UV2] = none
+		# aristas reales del modelo (silueta cuando el halo de visión lo oculta)
+		a[Mesh.ARRAY_CUSTOM1] = Occlusion.edge_bary(v)
 		var slot: String = mat.resource_name if mat and mat.resource_name != "" else "material %d" % (s + 1)
 		out.append({"arrays": a, "slot": slot, "albedo": tex, "color": std.albedo_color if std else Color.WHITE, "normal": normal, "rough": rough, "cut": cut})
 	return out

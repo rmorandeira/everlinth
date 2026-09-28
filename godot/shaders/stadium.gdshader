@@ -8,9 +8,8 @@ shader_type spatial;
 uniform int mode = 0;
 uniform vec3 tone : source_color = vec3(1.0);
 global uniform float sprite_light;
-global uniform vec4 cut_params;
-global uniform vec3 cut_cam_fwd;
-global uniform float cut_keep;
+#include "res://shaders/occlusion.gdshaderinc"
+const vec4 v_bary = vec4(0.0);
 
 float h(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
@@ -18,14 +17,16 @@ float line(float d, float w) { return 1.0 - smoothstep(w * 0.6, w, abs(d)); }
 
 void fragment() {
 	vec3 wp = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	if (dot(INV_VIEW_MATRIX[2].xyz, cut_cam_fwd) > 0.999 && wp.y > 0.12) {
-		float f = cut_params.w;
-		float in_y = smoothstep(cut_params.x - 0.5 * f, cut_params.x + f, FRAGCOORD.y);
-		float in_x = 1.0 - smoothstep(cut_params.z - f, cut_params.z + f, abs(FRAGCOORD.x - cut_params.y));
-		float cut = in_y * in_x;
-		float ign = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-		if (cut > 0.001 && mix(1.0, cut_keep, cut) < ign) {
-			discard;
+	float occ_line = 0.0;
+	// derivadas (arista) fuera de ramas: en una rama divergente dan basura
+	float occ_edge_v = occl_edge(v_bary);
+	{
+		float oc = occl_amount(wp, FRAGCOORD.xy, INV_VIEW_MATRIX);
+		if (oc > 0.001 && oc > occl_dither(FRAGCOORD.xy)) {
+			occ_line = occ_edge_v;
+			if (occ_line < 0.5) {
+				discard;
+			}
 		}
 	}
 	vec2 uv = UV;

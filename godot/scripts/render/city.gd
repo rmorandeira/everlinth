@@ -149,6 +149,7 @@ var approaches: Array = [] # llegadas a cruces: { x, y, hx, hy, stop_dist, axis 
 var buildings := {} # id -> info para Destruction (pos, height, pts, refs, parts, xf, hp, max_hp)
 var crosses: Array = []
 var _bchunks := {} # sala -> MeshInstance3D con los edificios fundidos
+var _last_mmi: MultiMeshInstance3D
 var trees: Array = [] # árboles (TreeFall): { key, mm, i, xf }
 var osm := false # ciudad real (OpenStreetMap): plantas reales extruidas, sentido único real
 
@@ -1255,6 +1256,7 @@ static func _chunk_rebuild(h: MeshInstance3D) -> void:
 	var uv := PackedVector2Array()
 	var uv2 := PackedVector2Array()
 	var cu := PackedFloat32Array()
+	var ed := PackedFloat32Array()
 	for id in entries:
 		if hidden.has(id):
 			continue
@@ -1265,6 +1267,7 @@ static func _chunk_rebuild(h: MeshInstance3D) -> void:
 		uv.append_array(a[Mesh.ARRAY_TEX_UV])
 		uv2.append_array(a[Mesh.ARRAY_TEX_UV2])
 		cu.append_array(a[Mesh.ARRAY_CUSTOM0])
+		ed.append_array(a[Mesh.ARRAY_CUSTOM1])
 	if v.is_empty():
 		h.mesh = null
 		return
@@ -1276,8 +1279,9 @@ static func _chunk_rebuild(h: MeshInstance3D) -> void:
 	arr[Mesh.ARRAY_TEX_UV] = uv
 	arr[Mesh.ARRAY_TEX_UV2] = uv2
 	arr[Mesh.ARRAY_CUSTOM0] = cu
+	arr[Mesh.ARRAY_CUSTOM1] = ed
 	var m := ArrayMesh.new()
-	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr, [], {}, Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr, [], {}, Occlusion.format(true))
 	m.surface_set_material(0, OsmBuilding.material())
 	h.mesh = m
 
@@ -1355,9 +1359,13 @@ func _instantiate_chunks() -> void:
 				var key: String = kind.substr(6)
 				var model := Kenney.model(key)
 				# mobiliario pequeño (bancos, papeleras, detalles): sin sombra, que apenas se ve
-				var small := Kenney.size(key).y * Kenney.base_scale(key) < 1.0
+				var hgt := Kenney.size(key).y * Kenney.base_scale(key)
+				var small := hgt < 1.0
 				for part in model.parts:
-					_multimesh(part[0], part[1], list, false, not small)
+					var pmm := _multimesh(part[0], part[1], list, false, not small)
+					# edificios (más de ~4,8 m): se ocultan con el halo de visión; lo demás, no
+					if hgt >= 1.6:
+						_last_mmi.set_instance_shader_parameter("occluder", 1.0)
 
 
 func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool, shadows := true) -> MultiMesh:
@@ -1374,6 +1382,7 @@ func _multimesh(mesh: Mesh, part_xf: Transform3D, list: Array, colors: bool, sha
 		if bid != "" and buildings.has(bid):
 			buildings[bid].refs.append([mm, i])
 	var mmi := MultiMeshInstance3D.new()
+	_last_mmi = mmi
 	mmi.multimesh = mm
 	if not shadows:
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF

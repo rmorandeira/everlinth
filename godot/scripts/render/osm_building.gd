@@ -120,8 +120,9 @@ static func build(poly: PackedVector2Array, floors: int, t: String, id: String, 
 				st.add_vertex(vv)
 	# los datos quedan también en memoria: la malla fundida por sala se hace con ellos
 	var arrays := st.commit_to_arrays()
+	arrays[Mesh.ARRAY_CUSTOM1] = Occlusion.edge_bary(arrays[Mesh.ARRAY_VERTEX])
 	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, Occlusion.format(true))
 	mesh.surface_set_material(0, material())
 	return [mesh, h + (0.4 if hip else 0.0), top, arrays]
 

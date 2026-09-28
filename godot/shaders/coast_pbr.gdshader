@@ -12,9 +12,6 @@ uniform float tile = 1.0;       // unidades de mundo por repetición
 uniform float sea_y = -0.75;
 uniform float wet_band = 0.2;   // altura mojada por encima del nivel del mar
 uniform float algae = 0.0;      // verdín bajo la línea del agua (piedra)
-global uniform vec4 cut_params;
-global uniform vec3 cut_cam_fwd;
-global uniform float cut_keep;
 
 varying vec3 v_wpos;
 varying vec3 v_wnrm;
@@ -25,16 +22,6 @@ void vertex() {
 }
 
 void fragment() {
-	if (dot(INV_VIEW_MATRIX[2].xyz, cut_cam_fwd) > 0.999 && v_wpos.y > 0.12) {
-		float f = cut_params.w;
-		float in_y = smoothstep(cut_params.x - 0.5 * f, cut_params.x + f, FRAGCOORD.y);
-		float in_x = 1.0 - smoothstep(cut_params.z - f, cut_params.z + f, abs(FRAGCOORD.x - cut_params.y));
-		float cut = in_y * in_x;
-		float ign = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-		if (cut > 0.001 && mix(1.0, cut_keep, cut) < ign) {
-			discard;
-		}
-	}
 	vec3 n = normalize(v_wnrm);
 	vec2 uv;
 	vec3 t;

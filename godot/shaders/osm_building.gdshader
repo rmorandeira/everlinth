@@ -16,9 +16,7 @@ shader_type spatial;
 global uniform float win_glow;
 global uniform float win_lit;
 global uniform float sprite_light;
-global uniform vec4 cut_params;
-global uniform vec3 cut_cam_fwd;
-global uniform float cut_keep;
+#include "res://shaders/occlusion.gdshaderinc"
 global uniform sampler2DArray fac_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 global uniform sampler2DArray fac_normal : filter_linear_mipmap, repeat_enable;
 global uniform sampler2DArray fac_rough : filter_linear_mipmap, repeat_enable;
@@ -33,6 +31,7 @@ varying vec3 v_wnrm;
 varying vec4 v_info;
 varying vec2 v_face;
 varying float v_hgt; // altura sobre la base del edificio (UV.y)
+varying vec4 v_bary;
 
 float h13(vec3 p) {
 	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -45,6 +44,7 @@ void vertex() {
 	v_wnrm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	v_info = CUSTOM0;
 	v_face = vec2(UV.x, UV2.x);
+	v_bary = CUSTOM1;
 	v_hgt = UV.y;
 }
 
@@ -52,14 +52,14 @@ void fragment() {
 	if (dot(clip_plane.xyz, clip_plane.xyz) > 0.25 && dot(v_wpos, clip_plane.xyz) > clip_plane.w) {
 		discard;
 	}
-	if (dot(INV_VIEW_MATRIX[2].xyz, cut_cam_fwd) > 0.999 && v_wpos.y > 0.12) {
-		float f = cut_params.w;
-		float in_y = smoothstep(cut_params.x - 0.5 * f, cut_params.x + f, FRAGCOORD.y);
-		float in_x = 1.0 - smoothstep(cut_params.z - f, cut_params.z + f, abs(FRAGCOORD.x - cut_params.y));
-		float cut = in_y * in_x;
-		if (cut > 0.001) {
-			float ign = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-			if (mix(1.0, cut_keep, cut) < ign) {
+	float occ_line = 0.0;
+	// derivadas (arista) fuera de ramas: en una rama divergente dan basura
+	float occ_edge_v = occl_edge(v_bary);
+	{
+		float oc = occl_amount(v_wpos, FRAGCOORD.xy, INV_VIEW_MATRIX);
+		if (oc > 0.001 && oc > occl_dither(FRAGCOORD.xy)) {
+			occ_line = occ_edge_v;
+			if (occ_line < 0.5) {
 				discard;
 			}
 		}
@@ -192,5 +192,11 @@ void fragment() {
 		}
 	}
 	NORMAL = normalize((VIEW_MATRIX * vec4(out_n, 0.0)).xyz);
+	}
+	if (occ_line > 0.5) {
+		// silueta del edificio oculto
+		ALBEDO = OCCL_LINE;
+		EMISSION = OCCL_LINE * 0.7;
+		ROUGHNESS = 1.0;
 	}
 }

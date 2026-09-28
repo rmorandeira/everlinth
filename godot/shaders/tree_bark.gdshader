@@ -6,9 +6,7 @@ uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, r
 uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform sampler2D rough_tex : filter_linear_mipmap, repeat_enable;
 uniform vec3 tint : source_color = vec3(1.0);
-global uniform vec4 cut_params;
-global uniform vec3 cut_cam_fwd;
-global uniform float cut_keep;
+#include "res://shaders/occlusion.gdshaderinc"
 
 varying float v_h;
 
@@ -17,13 +15,10 @@ void vertex() {
 }
 
 void fragment() {
-	if (dot(INV_VIEW_MATRIX[2].xyz, cut_cam_fwd) > 0.999) {
-		float f = cut_params.w;
-		float in_y = smoothstep(cut_params.x - 0.5 * f, cut_params.x + f, FRAGCOORD.y);
-		float in_x = 1.0 - smoothstep(cut_params.z - f, cut_params.z + f, abs(FRAGCOORD.x - cut_params.y));
-		float cut = in_y * in_x;
-		float ign = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-		if (cut > 0.001 && mix(1.0, cut_keep, cut) < ign) {
+	{
+		vec3 owp = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+		float oc = occl_amount(owp, FRAGCOORD.xy, INV_VIEW_MATRIX);
+		if (oc > 0.001 && oc * 0.85 > occl_dither(FRAGCOORD.xy)) {
 			discard;
 		}
 	}

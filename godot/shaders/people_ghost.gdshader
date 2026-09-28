@@ -6,7 +6,7 @@ render_mode unshaded, cull_disabled, skip_vertex_transform, depth_test_disabled,
 #include "res://shaders/sprite_common.gdshaderinc"
 
 uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
-global uniform vec4 cut_params; // franja del personaje (ver kenney.gdshader)
+global uniform vec4 occ_halo; // halo de visión del personaje (occlusion.gdshaderinc)
 
 void vertex() {
 	VERTEX = sprite_view_pos(VERTEX, MODEL_MATRIX, INV_VIEW_MATRIX, VIEW_MATRIX, INSTANCE_CUSTOM.z);
@@ -22,11 +22,8 @@ void fragment() {
 	if (c.a < 0.5) {
 		discard;
 	}
-	// dentro de la franja del personaje los edificios ya son translúcidos: sin silueta
-	float f = cut_params.w;
-	float in_y = smoothstep(cut_params.x - 0.5 * f, cut_params.x + f, FRAGCOORD.y);
-	float in_x = 1.0 - smoothstep(cut_params.z - f, cut_params.z + f, abs(FRAGCOORD.x - cut_params.y));
-	if (in_y * in_x > 0.3) {
+	// dentro del halo los edificios que tapan ya se han quitado: sin silueta
+	if (length(FRAGCOORD.xy - occ_halo.xy) < occ_halo.z - occ_halo.w) {
 		discard;
 	}
 	// profundidad inversa: mayor = más cerca de la cámara

@@ -17,13 +17,10 @@ uniform float uv_rotation = 0.0;
 uniform float box_tile = 3.0;
 global uniform float win_glow; // 0 de día → ~0,45 de noche
 global uniform float win_lit;  // fracción de ventanas encendidas
-// Área del personaje sin obstrucciones (puerto de cutaway3d.ts): en pantalla, la
-// franja desde la línea horizontal del personaje hacia abajo, del 70 % del ancho.
-// Lo que queda por encima del suelo dentro de ella se vuelve translúcido por
-// tramado (sigue siendo opaco: escribe profundidad, sin problemas de orden).
-global uniform vec4 cut_params; // x: línea (px desde arriba), y: centro x, z: semiancho, w: transición
-global uniform vec3 cut_cam_fwd; // eje de la cámara principal (en las pasadas de sombra no se recorta)
-global uniform float cut_keep;   // opacidad que conserva lo que tapa la franja
+// Halo de visión (occlusion.gdshaderinc): los edificios que tapan al personaje
+// desaparecen y queda su silueta; los objetos pequeños (occluder = 0) no se tocan.
+#include "res://shaders/occlusion.gdshaderinc"
+instance uniform float occluder = 0.0;
 
 // Plano de corte (derrumbes: la parte de arriba se parte y cae por separado): se
 // descarta lo que queda del lado positivo del plano (xyz = normal, w = distancia).
@@ -50,6 +47,7 @@ varying float v_win;
 varying vec3 v_wpos;
 varying vec3 v_wnrm;
 varying float v_mat;
+varying vec4 v_bary;
 
 void vertex() {
 	vec3 o = MODEL_MATRIX[3].xyz;
@@ -58,6 +56,7 @@ void vertex() {
 	v_mat = floor(fract(shift * 7.13 + 0.37) * FAC_WALLS);
 	v_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_wnrm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_bary = CUSTOM1;
 }
 
 vec2 catalog_uv(vec2 uv) {
@@ -82,19 +81,15 @@ void fragment() {
 	if (dot(clip_plane.xyz, clip_plane.xyz) > 0.25 && dot(v_wpos, clip_plane.xyz) > clip_plane.w) {
 		discard;
 	}
-	if (dot(INV_VIEW_MATRIX[2].xyz, cut_cam_fwd) > 0.999) {
-		vec3 wp = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
-		if (wp.y > 0.12) {
-			float f = cut_params.w;
-			float in_y = smoothstep(cut_params.x - 0.5 * f, cut_params.x + f, FRAGCOORD.y);
-			float in_x = 1.0 - smoothstep(cut_params.z - f, cut_params.z + f, abs(FRAGCOORD.x - cut_params.y));
-			float cut = in_y * in_x;
-			if (cut > 0.001) {
-				// ruido de gradiente entrelazado (Jimenez): tramado fino y uniforme
-				float ign = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-				if (mix(1.0, cut_keep, cut) < ign) {
-					discard;
-				}
+	float occ_line = 0.0;
+	// derivadas (arista) fuera de ramas: en una rama divergente dan basura
+	float occ_edge_v = occl_edge(v_bary);
+	if (occluder > 0.5) {
+		float oc = occl_amount(v_wpos, FRAGCOORD.xy, INV_VIEW_MATRIX);
+		if (oc > 0.001 && oc > occl_dither(FRAGCOORD.xy)) {
+			occ_line = occ_edge_v;
+			if (occ_line < 0.5) {
+				discard;
 			}
 		}
 	}
@@ -153,5 +148,11 @@ void fragment() {
 		float on = step(1.0 - win_lit, v_win);
 		vec3 tone = mix(vec3(1.0, 0.74, 0.4), vec3(0.75, 0.85, 1.0), step(0.9, fract(v_win * 7.31)));
 		EMISSION = tone * on * win_glow * (0.75 + 0.25 * fract(v_win * 3.7)) * 2.2;
+	}
+	if (occ_line > 0.5) {
+		// silueta del edificio oculto
+		ALBEDO = OCCL_LINE;
+		EMISSION = OCCL_LINE * 0.7;
+		ROUGHNESS = 1.0;
 	}
 }
