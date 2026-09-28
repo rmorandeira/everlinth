@@ -12,7 +12,7 @@ o desde la línea de comandos:
 godot --path godot
 ```
 
-Opciones tras `--`:
+Opciones tras `--` (lista completa en [docs/PRUEBAS.md](../docs/PRUEBAS.md)):
 
 | Opción | Uso |
 |---|---|
@@ -26,8 +26,8 @@ Opciones tras `--`:
 - Mover: WASD / flechas / stick izquierdo
 - Apuntar: ratón / stick derecho (en círculo alrededor del personaje)
 - Disparar: clic izquierdo / gatillo derecho (RT)
-- Q / R: girar la cámara 90° · Z: zombis sí/no · F3: FPS
-- Hora del día: deslizador arriba a la derecha ("Real" = hora del reloj)
+- Q / R: girar la cámara 90° · Z: zombis sí/no · F3: FPS · G: explosión de prueba
+- Hora del día y Lugar (A Coruña, ciudad generada, campo): arriba a la derecha
 
 ## Assets
 

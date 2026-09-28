@@ -1,6 +1,12 @@
 # Migración del cliente de Everlinth a Godot 4
 
-## Estado (2026-09-26)
+## Estado (2026-09-28)
+
+Migración completada: el cliente Godot es el cliente del juego. Lo que vino después
+(A Coruña real, campo, halo de visión…) está en [HISTORIA.md](HISTORIA.md) y la
+arquitectura actual en [ARQUITECTURA.md](ARQUITECTURA.md).
+
+### Estado al cerrar la migración (2026-09-26)
 
 Fases 0-7 hechas y verificadas con capturas (ciudad, pixel art procedural para
 personas y horda, combate, coches y edificios destructibles, HUD, calidad adaptativa,
